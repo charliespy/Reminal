@@ -8343,7 +8343,15 @@
       // form field that had focus, and not sent down the socket of a session
       // still open while we switch away from it (switchingTo holds it).
       const gen = ++connectGen;
-      if (s !== sessionId) dropHeldInput(); // typed for the session being left
+      // Typed for the session being left — or held for one a switch was
+      // under way to, when this connect is to another (back to the session
+      // still on the page, say): never sent where it was not typed for.
+      if (s !== sessionId || (switchingTo && switchingTo !== s)) {
+        if (switchingTo && switchingTo !== s && (heldInput.length || heldOverflow)) {
+          term.write('\r\n\x1b[2m[reminal] What you typed for ' + switchingTo + ' was not sent.\x1b[0m\r\n');
+        }
+        dropHeldInput();
+      }
       switchingTo = s !== sessionId ? s : '';
       term.focus();
       if (!p) {
