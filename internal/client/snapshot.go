@@ -188,7 +188,22 @@ func buildSnapshot(e *vt.Emulator, history, screenRows []string, maxBytes int, r
 
 	b.WriteString("\x1b[?7h") // restore autowrap
 	pos := e.CursorPosition()
-	fmt.Fprintf(&b, "\x1b[%d;%dH", pos.Y+1, pos.X+1) // restore cursor (1-based)
-	b.WriteString("\x1b[?25h")                       // show cursor
+	if len(history) > 0 && !alt {
+		// The screen is the bottom block of what was painted, and in a viewer
+		// taller than it that block sits lower than its row numbers: an
+		// absolute row put the cursor too high, and the shell's next output
+		// (a prompt redrawn on the viewer's resize) was written over the
+		// newest lines. So from where the paint ended — the screen's last
+		// row — up to the cursor's row, then to its column: right in any
+		// viewer's height.
+		if up := len(screen) - 1 - pos.Y; up > 0 {
+			fmt.Fprintf(&b, "\x1b[%dA", up)
+		}
+		fmt.Fprintf(&b, "\x1b[%dG", pos.X+1)
+	} else {
+		// Painted from the top-left: the rows are the viewer's own.
+		fmt.Fprintf(&b, "\x1b[%d;%dH", pos.Y+1, pos.X+1) // restore cursor (1-based)
+	}
+	b.WriteString("\x1b[?25h") // show cursor
 	return b.String()
 }
