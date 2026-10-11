@@ -7,8 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/charmbracelet/x/vt"
 
 	"reminal/internal/atomicfile"
 	"reminal/internal/atrest"
@@ -34,6 +39,15 @@ type scrollbackDump struct {
 	BaseCols int               `json:"base_cols"`
 	BaseRows int               `json:"base_rows"`
 	Entries  []scrollDumpEntry `json:"entries"`
+	// History is the snapshot emulator's scrollback as it was rendered (SGR
+	// kept), at most scrollbackLines, and HistoryCols the width it was
+	// rendered at. Entries are only the raw output ring (scrollbackBytes):
+	// replayed alone, a successor's history is whatever the last 2 MiB of
+	// output scrolled — on a busy agent's repaints, about a screen — so every
+	// hot restart and reboot restore threw the rest away. A dump from an older
+	// agent has none, and is replayed as before.
+	History     []string `json:"history,omitempty"`
+	HistoryCols int      `json:"history_cols,omitempty"`
 }
 
 type scrollDumpEntry struct {
@@ -95,6 +109,25 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 		NextSeq: a.buf.LatestSeq(),
 	}
 	dump.BaseCols, dump.BaseRows = a.buf.Base()
+	if a.screen != nil {
+		a.screenMu.Lock()
+		// The screen's rows too: what an app left above a frame it repaints
+		// in place never scrolls into scrollback, and its ring holds only the
+		// repaints. Should the replay draw them again, the copy is the
+		// history's tail matching the frame, which the snapshot drops
+		// (dedupAgainstFrame).
+		// A copy: the cache is not ours to grow. A full-screen app's screen
+		// (the alternate one) is not history.
+		dump.History = append([]string(nil), a.renderedHistory()...)
+		if !a.screen.IsAltScreen() {
+			dump.History = append(dump.History, renderedScreenRows(a.screen)...)
+		}
+		if n := len(dump.History) - a.scrollbackLines; a.scrollbackLines > 0 && n > 0 {
+			dump.History = dump.History[n:]
+		}
+		dump.HistoryCols = a.screen.Width()
+		a.screenMu.Unlock()
+	}
 	dump.Entries = make([]scrollDumpEntry, 0, len(raw))
 	for _, e := range raw {
 		de := scrollDumpEntry{Seq: e.Seq, Bar: e.Bar, Cols: e.Cols, Rows: e.Rows}
@@ -223,19 +256,172 @@ func (a *Agent) restoreResumedScrollback() {
 	if a.screen == nil {
 		return
 	}
-	if d.BaseCols > 0 && d.BaseRows > 0 {
-		resizeAnchoredBottom(a.screen, d.BaseCols, d.BaseRows)
+	if len(d.History) > 0 {
+		// Only what the ring will not draw again: replayed into a scratch
+		// emulator first (once, at a restart), what it reproduces is matched
+		// against the history's tail, and the history goes in up to there.
+		scratch := vt.NewEmulator(max(d.BaseCols, 1), max(d.BaseRows, 1))
+		scratch.Scrollback().SetMaxLines(len(d.History) + 1000)
+		go io.Copy(io.Discard, scratch)
+		replayDump(scratch, d)
+		again := append(renderScrollback(scratch, 0), renderedScreenRows(scratch)...)
+		// Not closed: Close races the drain's Read (vt). Its memory goes
+		// instead; its drain idles out the process, one per restart.
+		_, _ = scratch.Write([]byte("\x1bc"))
+		scratch.ClearScrollback()
+		scratch.Resize(1, 1)
+		restoreHistory(a.screen, d.History[:historySeam(d.History, again)], d.HistoryCols)
 		a.noteScrollbackLen()
 	}
-	for _, e := range d.Entries {
-		if e.Cols > 0 && e.Rows > 0 {
-			resizeAnchoredBottom(a.screen, e.Cols, e.Rows)
-			a.noteScrollbackLen()
-			continue
-		}
-		if len(e.Data) > 0 {
-			_, _ = a.screen.Write(e.Data)
-			a.noteScrollbackLen()
+	replayDump(a.screen, d, a.noteScrollbackLen)
+}
+
+// restoreHistory puts a predecessor's rendered scrollback (scrollbackDump.
+// History) into e's scrollback, whole, before its output ring is replayed:
+// each line at the width it was rendered at, then a screen of blank lines to
+// push the last of them up, then the screen cleared without pushing (ED 0
+// from home) for the replay to draw on. What the ring itself scrolls again is
+// a copy of the history's tail; the snapshot's dedup drops it (dedupBlocks).
+func restoreHistory(e *vt.Emulator, history []string, cols int) {
+	if e == nil || len(history) == 0 {
+		return
+	}
+	if cols > 0 && cols != e.Width() {
+		resizeAnchoredBottom(e, cols, e.Height())
+	}
+	var b strings.Builder
+	for _, l := range history {
+		b.WriteString(l)
+		b.WriteString("\x1b[m\r\n")
+	}
+	b.WriteString(strings.Repeat("\r\n", e.Height()))
+	b.WriteString("\x1b[H\x1b[J")
+	_, _ = e.Write([]byte(b.String()))
+}
+
+// renderedScreenRows is e's screen rendered, a line a row, without the blank rows
+// below its last text.
+func renderedScreenRows(e *vt.Emulator) []string {
+	rows := strings.Split(e.Render(), "\n")
+	for i := range rows {
+		rows[i] = strings.TrimRight(rows[i], " ")
+	}
+	for len(rows) > 0 && stripANSI(rows[len(rows)-1]) == "" {
+		rows = rows[:len(rows)-1]
+	}
+	return rows
+}
+
+// replayDump replays a dump's output ring into e, as it was recorded: its
+// sizes and its output, in order. after, if given, runs after each step.
+func replayDump(e *vt.Emulator, d *scrollbackDump, after ...func()) {
+	step := func() {
+		for _, f := range after {
+			f()
 		}
 	}
+	if d.BaseCols > 0 && d.BaseRows > 0 {
+		resizeAnchoredBottom(e, d.BaseCols, d.BaseRows)
+		step()
+	}
+	for _, en := range d.Entries {
+		if en.Cols > 0 && en.Rows > 0 {
+			resizeAnchoredBottom(e, en.Cols, en.Rows)
+			step()
+			continue
+		}
+		if len(en.Data) > 0 {
+			_, _ = e.Write(en.Data)
+			step()
+		}
+	}
+}
+
+// historySeam is how much of history to put back before the ring is
+// replayed: all of it but the tail the ring draws again (again: what the
+// replay alone renders). The replay ends where the history ends (both end
+// with the screen), so the tail is again from one of its first non-blank
+// lines on (a ring cut mid-frame begins with debris), matched to the
+// history's end: first at the one place that lines both ends up, else at a
+// later occurrence of that line. The history goes in up to the match — the
+// debris before it in again is drawn as extra lines, never in place of
+// history. With no match of three lines or more, the ring draws nothing of
+// it and all of it goes in. Bounded: repetitive history (one line ten
+// thousand times) costs what the direct alignment does.
+func historySeam(history, again []string) int {
+	plain := func(ls []string) []string {
+		out := make([]string, len(ls))
+		for i, l := range ls {
+			out[i] = strings.TrimRight(stripANSI(l), " ")
+		}
+		return out
+	}
+	h, r := plain(history), plain(again)
+	run := func(p, j int) int {
+		n := 0
+		for p+n < len(h) && j+n < len(r) && h[p+n] == r[j+n] {
+			n++
+		}
+		return n
+	}
+	var at map[string][]int
+	best, bestRun, budget := len(h), 0, 4*len(h)+4*len(r)+1024
+	for j := 0; j < len(r) && j < 64; j++ {
+		if r[j] == "" {
+			continue
+		}
+		direct := len(h) - len(r) + j
+		if direct >= 0 && direct < len(h) && h[direct] == r[j] {
+			if n := run(direct, j); direct+n == len(h) {
+				if j+n == len(r) {
+					return direct // both ends line up: the tail is the replay, exactly
+				}
+				if n > bestRun {
+					best, bestRun = direct, n
+				}
+			}
+		}
+		if at == nil {
+			at = make(map[string][]int, len(h))
+			for i, l := range h {
+				if l != "" {
+					at[l] = append(at[l], i)
+				}
+			}
+		}
+		// Later occurrences only: a match must run to the history's end, and
+		// one starting before the direct alignment would outrun the replay.
+		occ := at[r[j]]
+		for k := len(occ) - 1; k >= 0 && occ[k] > direct && budget > 0; k-- {
+			p := occ[k]
+			n := run(p, j)
+			budget -= n + 1
+			if p+n == len(h) && n > bestRun {
+				best, bestRun = p, n
+			}
+		}
+	}
+	if bestRun < 3 {
+		return len(h)
+	}
+	return best
+}
+
+// renderedHistory is renderScrollback of the live emulator, kept from one dump
+// to the next (saveRestore dumps every restoreSaveEvery while output flows)
+// while the scrollback is unchanged: the same length, and the same first and
+// last lines (lines pushed past the cap evict the first). Caller holds
+// screenMu; the slice returned is not to be changed.
+func (a *Agent) renderedHistory() []string {
+	sb := a.screen.Scrollback()
+	n := sb.Len()
+	key := strconv.Itoa(n)
+	if lines := sb.Lines(); n > 0 && len(lines) > 0 {
+		key += "\x00" + lines[0].Render() + "\x00" + lines[len(lines)-1].Render()
+	}
+	if a.histCache != nil && a.histKey == key {
+		return a.histCache
+	}
+	a.histCache, a.histKey = renderScrollback(a.screen, a.scrollbackLines), key
+	return a.histCache
 }
