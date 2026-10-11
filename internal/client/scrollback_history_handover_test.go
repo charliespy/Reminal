@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -345,4 +346,54 @@ func TestTheDumpsRenderedHistoryIsNotFooledByRepeatsAtBothEnds(t *testing.T) {
 			t.Errorf("%s: handed out %q, the scrollback is %q", c.name, stripANSI(got), stripANSI(want))
 		}
 	}
+}
+
+// A restore lets go of the scratch emulator it replays the ring into: what a
+// restored process keeps, past the agent itself, is nothing of it. It used to
+// keep it for good (its drain alive, its scrollback "cleared" but still
+// reachable): 10000 lines of 240 columns of scrolling output, ~150 MB.
+func TestARestoreLetsGoOfItsScratchEmulator(t *testing.T) {
+	heapInUse := func() float64 {
+		runtime.GC()
+		runtime.GC()
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		return float64(m.HeapInuse) / 1e6
+	}
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := handoverAgent(t, box)
+	freeAtEnd(t, a.screen)
+	for i := 0; i < 10000; i++ {
+		a.record([]byte(fmt.Sprintf("%05d %s\r\n", i, strings.Repeat("x", 234))))
+	}
+	path, k, err := a.writeScrollbackDump()
+	if err != nil || path == "" {
+		t.Fatalf("dump: %q %v", path, err)
+	}
+	id := a.sessionID
+	freeEmulator(a.screen)
+	a = nil
+	base := heapInUse()
+
+	b := handoverAgent(t, box)
+	b.resumeDump = takeScrollbackDump(path, k, id)
+	if b.resumeDump == nil || len(b.resumeDump.History) == 0 {
+		t.Fatal("fixture: no dump with history came back")
+	}
+	b.restoreResumedScrollback()
+	b.resumeDump = nil
+	b.screenMu.Lock()
+	n := b.screen.Scrollback().Len()
+	freeEmulator(b.screen) // the agent's own history let go: what is left, the restore kept
+	b.screenMu.Unlock()
+	if n < 9000 {
+		t.Fatalf("fixture: the restore brought back %d lines", n)
+	}
+	kept := heapInUse() - base
+	t.Logf("after restoring %d lines and letting the agent's own go: %.0f MB kept", n, kept)
+	if kept > 40 {
+		t.Errorf("a restore kept %.0f MB past the agent (its scratch emulator, not let go)", kept)
+	}
+	runtime.KeepAlive(b)
 }
