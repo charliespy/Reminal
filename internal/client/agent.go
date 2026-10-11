@@ -380,6 +380,12 @@ type Agent struct {
 	// re-encrypted under the new session key). Applied after initScreen so
 	// the emulator and buffer match what viewers had before the exec.
 	resumeDump *scrollbackDump
+	// snapJoiners are the viewers owed a snapshot that can take it in parts,
+	// snapPlain whether one owed it cannot (snapshot_parts.go). Guarded by
+	// snapMu.
+	snapMu      sync.Mutex
+	snapJoiners map[string]bool
+	snapPlain   bool
 	// histCache is the rendered scrollback the last dump carried, and
 	// histKey what it was of (renderedHistory). Guarded by screenMu.
 	histCache []string
@@ -3085,6 +3091,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				a.viewerCount = 1
 			}
 			a.viewerSizeMu.Unlock()
+			a.noteSnapshotJoiner(msg.Viewer, msg.Snap, cursor)
 			pushCursor(cursorCh, cursor)
 		case protocol.TypePakeInit:
 			a.handlePakeInit(conn, msg.ExID, msg.Data, msg.Frames, msg.Src)
@@ -3315,7 +3322,18 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 		// screen + scrollback directly. Tagged with the latest seq so
 		// up-to-date viewers drop it and only the new joiner applies it.
 		if a.screen != nil && cursor <= a.buf.OldestSeq() {
-			if frame, latest := a.snapshotFrame(); frame != "" {
+			// Joiners that asked for it get the whole history, compressed and
+			// in parts addressed to them; anyone else owed a snapshot gets the
+			// one plain frame as always (snapshot_parts.go).
+			if joiners := a.takeSnapshotJoiners(); len(joiners) > 0 {
+				latest, err := a.sendSnapshotParts(conn, joiners)
+				if err != nil {
+					return err
+				}
+				if latest > 0 {
+					cursor = latest + 1
+				}
+			} else if frame, latest := a.snapshotFrame(); frame != "" {
 				if err := a.writeMsg(conn, protocol.Message{
 					Type: protocol.TypeData,
 					Data: frame,
