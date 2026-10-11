@@ -8260,7 +8260,78 @@
       // cursor.
       if (!ownsTerminal) return;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ type: 'resume', from_seq: lastSeq }));
+      // A snapshot owed to this viewer may come whole, compressed and in
+      // parts addressed to it (snapshot_part), when it can unpack them.
+      const snap = snapPartsOK() ? { viewer: viewerId, snap: 'gz+parts' } : {};
+      ws.send(JSON.stringify({ type: 'resume', from_seq: lastSeq, ...snap }));
+    }
+
+    // ---- A joining snapshot in parts (snapshot_part) ----
+    // The plain snapshot is one frame, so its history stops at what fits a
+    // relay message; in parts it is all of it. The parts are gathered, the
+    // whole unpacked and painted ONCE; output that arrives meanwhile is held
+    // and played after it (what the snapshot already shows is dropped). A
+    // part that never comes is never a half paint: the parts are dropped and
+    // the plain snapshot asked for instead.
+    const SNAP_PARTS_WAIT_MS = 20000;
+    let snapAsm = null;          // { id, n, seq, parts: [], got, timer, held: [{seq, bytes}] }
+    let snapPartsOff = false;    // this connection fell back once: plain from here on
+    function snapPartsOK() {
+      return !snapPartsOff && typeof DecompressionStream === 'function';
+    }
+    async function onSnapshotPart(msg) {
+      if (!cryptoKey) return;
+      let bytes;
+      try { bytes = await decrypt(cryptoKey, msg.data); } catch (_) { return; }
+      if (bytes.length < 4) return;
+      const hl = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0);
+      let h;
+      try { h = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + hl))); } catch (_) { return; }
+      // Addressed inside the part (a sealed frame carries no address): parts
+      // for another viewer are not this one's to paint.
+      if (!h || h.to !== viewerId || typeof h.id !== 'string' || !(h.n > 0) || !(h.i >= 0 && h.i < h.n) || h.n > 64) return;
+      // Caught up already (a snapshot no longer owed): nothing to repaint.
+      if (!snapAsm && typeof msg.seq === 'number' && msg.seq <= lastSeq && Date.now() >= awaitingSnapshotUntil) return;
+      if (!snapAsm || snapAsm.id !== h.id) {
+        if (snapAsm) clearTimeout(snapAsm.timer);
+        snapAsm = { id: h.id, n: h.n, seq: msg.seq || 0, parts: new Array(h.n), got: 0, held: [] };
+        snapAsm.timer = setTimeout(snapPartsGiveUp, SNAP_PARTS_WAIT_MS);
+      }
+      const a = snapAsm;
+      if (a.parts[h.i]) return;
+      a.parts[h.i] = bytes.subarray(4 + hl);
+      if (++a.got < a.n) return;
+      clearTimeout(a.timer);
+      let whole;
+      try {
+        const blob = new Blob(a.parts);
+        whole = new Uint8Array(await new Response(blob.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+      } catch (_) {
+        snapPartsGiveUp();
+        return;
+      }
+      if (snapAsm !== a) return; // given up meanwhile
+      snapAsm = null;
+      awaitingSnapshotUntil = 0;
+      if (a.seq > lastSeq || lastSeq === 0) lastSeq = a.seq;
+      enqueueData(whole);
+      bytesReceived += whole.byteLength;
+      for (const f of a.held) {
+        if (f.seq > a.seq) {
+          if (f.seq > lastSeq) lastSeq = f.seq;
+          enqueueData(f.bytes);
+        }
+      }
+    }
+    function snapPartsGiveUp() {
+      if (!snapAsm) return;
+      clearTimeout(snapAsm.timer);
+      snapAsm = null;
+      snapPartsOff = true;
+      // The plain snapshot instead: a resume from nothing, without parts.
+      lastSeq = 0;
+      awaitingSnapshotUntil = Date.now() + 15000;
+      sendResume();
     }
 
     // Snapshots (resume from seq 0) wipe the viewer with ESC[3J and then
@@ -8433,6 +8504,9 @@
       // accidentally encrypt/decrypt with stale material.
       cryptoKey = null;
       sealState = null;
+      // A snapshot in parts belongs to the socket it came on.
+      if (snapAsm) { clearTimeout(snapAsm.timer); snapAsm = null; }
+      snapPartsOff = false;
       kexAttempts.clear();
       kexExID = '';
       kexInFlight = false;
@@ -8928,6 +9002,9 @@
           } catch (_) {}
           break;
         }
+        case 'snapshot_part':
+          await onSnapshotPart(msg);
+          break;
         case 'data': {
           if (!cryptoKey) break;
           // Dedup by seq to drop accidental duplicates (orphaned WS races
@@ -8960,6 +9037,9 @@
           }
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
+            // A snapshot in parts is being gathered: what comes meanwhile
+            // waits for it (onSnapshotPart plays it after the paint).
+            if (snapAsm) { snapAsm.held.push({ seq: typeof msg.seq === 'number' ? msg.seq : 0, bytes }); break; }
             if (awaitingSnapshotUntil) {
               if (hasWipeSignature(bytes)) awaitingSnapshotUntil = 0; // the owed paint arrived
               else if (staleTagged) break; // stale and not the snapshot — a true duplicate

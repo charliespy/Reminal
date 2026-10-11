@@ -21,18 +21,26 @@ const (
 type MessageType string
 
 const (
-	TypeAuth         MessageType = "auth"
-	TypeAuthOK       MessageType = "auth_ok"
-	TypeRegister     MessageType = "register"
-	TypeJoin         MessageType = "join"
-	TypeData         MessageType = "data"
-	TypeResize       MessageType = "resize"
-	TypeConnected    MessageType = "connected"
-	TypeError        MessageType = "error"
-	TypePing         MessageType = "ping"
-	TypePong         MessageType = "pong"
-	TypeClosed       MessageType = "closed"
-	TypeResume       MessageType = "resume"
+	TypeAuth      MessageType = "auth"
+	TypeAuthOK    MessageType = "auth_ok"
+	TypeRegister  MessageType = "register"
+	TypeJoin      MessageType = "join"
+	TypeData      MessageType = "data"
+	TypeResize    MessageType = "resize"
+	TypeConnected MessageType = "connected"
+	TypeError     MessageType = "error"
+	TypePing      MessageType = "ping"
+	TypePong      MessageType = "pong"
+	TypeClosed    MessageType = "closed"
+	TypeResume    MessageType = "resume"
+	// TypeSnapshotPart is agent→viewer: one part of a joining viewer's
+	// snapshot, gzip-compressed and split (client/snapshot_parts.go), sent
+	// only when a viewer's resume asked for it (Snap). Data = encrypted
+	// [header length (4 bytes, big-endian)][header JSON {"id","i","n","to"}]
+	// [that part of the gzip stream], "to" being the viewer id it is for
+	// (inside the payload: a sealed frame carries no address); Seq = the
+	// snapshot's seq, as a plain snapshot frame's.
+	TypeSnapshotPart MessageType = "snapshot_part"
 	TypeAgentOnline  MessageType = "agent_online"
 	TypeAgentOffline MessageType = "agent_offline"
 	// TypeKexInit and TypeKexResp were the PIN handshake before 3.15.6.
@@ -373,6 +381,10 @@ type Message struct {
 	Error   string `json:"error,omitempty"`
 	Seq     uint64 `json:"seq,omitempty"`
 	FromSeq uint64 `json:"from_seq,omitempty"`
+	// Snap, on a resume: the snapshot this viewer can take when one is owed
+	// ("gz+parts": TypeSnapshotPart, addressed to its Viewer id). Absent: a
+	// plain snapshot frame, as always.
+	Snap string `json:"snap,omitempty"`
 	// Count carries the live viewer count when the relay sends a presence
 	// event (TypeConnected / TypeClosed) to the agent, so the host can
 	// show "(N active)" without tracking churn itself.
