@@ -353,6 +353,26 @@ func refFrame(a *Agent) string {
 	return refBuildSnapshot(a.screen, refSnapshotHistory(a), nil, budget, false)
 }
 
+// resetAgent puts an agent back to an empty 80×24 session with a scrollback
+// cap of maxLines, for the tests that run many sessions one after another:
+// an emulator holds a 4 MB parser buffer for as long as its reader runs
+// (clearingAgent's io.Copy), so one per seed or attempt is gigabytes under
+// -race — enough for the package's race run to be killed. Closing one would
+// end its reader, but vt's Close races its Read (an unguarded flag). Exact
+// freshness does not matter here: each step compares the two paths on the
+// same agent.
+func resetAgent(a *Agent, maxLines int) {
+	a.screenMu.Lock()
+	defer a.screenMu.Unlock()
+	_, _ = a.screen.Write([]byte("\x1bc"))
+	a.screen.ClearScrollback()
+	a.screen.Resize(80, 24)
+	a.scrollbackLines = maxLines
+	a.screen.Scrollback().SetMaxLines(maxLines)
+	a.resizeSegs, a.sbLen = nil, 0
+	a.segsGen++
+}
+
 // refParts is the old snapshotParts' snapshot, before gzip and parts: all
 // under screenMu, at its budget (scrollbackBytes; 0: none).
 func refParts(a *Agent) string {
@@ -710,8 +730,9 @@ func TestJoinHistoryKeyNotReused(t *testing.T) {
 		return []byte(b.String())
 	}
 	found := 0
+	a := clearingAgent(t, 80, 24)
 	for attempt := 0; attempt < 300; attempt++ {
-		a := clearingAgent(t, 80, 24)
+		resetAgent(a, 20000)
 		a.record(hist("AAAA"))
 		_ = joinFrame(t, a) // fills the kept stages
 		a.screenMu.Lock()
@@ -771,14 +792,15 @@ func TestJoinRandomMatchesOldPath(t *testing.T) {
 			return "repeats"
 		},
 	}
+	a := clearingAgent(t, 80, 24)
 	for seed := 1; seed <= 60; seed++ {
 		rng := seed * 7919
 		next := func() int { rng = (rng*1103515245 + 12345) & 0x7fffffff; return rng }
-		a := clearingAgent(t, 80, 24)
+		maxLines := 20000
 		if seed%3 == 0 { // a small cap: eviction, and stale segments
-			a.scrollbackLines = 120
-			a.screen.Scrollback().SetMaxLines(120)
+			maxLines = 120
 		}
+		resetAgent(a, maxLines)
 		var trail []string
 		for step := 0; step < 40; step++ {
 			r := next()
