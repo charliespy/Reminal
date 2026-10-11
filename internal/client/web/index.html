@@ -8274,6 +8274,10 @@
     // part that never comes is never a half paint: the parts are dropped and
     // the plain snapshot asked for instead.
     const SNAP_PARTS_WAIT_MS = 20000;
+    // The most a snapshot may unpack to: the agent sends at most its history
+    // cap (8 MiB rendered by default) and a screen. A small part can unpack
+    // to a great deal more (gzip of zeros); past this it is not painted.
+    const SNAP_MAX_BYTES = 16 << 20;
     let snapAsm = null;          // { id, n, seq, parts: [], got, timer, held: [{seq, bytes}] }
     let snapPartsOff = false;    // this connection fell back once: plain from here on
     function snapPartsOK() {
@@ -8304,8 +8308,24 @@
       clearTimeout(a.timer);
       let whole;
       try {
-        const blob = new Blob(a.parts);
-        whole = new Uint8Array(await new Response(blob.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+        // Unpacked as it streams, counted: past SNAP_MAX_BYTES it stops and
+        // is not painted (the plain snapshot is asked for instead).
+        const reader = new Blob(a.parts).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+        const chunks = [];
+        let total = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.length;
+          if (total > SNAP_MAX_BYTES) {
+            try { await reader.cancel(); } catch (_) {}
+            throw new Error('a snapshot unpacking to more than ' + SNAP_MAX_BYTES + ' bytes');
+          }
+          chunks.push(value);
+        }
+        whole = new Uint8Array(total);
+        let at = 0;
+        for (const c of chunks) { whole.set(c, at); at += c.length; }
       } catch (_) {
         snapPartsGiveUp();
         return;

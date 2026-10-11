@@ -55,7 +55,12 @@ const out = await page.evaluate(async () => {
   await data(101, 'MEANWHILE');
   snapPartsGiveUp(); // what the wait's timer calls
   res.missingPart = { painted: painted.length, resume: resumes[resumes.length - 1] || null, lastSeq, assembling: !!snapAsm, partsOff: snapPartsOff };
-  // The resume a viewer sends now asks for the plain snapshot.
+  // A part that unpacks to far more than any snapshot (gzip of 32 MiB of
+  // zeros, a few dozen KB): not painted, the plain snapshot asked for.
+  reset();
+  const bomb = new Uint8Array(await new Response(new Blob([new Uint8Array(32 << 20)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+  await handleMessage({ type: 'snapshot_part', seq: 100, data: part('D', 0, 1, bomb) });
+  res.bomb = { gz: bomb.length, painted: painted.length, resume: resumes[resumes.length - 1] || null, partsOff: snapPartsOff };
   return res;
 });
 console.log(JSON.stringify(out));
@@ -66,6 +71,7 @@ const checks = [
   ['parts for another viewer are not painted or gathered', o.painted === 0 && !o.assembling],
   ['a missing part: nothing painted', m.painted === 0 && !m.assembling],
   ['a missing part: the plain snapshot asked for (resume from 0, no parts)', m.resume && m.resume.type === 'resume' && m.resume.from_seq === 0 && !m.resume.snap && m.partsOff],
+  ['a part unpacking past the cap (gzip bomb): not painted, the plain snapshot asked for', out.bomb.painted === 0 && out.bomb.resume && out.bomb.resume.from_seq === 0 && !out.bomb.resume.snap && out.bomb.partsOff],
 ];
 for (const [n, ok] of checks) console.log((ok ? 'PASS  ' : 'FAIL  ') + n);
 await b.close(); srv.close();

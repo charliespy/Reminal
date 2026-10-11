@@ -21,6 +21,18 @@ import (
 	"reminal/internal/crypto"
 )
 
+// freeAtEnd releases an emulator's memory when the test ends: its drain
+// goroutine keeps it alive (Close would race the drain's Read), and a few of
+// these, thousands of lines each, under -race -count=2 ran a 7.8 GiB box
+// out of memory.
+func freeAtEnd(t *testing.T, e *vt.Emulator) {
+	t.Cleanup(func() {
+		_, _ = e.Write([]byte("\x1bc"))
+		e.ClearScrollback()
+		e.Resize(1, 1)
+	})
+}
+
 // colouredSession is an agent whose history is n syntax-coloured lines of
 // about 600 bytes each (a coding agent's long answer), at 200 columns.
 func colouredSession(t *testing.T, n, budget int) *Agent {
@@ -37,6 +49,7 @@ func colouredSessionPal(t *testing.T, n, budget int, random bool) *Agent {
 	a.screen = vt.NewEmulator(200, 40)
 	a.screen.Scrollback().SetMaxLines(10000)
 	go io.Copy(io.Discard, a.screen)
+	freeAtEnd(t, a.screen)
 	a.buf.SetBase(200, 40)
 	words := strings.Fields("the agent read the file and found that the function returns early when the buffer is empty so the caller never sees the error")
 	pal := [][3]int{{215, 119, 87}, {86, 156, 214}, {78, 201, 176}, {220, 220, 170}, {197, 134, 192}, {156, 220, 254}, {206, 145, 120}, {181, 206, 168}}
@@ -210,6 +223,7 @@ func TestASnapshotInPartsLandsItsCursorOnTheScreensCursorRow(t *testing.T) {
 			a.screen = vt.NewEmulator(120, 30)
 			a.screen.Scrollback().SetMaxLines(20000)
 			go io.Copy(io.Discard, a.screen)
+			freeAtEnd(t, a.screen)
 			a.buf.SetBase(120, 30)
 			for i := 1; i <= 800; i++ {
 				a.record([]byte(fmt.Sprintf("L%05d\r\n", i)))
@@ -224,6 +238,7 @@ func TestASnapshotInPartsLandsItsCursorOnTheScreensCursorRow(t *testing.T) {
 			dst := vt.NewEmulator(120, 30+extra)
 			dst.Scrollback().SetMaxLines(20000)
 			go io.Copy(io.Discard, dst)
+			freeAtEnd(t, dst)
 			dst.Write([]byte(pt))
 			dst.Write([]byte("\r\x1b[Kuser@host:/work$ "))
 			rows := strings.Split(strings.ReplaceAll(dst.Render(), "\r\n", "\n"), "\n")
