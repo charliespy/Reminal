@@ -2710,7 +2710,7 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 	// Clamp the plaintext budget so the ENCRYPTED frame fits the relay's 1 MiB WS
 	// limit. The snapshot is sent as ONE un-chunked frame (unlike uploads/downloads),
 	// box.Encrypt base64-inflates it ~4/3, and the screen + message wrapper add more —
-	// so a 2 MiB history budget (the default) produced a ~1.1 MiB frame that the relay
+	// so a 2 MiB history budget (once the default) produced a ~1.1 MiB frame that the relay
 	// (Cloudflare DO / SetReadLimit) drops, breaking reconnect for large-scrollback
 	// sessions. maxSnapshotPlaintext keeps the frame safely under the cap; smaller
 	// snapshots are unaffected.
