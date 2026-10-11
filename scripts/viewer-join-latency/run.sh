@@ -7,7 +7,10 @@
 # THROTTLES (CPU slowdown), for each snapshot budget in BUDGETS
 # (REMINAL_SCROLLBACK_BYTES) and each path (parts, and the plain one-frame
 # snapshot). SCRIPT=typing.mjs instead types while the history is coming and
-# checks the echoes and the end result (it takes no PLAIN). Built and run in
+# checks the echoes and the end result (it takes no PLAIN; GAP=region sets a
+# scroll region during the download first). SCRIPT=gap.mjs CASE=… changes the
+# terminal during the download (gap.mjs lists the cases); SCRIPT=fan.mjs
+# CASE=join|nojoin times a working viewer's echoes while another joins. Built and run in
 # Docker only.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -34,7 +37,7 @@ for B in $BUDGETS; do
   sleep 3
   read -r ID PIN < <(docker exec "$NAME" sh -c 'reminal info long | grep -E "Session:|PIN:" | awk "{print \$2}"' | tr '\n' ' '; echo)
   for N in $NETS; do for T in $THROTTLES; do for PLAIN in $PLAINS; do
-    docker run --rm --network "container:$NAME" -e NET="$( [ "$N" = local ] || echo "$N")" -e THROTTLE="$T" -e PLAIN="$PLAIN" -e BUDGET="$((B >> 20)) MiB" -e SCRIPT="$SCRIPT" -v "$PWD:/t:ro" -v reminal-join-npm:/e2e/node_modules -w /e2e "$PW" sh -c \
+    docker run --rm --network "container:$NAME" -e NET="$( [ "$N" = local ] || echo "$N")" -e THROTTLE="$T" -e PLAIN="$PLAIN" -e BUDGET="$((B >> 20)) MiB" -e SCRIPT="$SCRIPT" -e GAP="${GAP:-}" -e CASE="${CASE:-}" -v "$PWD:/t:ro" -v reminal-join-npm:/e2e/node_modules -w /e2e "$PW" sh -c \
       'cp "/t/$SCRIPT" /e2e/m.mjs; [ -d node_modules/playwright ] || npm i --silent --no-save playwright@1.56.0 >/dev/null; node m.mjs "$@"' _ "$ID" "$PIN" || FAILED=1
   done; done; done
 done

@@ -8358,6 +8358,13 @@
       // it first came, and what is predicted now is wiped with the rest (its
       // echo, still to come, paints it).
       resetPredictionsHard();
+      // The terminal first put back as a snapshot assumes it: the snapshot
+      // clears the screen and the scrollback but not the modes, and output
+      // during the history's download may have set some — a scroll region
+      // (ESC[3;10r) kept the whole history inside its rows, so all but a few
+      // lines of it went. A soft reset and the full region; the kept output
+      // after it sets again whatever the program set.
+      pendingChunks.push(new TextEncoder().encode('\x1b[!p\x1b[r'));
       pendingChunks.push(whole);
       bytesReceived += whole.byteLength;
       for (const f of a.held) if (f.seq > a.seq) pendingChunks.push(f.bytes);

@@ -5,6 +5,9 @@
 // whether the history was still downloading; then it presses Enter. Once all
 // is in, its terminal must hold exactly what a viewer opening the session
 // afresh is given: every line, in order, nothing lost or doubled.
+// GAP=region first sets a scroll region from the shell (printf ESC[3;10r)
+// while the history is still coming — what once kept the history inside
+// those rows.
 import { chromium } from 'playwright';
 const [ID, PIN] = process.argv.slice(2);
 const THROTTLE = Number(process.env.THROTTLE || 4);
@@ -75,6 +78,13 @@ await page.evaluate(() => {
   };
   requestAnimationFrame(tick);
 });
+if (process.env.GAP === 'region') {
+  await page.keyboard.type("printf '\\033[3;10r'");
+  await page.keyboard.press('Enter');
+  // Its prompt back, then the keys timed from here are the word's alone.
+  await until(page, () => { const buf = term.buffer.active; let n = 0; for (let i = 0; i < buf.length; i++) if (/READY\$/.test(buf.getLine(i)?.translateToString(true) || '')) n++; return n >= 2; });
+  await page.evaluate(() => { window.__keys = []; });
+}
 const word = 'echo PACED';
 const log = [];
 for (const ch of word) {
@@ -109,7 +119,7 @@ const aboveOK = above.every((l, i) => /^line (\d+) /.test(l) && +l.match(/^line 
 
 const during = log.filter((k) => k.historyLinesWhenTyped < 10000);
 const worst = Math.max(...log.map((k) => k.echoMs ?? Infinity));
-console.log(JSON.stringify({ net: process.env.NET || 'slow4g', throttle: THROTTLE, keys: log, typedDuringDownload: during.length, worstEchoMs: worst, frames, mine: { lines: mine.lines, distinct: mine.distinct, ordered: mine.ordered, first: mine.first, rows: mine.text.length }, reference: { lines: theirs.lines, first: theirs.first, rows: theirs.text.length }, extraAbove: off, firstDiff, diff: firstDiff < 0 ? null : { mine: mine.text[firstDiff], reference: theirs.text[firstDiff - Math.max(off, 0)] } }));
+console.log(JSON.stringify({ gap: process.env.GAP || '', net: process.env.NET || 'slow4g', throttle: THROTTLE, keys: log, typedDuringDownload: during.length, worstEchoMs: worst, frames, mine: { lines: mine.lines, distinct: mine.distinct, ordered: mine.ordered, first: mine.first, rows: mine.text.length }, reference: { lines: theirs.lines, first: theirs.first, rows: theirs.text.length }, extraAbove: off, firstDiff, diff: firstDiff < 0 ? null : { mine: mine.text[firstDiff], reference: theirs.text[firstDiff - Math.max(off, 0)] } }));
 const checks = [
   ['keys typed while the history was still coming', during.length >= 3],
   [`every echo within ${ECHO_MS} ms`, log.every((k) => k.echoMs != null && k.echoMs <= ECHO_MS)],

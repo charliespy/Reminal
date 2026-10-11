@@ -21,6 +21,7 @@ const out = await page.evaluate(async () => {
   // recorded.
   cryptoKey = {};
   const painted = [], resumes = [];
+  const real = { enqueueData, flushPendingChunks };
   enqueueData = (bytes) => painted.push(new TextDecoder().decode(bytes));
   // The paced repaint writes past enqueueData (no prediction matching).
   flushPendingChunks = () => { for (const c of pendingChunks) painted.push(new TextDecoder().decode(c)); pendingChunks.length = 0; };
@@ -37,7 +38,7 @@ const out = await page.evaluate(async () => {
   };
   const data = (seq, s) => handleMessage({ type: 'data', seq, data: { __plain: enc(s) } });
   const reset = () => { painted.length = 0; resumes.length = 0; lastSeq = 0; awaitingSnapshotUntil = Date.now() + 15000; snapAsm = null; snapLive = null; snapPartsOff = false; };
-  const label = (p) => p.startsWith('\x1b[2J') ? (p.includes('line 1\r') ? 'HISTORY' : 'SCREEN') : p;
+  const label = (p) => p === '\x1b[!p\x1b[r' ? 'RESET' : p.startsWith('\x1b[2J') ? (p.includes('line 1\r') ? 'HISTORY' : 'SCREEN') : p;
   const screenPart = (id, more) => part(id, 0, 0, enc('\x1b[2J\x1b[3JSCREEN'), viewerId, { screen: true, more });
   const res = {};
 
@@ -114,6 +115,23 @@ const out = await page.evaluate(async () => {
   await handleMessage({ type: 'snapshot_part', seq: 100, data: screenPart('T', true) });
   keepForSnapshot(101, new Uint8Array(SNAP_MAX_BYTES + 1));
   res.pacedOverKept = { live: !!snapLive };
+
+  // Paced, in the real terminal: a scroll region set during the download
+  // (ESC[3;10r, as `printf` in the shell would) must not keep the history in
+  // its rows — the repaint puts the terminal back as a snapshot assumes it.
+  reset();
+  enqueueData = real.enqueueData; flushPendingChunks = real.flushPendingChunks;
+  const settle = () => new Promise((ok) => term.write('', ok));
+  term.reset();
+  await handleMessage({ type: 'snapshot_part', seq: 100, data: screenPart('G', true) });
+  await data(101, '\x1b[3;10r');
+  await handleMessage({ type: 'snapshot_part', seq: 100, data: part('G', 0, 1, gz, viewerId, { ack: true }) });
+  await new Promise((ok) => requestAnimationFrame(() => ok()));
+  await settle();
+  const seen = new Set();
+  const buf = term.buffer.active;
+  for (let i = 0; i < buf.length; i++) { const m = (buf.getLine(i)?.translateToString(true) || '').match(/^line (\d+)$/); if (m) seen.add(m[1]); }
+  res.pacedGapRegion = { lines: seen.size };
   return res;
 });
 console.log(JSON.stringify(out));
@@ -128,13 +146,14 @@ const checks = [
   ['paced: the resume asks for the screen first (snap_ack)', out.pacedResume && out.pacedResume.snap === 'gz+parts' && out.pacedResume.snap_ack === true],
   ['paced: the screen painted the moment it comes', JSON.stringify(out.paced.afterScreen) === '["SCREEN"]'],
   ['paced: output during the download played at once', JSON.stringify(out.paced.afterLive1) === '["SCREEN","LIVE1"]'],
-  ['paced: the history painted once, the output since again on top, nothing lost or doubled after', JSON.stringify(out.paced.order) === JSON.stringify(['SCREEN', 'LIVE1', 'LIVE2', 'HISTORY', 'LIVE1', 'LIVE2', 'LIVE3'])],
+  ['paced: the history painted once (after a reset), the output since again on top, nothing lost or doubled after', JSON.stringify(out.paced.order) === JSON.stringify(['SCREEN', 'LIVE1', 'LIVE2', 'RESET', 'HISTORY', 'LIVE1', 'LIVE2', 'LIVE3'])],
   ['paced: each part acknowledged with how many are in (a repeat changes nothing)', JSON.stringify(out.paced.acks) === JSON.stringify(['snapshot_ack:P:1', 'snapshot_ack:P:2'])],
   ['paced: done, nothing kept', !out.paced.live && out.paced.lastSeq === 103],
   ['paced: parts without their screen are not painted or acknowledged', out.pacedStray.painted === 0 && out.pacedStray.sent === 0],
   ['paced: a screen with no history to follow keeps nothing', JSON.stringify(out.pacedNoHistory.order) === '["SCREEN","LIVE"]' && !out.pacedNoHistory.live],
   ['paced: a history that cannot be unpacked leaves the screen live, no plain snapshot asked', JSON.stringify(out.pacedBomb.order) === '["SCREEN","STILL"]' && out.pacedBomb.resumes === 0 && !out.pacedBomb.live && !out.pacedBomb.partsOff],
   ['paced: more output kept than a snapshot holds gives the history up', !out.pacedOverKept.live],
+  ['paced: a scroll region set during the download does not swallow the history (all 50 lines in the terminal)', out.pacedGapRegion.lines === 50],
 ];
 for (const [n, ok] of checks) console.log((ok ? 'PASS  ' : 'FAIL  ') + n);
 await b.close(); srv.close();
