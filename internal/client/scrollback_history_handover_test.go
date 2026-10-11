@@ -309,3 +309,40 @@ func TestTheDumpsRenderedHistoryIsKeptOnlyWhileUnchanged(t *testing.T) {
 			plain(first, 0), plain(first, 49), plain(after, 0), plain(after, 49))
 	}
 }
+
+// At the cap, a push can leave the length and both end lines as they were
+// when repeated lines sit at both ends: the history must still be the new one.
+func TestTheDumpsRenderedHistoryIsNotFooledByRepeatsAtBothEnds(t *testing.T) {
+	cases := []struct {
+		name, fill, push string
+	}{
+		// Scrollback [X X M1 M2 Y], screen [Y P Q]: the next line pushed is Y.
+		{"a repeated line pushed", "X\r\nX\r\nM1\r\nM2\r\nY\r\nY\r\nP\r\nQ", "\r\nR"},
+		// Scrollback [X X M "" ""], screen ["" P Q]: the next line pushed is blank.
+		{"a blank line pushed", "X\r\nX\r\nM\r\n\r\n\r\n\r\nP\r\nQ", "\r\nR"},
+	}
+	for _, c := range cases {
+		key, _ := crypto.NewSessionKey()
+		box, _ := crypto.NewBox(key)
+		a := &Agent{box: box, buf: newScrollback(scrollbackBytes), scrollbackLines: 5, sessionID: "HISTKEY1"}
+		a.screen = vt.NewEmulator(20, 3)
+		a.screen.Scrollback().SetMaxLines(5)
+		go io.Copy(io.Discard, a.screen)
+		a.buf.SetBase(20, 3)
+		a.record([]byte(c.fill))
+		a.screenMu.Lock()
+		before := strings.Join(a.renderedHistory(), "|")
+		a.screenMu.Unlock()
+		a.record([]byte(c.push))
+		a.screenMu.Lock()
+		got := strings.Join(a.renderedHistory(), "|")
+		want := strings.Join(renderScrollback(a.screen, a.scrollbackLines), "|")
+		a.screenMu.Unlock()
+		if before == want {
+			t.Fatalf("%s: fixture: the push changed nothing (%q)", c.name, want)
+		}
+		if got != want {
+			t.Errorf("%s: handed out %q, the scrollback is %q", c.name, stripANSI(got), stripANSI(want))
+		}
+	}
+}

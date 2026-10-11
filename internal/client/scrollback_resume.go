@@ -10,9 +10,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"unsafe"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"
 
 	"reminal/internal/atomicfile"
@@ -409,19 +410,36 @@ func historySeam(history, again []string) int {
 
 // renderedHistory is renderScrollback of the live emulator, kept from one dump
 // to the next (saveRestore dumps every restoreSaveEvery while output flows)
-// while the scrollback is unchanged: the same length, and the same first and
-// last lines (lines pushed past the cap evict the first). Caller holds
+// while the scrollback is unchanged. What tells a change: its length, its
+// first and last lines, and its newest non-blank line by identity — the vt
+// scrollback clones every non-blank line it is pushed, so a push makes a new
+// one — with how far from the end that line is (pushes of blank lines move
+// it). Length and end lines alone collide once the scrollback is at its cap
+// and repeated lines sit at both ends: one in, one out, the same three
+// values, and the history before the push handed out. Caller holds
 // screenMu; the slice returned is not to be changed.
 func (a *Agent) renderedHistory() []string {
-	sb := a.screen.Scrollback()
-	n := sb.Len()
-	key := strconv.Itoa(n)
-	if lines := sb.Lines(); n > 0 && len(lines) > 0 {
-		key += "\x00" + lines[0].Render() + "\x00" + lines[len(lines)-1].Render()
-	}
+	lines := a.screen.Scrollback().Lines()
+	key := historyKey(lines)
 	if a.histCache != nil && a.histKey == key {
 		return a.histCache
 	}
 	a.histCache, a.histKey = renderScrollback(a.screen, a.scrollbackLines), key
 	return a.histCache
+}
+
+// historyKey names a scrollback's content for renderedHistory.
+func historyKey(lines []uv.Line) string {
+	n := len(lines)
+	if n == 0 {
+		return "0"
+	}
+	newest, at := uintptr(0), -1
+	for i := n - 1; i >= 0; i-- {
+		if len(lines[i]) > 0 {
+			newest, at = uintptr(unsafe.Pointer(unsafe.SliceData(lines[i]))), n-1-i
+			break
+		}
+	}
+	return fmt.Sprintf("%d\x00%s\x00%s\x00%x@%d", n, lines[0].Render(), lines[n-1].Render(), newest, at)
 }
