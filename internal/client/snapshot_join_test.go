@@ -352,6 +352,18 @@ func refFrame(a *Agent) string {
 	return refBuildSnapshot(a.screen, refSnapshotHistory(a), nil, budget, false)
 }
 
+// refParts is the old snapshotParts' snapshot, before gzip and parts: all
+// under screenMu, at its budget (scrollbackBytes; 0: none).
+func refParts(a *Agent) string {
+	a.screenMu.Lock()
+	defer a.screenMu.Unlock()
+	budget := a.scrollbackBytes
+	if budget <= 0 {
+		budget = 1 << 40
+	}
+	return refBuildSnapshot(a.screen, refSnapshotHistory(a), nil, budget, false)
+}
+
 // joinFrame is snapshotFrame's plaintext.
 func joinFrame(t *testing.T, a *Agent) string {
 	t.Helper()
@@ -366,13 +378,22 @@ func joinFrame(t *testing.T, a *Agent) string {
 	return string(pt)
 }
 
-// sameAsRef joins (twice: the second from what the first kept) and checks
-// both are byte for byte the old path's snapshot of the same state.
+// sameAsRef joins (twice: the second from what the first kept), as a plain
+// frame and in parts, and checks each is byte for byte the old path's
+// snapshot of the same state.
 func sameAsRef(t *testing.T, a *Agent, step string) {
 	t.Helper()
-	for _, try := range []string{"join", "join again"} {
-		got := joinFrame(t, a)
-		want := refFrame(a)
+	for _, try := range []string{"join", "join again", "join in parts", "join in parts again"} {
+		var got, want string
+		if strings.Contains(try, "parts") {
+			parts, _, err := partsFor(t, a)
+			if err != nil || len(parts) == 0 {
+				t.Fatalf("%s, %s: no parts (%v)", step, try, err)
+			}
+			got, want = unpackParts(t, a, parts), refParts(a)
+		} else {
+			got, want = joinFrame(t, a), refFrame(a)
+		}
 		if got != want {
 			i := 0
 			for i < len(got) && i < len(want) && got[i] == want[i] {
