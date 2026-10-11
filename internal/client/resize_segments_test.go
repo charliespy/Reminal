@@ -143,6 +143,7 @@ func TestResizeSegmentsSnapshotCostAtCap(t *testing.T) {
 	a.screen = vt.NewEmulator(80, 24)
 	a.screen.Scrollback().SetMaxLines(20000)
 	go io.Copy(io.Discard, a.screen)
+	freeAtEnd(t, a.screen)
 	a.buf.SetBase(80, 24)
 
 	// Interleave output bursts with resizes until the segment list is at cap.

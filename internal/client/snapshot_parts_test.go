@@ -26,11 +26,26 @@ import (
 // these, thousands of lines each, under -race -count=2 ran a 7.8 GiB box
 // out of memory.
 func freeAtEnd(t *testing.T, e *vt.Emulator) {
-	t.Cleanup(func() {
-		_, _ = e.Write([]byte("\x1bc"))
-		e.ClearScrollback()
-		e.Resize(1, 1)
-	})
+	t.Cleanup(func() { freeEmulator(e) })
+}
+
+// freeEmulator releases an emulator's memory now (freeAtEnd): reset, its
+// scrollback dropped, shrunk to a cell. What a test measured it for is done.
+//
+// ClearScrollback alone frees nothing: vt's Scrollback.Clear keeps its slice
+// (lines[:0]), so every line it held stays reachable from the array behind
+// it. An empty line pushed into each slot replaces them, then it is cleared.
+func freeEmulator(e *vt.Emulator) {
+	_, _ = e.Write([]byte("\x1bc"))
+	if sb := e.Scrollback(); sb != nil {
+		n := sb.Len()
+		sb.Clear()
+		for range n {
+			sb.Push(nil)
+		}
+		sb.Clear()
+	}
+	e.Resize(1, 1)
 }
 
 // colouredSession is an agent whose history is n syntax-coloured lines of

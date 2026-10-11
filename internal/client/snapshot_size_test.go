@@ -36,6 +36,9 @@ func TestSnapshotFitsRelayCap(t *testing.T) {
 		snap := buildSnapshot(e, history, nil, budget, false)
 		box, _ := crypto.NewBox(make([]byte, 32))
 		enc, _ := box.Encrypt([]byte(snap))
+		// Each case's 10000 lines released before the next is built: four
+		// of these at once, under -race, took 2.4 GiB.
+		freeEmulator(e)
 		return len(enc)
 	}
 

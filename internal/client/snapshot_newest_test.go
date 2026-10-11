@@ -29,6 +29,7 @@ func TestSnapshotCursorLandsOnTheScreensCursorRow(t *testing.T) {
 			a.screen = vt.NewEmulator(120, 30)
 			a.screen.Scrollback().SetMaxLines(20000)
 			go io.Copy(io.Discard, a.screen)
+			freeAtEnd(t, a.screen)
 			a.buf.SetBase(120, 30)
 			for i := 1; i <= 800; i++ {
 				a.record([]byte(fmt.Sprintf("L%05d\r\n", i)))
@@ -43,6 +44,7 @@ func TestSnapshotCursorLandsOnTheScreensCursorRow(t *testing.T) {
 			dst := vt.NewEmulator(120, 30+extra)
 			dst.Scrollback().SetMaxLines(20000)
 			go io.Copy(io.Discard, dst)
+			freeAtEnd(t, dst)
 			dst.Write(pt)
 			// The shell, told of the viewer's size, redraws its prompt line.
 			dst.Write([]byte("\r\x1b[Kuser@host:/work$ "))
