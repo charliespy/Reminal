@@ -4,11 +4,16 @@
 package client
 
 import (
+	"bytes"
+	"compress/gzip"
 	"embed"
 	"fmt"
 	"log"
 	"net/http"
 	"path"
+	"strconv"
+	"strings"
+	"sync"
 
 	"reminal/internal/config"
 	"reminal/internal/relay"
@@ -26,6 +31,19 @@ func RunRelay(port string) error {
 		port = config.DefaultPort
 	}
 
+	mux := relayMux()
+
+	addr := ":" + port
+	base := fmt.Sprintf("http://localhost%s", addr)
+	fmt.Printf("reminal relay listening on %s\n", base)
+	fmt.Printf("Local mode:  REMINAL_LOCAL=1 reminal\n")
+	fmt.Printf("WebSocket:   ws://localhost%s/ws/<session>/<agent|viewer>\n", addr)
+	log.Fatal(http.ListenAndServe(addr, mux))
+	return nil
+}
+
+// relayMux is the relay's routes: its sockets, and the viewer it serves.
+func relayMux() *http.ServeMux {
 	srv := relay.NewServer()
 	mux := http.NewServeMux()
 
@@ -51,7 +69,7 @@ func RunRelay(port string) error {
 		}
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store, must-revalidate")
-		_, _ = w.Write(data)
+		writeEmbedded(w, r, "web/sw.js", data)
 	})
 	// The app manifest and its icons: what lets a browser install the viewer
 	// as an app rather than a bookmark.
@@ -62,18 +80,19 @@ func RunRelay(port string) error {
 			return
 		}
 		w.Header().Set("Content-Type", "application/manifest+json")
-		_, _ = w.Write(data)
+		writeEmbedded(w, r, "web/manifest.webmanifest", data)
 	})
 	// Scripts the viewer loads from its own origin (the CPace handshake's
 	// ristretto255). path.Base keeps a request inside the directory.
 	mux.HandleFunc("GET /vendor/{name}", func(w http.ResponseWriter, r *http.Request) {
-		data, err := webIndex.ReadFile("web/vendor/" + path.Base(r.PathValue("name")))
+		name := "web/vendor/" + path.Base(r.PathValue("name"))
+		data, err := webIndex.ReadFile(name)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		_, _ = w.Write(data)
+		writeEmbedded(w, r, name, data)
 	})
 	mux.HandleFunc("GET /icons/{name}", func(w http.ResponseWriter, r *http.Request) {
 		data, err := webIndex.ReadFile("web/icons/" + path.Base(r.PathValue("name")))
@@ -104,14 +123,57 @@ func RunRelay(port string) error {
 		// the embedded HTML changes on every `go build`, and a stale cached
 		// copy silently masks fixes during local testing.
 		w.Header().Set("Cache-Control", "no-store, must-revalidate")
-		_, _ = w.Write(data)
+		writeEmbedded(w, r, "web/index.html", data)
 	})
+	return mux
+}
 
-	addr := ":" + port
-	base := fmt.Sprintf("http://localhost%s", addr)
-	fmt.Printf("reminal relay listening on %s\n", base)
-	fmt.Printf("Local mode:  REMINAL_LOCAL=1 reminal\n")
-	fmt.Printf("WebSocket:   ws://localhost%s/ws/<session>/<agent|viewer>\n", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
-	return nil
+// gzipped holds each embedded file compressed, made the first time it is
+// asked for (the files never change while the relay runs).
+var gzipped sync.Map // name → []byte
+
+// writeEmbedded sends an embedded file, gzip-compressed when the browser
+// takes it: the viewer page is ~0.8 MB, a few seconds on a phone's network
+// uncompressed and a fifth of that compressed (the hosted viewer is served
+// compressed by Cloudflare). Images are not passed here: they are compressed
+// already.
+func writeEmbedded(w http.ResponseWriter, r *http.Request, name string, data []byte) {
+	w.Header().Add("Vary", "Accept-Encoding")
+	if !acceptsGzip(r.Header.Get("Accept-Encoding")) {
+		_, _ = w.Write(data)
+		return
+	}
+	gz, ok := gzipped.Load(name)
+	if !ok {
+		var b bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&b, gzip.BestCompression)
+		_, _ = zw.Write(data)
+		_ = zw.Close()
+		gz, _ = gzipped.LoadOrStore(name, b.Bytes())
+	}
+	w.Header().Set("Content-Encoding", "gzip")
+	_, _ = w.Write(gz.([]byte))
+}
+
+// acceptsGzip says whether an Accept-Encoding header takes gzip: named, or
+// "*", with a q above 0.
+func acceptsGzip(h string) bool {
+	for _, part := range strings.Split(h, ",") {
+		enc, params, _ := strings.Cut(strings.TrimSpace(part), ";")
+		enc = strings.TrimSpace(enc)
+		if !strings.EqualFold(enc, "gzip") && enc != "*" {
+			continue
+		}
+		q := 1.0
+		for _, p := range strings.Split(params, ";") {
+			k, v, ok := strings.Cut(strings.TrimSpace(p), "=")
+			if ok && strings.EqualFold(strings.TrimSpace(k), "q") {
+				if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+					q = f
+				}
+			}
+		}
+		return q > 0
+	}
+	return false
 }
