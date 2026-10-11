@@ -27,6 +27,7 @@ import (
 	"reminal/internal/proc"
 	"reminal/internal/pty"
 	"reminal/internal/session"
+	"reminal/internal/subreap"
 	"reminal/internal/updater"
 )
 
@@ -84,6 +85,15 @@ func main() {
 
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "subreap":
+			// Hidden: run a command as the parent of everything it starts,
+			// collecting each process of its tree as it ends
+			// (internal/subreap).
+			code, err := subreap.Run(os.Args[2:])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "subreap: %v\n", err)
+			}
+			os.Exit(code)
 		case "__ptyhold":
 			// Hidden: the per-session ConPTY holder that owns the shell so hot
 			// restart can swap the agent underneath it (Windows-only; see
