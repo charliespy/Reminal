@@ -8262,7 +8262,8 @@
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       // A snapshot owed to this viewer may come whole, compressed and in
       // parts addressed to it (snapshot_part), when it can unpack them.
-      const snap = snapPartsOK() ? { viewer: viewerId, snap: 'gz+parts' } : {};
+      // snap_ack: the screen first, the history paced behind live output.
+      const snap = snapPartsOK() ? { viewer: viewerId, snap: 'gz+parts', snap_ack: true } : {};
       ws.send(JSON.stringify({ type: 'resume', from_seq: lastSeq, ...snap }));
     }
 
@@ -8278,10 +8279,98 @@
     // cap (8 MiB rendered by default) and a screen. A small part can unpack
     // to a great deal more (gzip of zeros); past this it is not painted.
     const SNAP_MAX_BYTES = 16 << 20;
+    // The most parts a paced snapshot may come in: 16 KiB of the gzip stream
+    // each, so 16 MiB of it, more than SNAP_MAX_BYTES ever unpacks from.
+    const SNAP_PACED_MAX_PARTS = 1024;
     let snapAsm = null;          // { id, n, seq, parts: [], got, timer, held: [{seq, bytes}] }
     let snapPartsOff = false;    // this connection fell back once: plain from here on
     function snapPartsOK() {
       return !snapPartsOff && typeof DecompressionStream === 'function';
+    }
+    // A paced snapshot (snap_ack): the screen comes alone, first, and is
+    // painted at once; the history follows in parts, each acknowledged, so
+    // the agent sends them between the live output instead of ahead of it.
+    // Output meanwhile is played as it comes AND kept (past the snapshot's
+    // seq), so that when the history is in it is painted once — history,
+    // screen, and the kept output again on top. Nothing waits on the history:
+    // if it never completes, the screen and its output simply stay.
+    let snapLive = null;         // { id, seq, n, parts: [], got, held: [{seq, bytes}], heldBytes }
+    async function gunzipParts(parts) {
+      // Unpacked as it streams, counted: past SNAP_MAX_BYTES it stops.
+      const reader = new Blob(parts).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+      const chunks = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.length;
+        if (total > SNAP_MAX_BYTES) {
+          try { await reader.cancel(); } catch (_) {}
+          throw new Error('a snapshot unpacking to more than ' + SNAP_MAX_BYTES + ' bytes');
+        }
+        chunks.push(value);
+      }
+      const whole = new Uint8Array(total);
+      let at = 0;
+      for (const c of chunks) { whole.set(c, at); at += c.length; }
+      return whole;
+    }
+    async function onPacedPart(msg, h, body) {
+      if (h.screen) {
+        // A new snapshot for this connection: whatever was under way is over.
+        if (snapAsm) { clearTimeout(snapAsm.timer); snapAsm = null; }
+        const seq = typeof msg.seq === 'number' ? msg.seq : 0;
+        snapLive = h.more ? { id: h.id, seq, n: 0, parts: null, got: 0, held: [], heldBytes: 0 } : null;
+        awaitingSnapshotUntil = 0;
+        if (seq > lastSeq || lastSeq === 0) lastSeq = seq;
+        enqueueData(body);
+        bytesReceived += body.byteLength;
+        return;
+      }
+      const a = snapLive;
+      // Parts of a snapshot whose screen this viewer did not paint (or one
+      // given up) are of no use: without the output kept since, the history
+      // could not be painted under it.
+      if (!a || a.id !== h.id || !(h.n > 0) || h.n > SNAP_PACED_MAX_PARTS || !(h.i >= 0 && h.i < h.n)) return;
+      if (!a.parts) { a.n = h.n; a.parts = new Array(h.n); }
+      if (a.n !== h.n || a.parts[h.i]) return;
+      a.parts[h.i] = body;
+      const last = ++a.got === a.n; // decided here: parts acknowledge concurrently
+      // How many from the first are in: the agent sends the next as these come.
+      let have = 0;
+      while (have < a.n && a.parts[have]) have++;
+      try {
+        const ack = await encrypt(cryptoKey, JSON.stringify({ viewer: viewerId, snap: a.id, seq: have }));
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'snapshot_ack', data: ack }));
+      } catch (_) {}
+      if (!last) return;
+      let whole;
+      try { whole = await gunzipParts(a.parts); } catch (_) {
+        if (snapLive === a) snapLive = null; // the screen stays, live
+        return;
+      }
+      if (snapLive !== a) return; // a newer snapshot meanwhile
+      snapLive = null;
+      // Painted once, in one write with the kept output (xterm draws a write
+      // only once it is through, so the repaint is never seen half done), at
+      // the same distance from the bottom (flushPendingChunks); and not
+      // matched against typing predictions: the kept output was matched when
+      // it first came, and what is predicted now is wiped with the rest (its
+      // echo, still to come, paints it).
+      resetPredictionsHard();
+      pendingChunks.push(whole);
+      bytesReceived += whole.byteLength;
+      for (const f of a.held) if (f.seq > a.seq) pendingChunks.push(f.bytes);
+      flushPendingChunks();
+    }
+    // Output kept for a paced snapshot's repaint; past SNAP_MAX_BYTES of it
+    // the history is given up (the screen stays, live).
+    function keepForSnapshot(seq, bytes) {
+      const a = snapLive;
+      if (!a || !(seq > a.seq)) return;
+      a.held.push({ seq, bytes });
+      a.heldBytes += bytes.byteLength;
+      if (a.heldBytes > SNAP_MAX_BYTES) snapLive = null;
     }
     async function onSnapshotPart(msg) {
       if (!cryptoKey) return;
@@ -8293,6 +8382,10 @@
       try { h = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + hl))); } catch (_) { return; }
       // Addressed inside the part (a sealed frame carries no address): parts
       // for another viewer are not this one's to paint.
+      if (h && h.to === viewerId && typeof h.id === 'string' && (h.screen || h.ack)) {
+        await onPacedPart(msg, h, bytes.subarray(4 + hl));
+        return;
+      }
       if (!h || h.to !== viewerId || typeof h.id !== 'string' || !(h.n > 0) || !(h.i >= 0 && h.i < h.n) || h.n > 64) return;
       // Caught up already (a snapshot no longer owed): nothing to repaint.
       if (!snapAsm && typeof msg.seq === 'number' && msg.seq <= lastSeq && Date.now() >= awaitingSnapshotUntil) return;
@@ -8308,24 +8401,9 @@
       clearTimeout(a.timer);
       let whole;
       try {
-        // Unpacked as it streams, counted: past SNAP_MAX_BYTES it stops and
-        // is not painted (the plain snapshot is asked for instead).
-        const reader = new Blob(a.parts).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
-        const chunks = [];
-        let total = 0;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          total += value.length;
-          if (total > SNAP_MAX_BYTES) {
-            try { await reader.cancel(); } catch (_) {}
-            throw new Error('a snapshot unpacking to more than ' + SNAP_MAX_BYTES + ' bytes');
-          }
-          chunks.push(value);
-        }
-        whole = new Uint8Array(total);
-        let at = 0;
-        for (const c of chunks) { whole.set(c, at); at += c.length; }
+        // Past SNAP_MAX_BYTES it is not painted (the plain snapshot is asked
+        // for instead).
+        whole = await gunzipParts(a.parts);
       } catch (_) {
         snapPartsGiveUp();
         return;
@@ -8526,6 +8604,7 @@
       sealState = null;
       // A snapshot in parts belongs to the socket it came on.
       if (snapAsm) { clearTimeout(snapAsm.timer); snapAsm = null; }
+      snapLive = null;
       snapPartsOff = false;
       kexAttempts.clear();
       kexExID = '';
@@ -9065,6 +9144,7 @@
               else if (staleTagged) break; // stale and not the snapshot — a true duplicate
             }
             if (typeof msg.seq === 'number' && msg.seq > lastSeq) lastSeq = msg.seq;
+            if (snapLive && typeof msg.seq === 'number') keepForSnapshot(msg.seq, bytes);
             // Batch into the per-frame write queue instead of writing
             // each chunk immediately. On refresh the agent dumps the
             // entire 2 MiB scrollback as ~500 separate TypeData frames;

@@ -184,22 +184,27 @@ func TestASnapshotInPartsKeepsTheConfiguredCap(t *testing.T) {
 func TestSnapshotJoinersTakePartsOnlyWhenEveryoneCan(t *testing.T) {
 	a := colouredSession(t, 10, 0)
 	old := a.buf.OldestSeq()
-	a.noteSnapshotJoiner("v-new", snapCapParts, old)
-	if j := a.takeSnapshotJoiners(); len(j) != 1 || j[0] != "v-new" {
-		t.Fatalf("a joiner that asked: %v", j)
+	a.noteSnapshotJoiner("v-new", snapCapParts, false, old)
+	if j, p := a.takeSnapshotJoiners(); len(j) != 1 || j[0] != "v-new" || p != nil {
+		t.Fatalf("a joiner that asked: %v %v", j, p)
 	}
-	a.noteSnapshotJoiner("v-new", snapCapParts, old)
-	a.noteSnapshotJoiner("", "", old) // an older viewer, also owed one
-	if j := a.takeSnapshotJoiners(); j != nil {
-		t.Fatalf("with an older viewer owed a snapshot too: parts to %v", j)
+	a.noteSnapshotJoiner("v-new", snapCapParts, true, old)
+	a.noteSnapshotJoiner("v-old", snapCapParts, false, old)
+	if j, p := a.takeSnapshotJoiners(); len(j) != 1 || j[0] != "v-old" || len(p) != 1 || p[0] != "v-new" {
+		t.Fatalf("one paced, one not: whole %v, paced %v", j, p)
 	}
-	a.noteSnapshotJoiner("v-new", "", old) // asked for nothing
-	if j := a.takeSnapshotJoiners(); j != nil {
-		t.Fatalf("a viewer that did not ask: parts to %v", j)
+	a.noteSnapshotJoiner("v-new", snapCapParts, true, old)
+	a.noteSnapshotJoiner("", "", false, old) // an older viewer, also owed one
+	if j, p := a.takeSnapshotJoiners(); j != nil || p != nil {
+		t.Fatalf("with an older viewer owed a snapshot too: parts to %v %v", j, p)
 	}
-	a.noteSnapshotJoiner("v-new", snapCapParts, a.buf.NextSeq()) // caught up: owed none
-	if j := a.takeSnapshotJoiners(); j != nil {
-		t.Fatalf("a caught-up resume: parts to %v", j)
+	a.noteSnapshotJoiner("v-new", "", false, old) // asked for nothing
+	if j, p := a.takeSnapshotJoiners(); j != nil || p != nil {
+		t.Fatalf("a viewer that did not ask: parts to %v %v", j, p)
+	}
+	a.noteSnapshotJoiner("v-new", snapCapParts, true, a.buf.NextSeq()) // caught up: owed none
+	if j, p := a.takeSnapshotJoiners(); j != nil || p != nil {
+		t.Fatalf("a caught-up resume: parts to %v %v", j, p)
 	}
 }
 
