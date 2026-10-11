@@ -15,6 +15,7 @@ package client
 import (
 	"fmt"
 	"math/rand"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -532,7 +533,8 @@ func TestJoinHistoryIsSnapshotHistory(t *testing.T) {
 	sameAsRef(t, c, "coloured")
 }
 
-// A join renders the history outside screenMu while output and resizes go on:
+// A join, plain or in parts, renders the history outside screenMu while
+// output and resizes go on:
 // the rows it copied are the scrollback's own, never changed once pushed
 // (renderLines). -race would see it otherwise.
 func TestJoinRacesOutput(t *testing.T) {
@@ -555,6 +557,9 @@ func TestJoinRacesOutput(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		if enc, _ := a.snapshotFrame(); enc == "" {
 			t.Fatal("no snapshot")
+		}
+		if parts, _, err := partsFor(t, a); err != nil || len(parts) == 0 {
+			t.Fatalf("no parts (%v)", err)
 		}
 	}
 	<-done
@@ -685,6 +690,100 @@ func TestShingleIndexIsTheJoinedOne(t *testing.T) {
 		}
 		if g, w := fmt.Sprint(frameMatchedDropMask(history, refWords)), fmt.Sprint(refFrameMatchedDropMask(history, refWords)); g != w {
 			t.Fatalf("case %d: frame mask %s, want %s", c, g, w)
+		}
+	}
+}
+
+// Two different histories that historyKey might name alike (Innovator 4,
+// review of #213) — the same length, first line and last line, and, after the
+// first is erased and collected, a newest row allocated where an old one was.
+func TestJoinHistoryKeyNotReused(t *testing.T) {
+	hist := func(mid string) []byte {
+		var b strings.Builder
+		b.WriteString("FIRST line of the history\r\n")
+		for i := 0; i < 40; i++ {
+			fmt.Fprintf(&b, "%s-%02d a middle line that differs between the two\r\n", mid, i)
+		}
+		for i := 0; i < 30; i++ {
+			b.WriteString("TRAILER the same line at the end of both\r\n")
+		}
+		return []byte(b.String())
+	}
+	found := 0
+	for attempt := 0; attempt < 300; attempt++ {
+		a := clearingAgent(t, 80, 24)
+		a.record(hist("AAAA"))
+		_ = joinFrame(t, a) // fills the kept stages
+		a.screenMu.Lock()
+		k1 := historyKey(a.screen.Scrollback().Lines())
+		a.screenMu.Unlock()
+		a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
+		runtime.GC()
+		b := hist("BBBB")
+		half := len(b) / 2
+		a.record(b[:half])
+		runtime.GC()
+		a.record(b[half:])
+		a.screenMu.Lock()
+		k2 := historyKey(a.screen.Scrollback().Lines())
+		a.screenMu.Unlock()
+		got, want := joinFrame(t, a), refFrame(a)
+		if k1 == k2 || got != want {
+			found++
+			if found == 1 {
+				t.Errorf("attempt %d: same key %v, join differs from the old path %v (got AAAA %v, want AAAA %v)", attempt, k1 == k2, got != want, strings.Contains(got, "AAAA"), strings.Contains(want, "AAAA"))
+			}
+		}
+	}
+	t.Logf("collisions: %d of 300", found)
+}
+
+// Random sequences of what a session writes and how it is resized (Innovator
+// 4, review of #213): after each step a join, plain and in parts, must be byte
+// for byte the old path's.
+func TestJoinRandomMatchesOldPath(t *testing.T) {
+	ops := []func(a *Agent, r int) string{
+		func(a *Agent, r int) string { a.record(fillerLines(fmt.Sprintf("P%d", r%7), 5+r%60)); return "lines" },
+		func(a *Agent, r int) string { a.resizeScreen(uint16(40+r%80), uint16(10+r%30)); return "resize" },
+		func(a *Agent, r int) string {
+			a.record([]byte("\x1b[?1049h\x1b[2J\x1b[Han app\r\nrow two " + strings.Repeat("x", r%50)))
+			return "alt in"
+		},
+		func(a *Agent, r int) string { a.record([]byte("\x1b[?1049l")); return "alt out" },
+		func(a *Agent, r int) string { a.record([]byte("\x1b[H\x1b[2J")); return "clear screen" },
+		func(a *Agent, r int) string { a.record([]byte("\x1b[H\x1b[2J\x1b[3J")); return "erase scrollback" },
+		func(a *Agent, r int) string {
+			a.record([]byte(strings.Repeat("宽字符テスト🙂 wide "+fmt.Sprint(r)+"\r\n", 3+r%20)))
+			return "wide"
+		},
+		func(a *Agent, r int) string {
+			// Colour opened in history, closed on the screen: across the seam.
+			a.record([]byte(fmt.Sprintf("\x1b[38;5;%dmcoloured start %d\r\n", r%256, r) + strings.Repeat("still coloured\r\n", 30) + "\x1b[0mreset\r\n"))
+			return "sgr across the seam"
+		},
+		func(a *Agent, r int) string {
+			a.record([]byte(fmt.Sprintf("\x1b[%d;1H\x1b[2Kin place %d", 1+r%20, r)))
+			return "in place"
+		},
+		func(a *Agent, r int) string {
+			para := fmt.Sprintf("a paragraph %d the agent re-emits verbatim across the screen\r\n\r\n", r%3)
+			a.record([]byte(strings.Repeat(para, 4)))
+			return "repeats"
+		},
+	}
+	for seed := 1; seed <= 60; seed++ {
+		rng := seed * 7919
+		next := func() int { rng = (rng*1103515245 + 12345) & 0x7fffffff; return rng }
+		a := clearingAgent(t, 80, 24)
+		if seed%3 == 0 { // a small cap: eviction, and stale segments
+			a.scrollbackLines = 120
+			a.screen.Scrollback().SetMaxLines(120)
+		}
+		var trail []string
+		for step := 0; step < 40; step++ {
+			r := next()
+			trail = append(trail, ops[r%len(ops)](a, r/len(ops)))
+			sameAsRef(t, a, fmt.Sprintf("seed %d step %d after %v", seed, step, trail[max(0, len(trail)-4):]))
 		}
 	}
 }
