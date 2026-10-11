@@ -196,3 +196,42 @@ func TestASnapshotThatCompressesBadlyGoesInSeveralParts(t *testing.T) {
 	}
 	t.Logf("random-colour history: %d parts, sizes up to 640 KiB each", len(parts))
 }
+
+// A snapshot in parts ends as the plain one does: its cursor on the screen's
+// cursor row in a viewer taller than the session's screen, so the prompt the
+// shell redraws on the resize lands below the newest line, not over it
+// (TestSnapshotCursorLandsOnTheScreensCursorRow, by the parts path).
+func TestASnapshotInPartsLandsItsCursorOnTheScreensCursorRow(t *testing.T) {
+	for _, extra := range []int{0, 2, 10} {
+		t.Run(fmt.Sprintf("a viewer %d rows taller", extra), func(t *testing.T) {
+			key, _ := crypto.NewSessionKey()
+			box, _ := crypto.NewBox(key)
+			a := &Agent{box: box, buf: newScrollback(8 << 20), scrollbackLines: 20000, scrollbackBytes: 8 << 20}
+			a.screen = vt.NewEmulator(120, 30)
+			a.screen.Scrollback().SetMaxLines(20000)
+			go io.Copy(io.Discard, a.screen)
+			a.buf.SetBase(120, 30)
+			for i := 1; i <= 800; i++ {
+				a.record([]byte(fmt.Sprintf("L%05d\r\n", i)))
+			}
+			a.record([]byte("user@host:/work$ "))
+
+			parts, _, err := partsFor(t, a)
+			if err != nil || len(parts) == 0 {
+				t.Fatalf("parts: %d (%v)", len(parts), err)
+			}
+			pt := unpackParts(t, a, parts)
+			dst := vt.NewEmulator(120, 30+extra)
+			dst.Scrollback().SetMaxLines(20000)
+			go io.Copy(io.Discard, dst)
+			dst.Write([]byte(pt))
+			dst.Write([]byte("\r\x1b[Kuser@host:/work$ "))
+			rows := strings.Split(strings.ReplaceAll(dst.Render(), "\r\n", "\n"), "\n")
+			y := dst.CursorPosition().Y
+			if y < 1 || !strings.HasPrefix(rows[y], "user@host:/work$") || strings.TrimSpace(rows[y-1]) != "L00800" {
+				lo := max(0, y-2)
+				t.Fatalf("cursor on row %d of %d: %q (rows around it: %q)", y, len(rows), rows[y], rows[lo:min(len(rows), y+2)])
+			}
+		})
+	}
+}
