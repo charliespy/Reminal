@@ -17,7 +17,6 @@ import (
 
 	"github.com/charmbracelet/x/vt"
 
-	"reminal/internal/config"
 	"reminal/internal/crypto"
 )
 
@@ -139,9 +138,12 @@ func numberedLines(s string) int {
 
 // A joining viewer that can take parts gets the history the agent keeps for
 // snapshots, not what one relay message holds: 4000 coloured lines (~2.4 MB),
-// of which a plain snapshot carries the newest few hundred.
+// of which a plain snapshot carries the newest few hundred. The budget is
+// stated here, above the 2.4 MB, because what is proved is that parts carry
+// whatever the budget holds; the shipped default is a separate choice
+// (config.DefaultSnapshotScrollbackBytes).
 func TestASnapshotInPartsCarriesTheWholeHistory(t *testing.T) {
-	a := colouredSession(t, 4000, config.SnapshotScrollbackBytes())
+	a := colouredSession(t, 4000, 8<<20)
 	parts, latest, err := partsFor(t, a)
 	if err != nil || len(parts) == 0 || latest == 0 {
 		t.Fatalf("parts: %d, latest %d, %v", len(parts), latest, err)
