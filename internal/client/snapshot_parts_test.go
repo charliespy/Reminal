@@ -136,47 +136,64 @@ func numberedLines(s string) int {
 	return len(seen)
 }
 
-// A joining viewer that can take parts gets the history the agent keeps for
-// snapshots, not what one relay message holds: 4000 coloured lines (~2.4 MB),
-// of which a plain snapshot carries the newest few hundred. The budget is
-// stated here, above the 2.4 MB, because what is proved is that parts carry
-// whatever the budget holds; the shipped default is a separate choice
-// (config.DefaultSnapshotScrollbackBytes).
-func TestASnapshotInPartsCarriesTheWholeHistory(t *testing.T) {
-	a := colouredSession(t, 4000, 8<<20)
-	parts, latest, err := partsFor(t, a)
-	if err != nil || len(parts) == 0 || latest == 0 {
-		t.Fatalf("parts: %d, latest %d, %v", len(parts), latest, err)
-	}
-	whole := unpackParts(t, a, parts)
-	if got := numberedLines(whole); got != 4000 {
-		t.Fatalf("a snapshot in parts carries %d/4000 lines", got)
-	}
-	frame, _ := a.snapshotFrame()
-	pt, _ := a.box.Decrypt(frame)
-	plain := numberedLines(string(pt))
-	t.Logf("in parts: 4000/4000 lines, %d parts, %d B unpacked; the plain frame: %d/4000 lines, %d B", len(parts), len(whole), plain, len(frame))
-	if plain >= 4000 {
-		t.Fatalf("fixture: the plain frame should be the one cut short (it carried %d)", plain)
-	}
-	// An older viewer's frame is as it was: one message, under the relay's
-	// 1 MiB, whatever the (larger) history cap.
-	if len(frame) >= 1<<20 {
-		t.Fatalf("the plain frame is %d B: over the relay's 1 MiB", len(frame))
-	}
-}
+// The three budgets below share one 4000-line session: the budget is applied
+// when a snapshot is painted, after the history is collected, so it is set
+// per case rather than paid for in three identical sessions.
+func TestASnapshotInPartsHonoursTheBudget(t *testing.T) {
+	a := colouredSession(t, 4000, 0)
 
-// The configured history cap (REMINAL_SCROLLBACK_BYTES) holds for parts too.
-func TestASnapshotInPartsKeepsTheConfiguredCap(t *testing.T) {
-	a := colouredSession(t, 4000, 1<<20)
-	parts, _, _ := partsFor(t, a)
-	whole := unpackParts(t, a, parts)
-	if got := numberedLines(whole); got >= 4000 || got < 1000 {
-		t.Fatalf("with a 1 MiB cap the parts carry %d/4000 lines", got)
-	}
-	if hist := len(whole); hist > (1<<20)+(1<<18) {
-		t.Fatalf("with a 1 MiB cap the snapshot unpacks to %d B", hist)
-	}
+	// A joining viewer that can take parts gets the history the agent keeps for
+	// snapshots, not what one relay message holds: 4000 coloured lines (~2.4 MB),
+	// of which a plain snapshot carries the newest few hundred. The budget is
+	// stated here, above the 2.4 MB, because what is proved is that parts carry
+	// whatever the budget holds; the shipped default is a separate choice
+	// (config.DefaultSnapshotScrollbackBytes).
+	t.Run("CarriesTheWholeHistory", func(t *testing.T) {
+		a.scrollbackBytes = 8 << 20
+		parts, latest, err := partsFor(t, a)
+		if err != nil || len(parts) == 0 || latest == 0 {
+			t.Fatalf("parts: %d, latest %d, %v", len(parts), latest, err)
+		}
+		whole := unpackParts(t, a, parts)
+		if got := numberedLines(whole); got != 4000 {
+			t.Fatalf("a snapshot in parts carries %d/4000 lines", got)
+		}
+		frame, _ := a.snapshotFrame()
+		pt, _ := a.box.Decrypt(frame)
+		plain := numberedLines(string(pt))
+		t.Logf("in parts: 4000/4000 lines, %d parts, %d B unpacked; the plain frame: %d/4000 lines, %d B", len(parts), len(whole), plain, len(frame))
+		if plain >= 4000 {
+			t.Fatalf("fixture: the plain frame should be the one cut short (it carried %d)", plain)
+		}
+		// An older viewer's frame is as it was: one message, under the relay's
+		// 1 MiB, whatever the (larger) history cap.
+		if len(frame) >= 1<<20 {
+			t.Fatalf("the plain frame is %d B: over the relay's 1 MiB", len(frame))
+		}
+	})
+
+	// The configured history cap (REMINAL_SCROLLBACK_BYTES) holds for parts too.
+	t.Run("KeepsTheConfiguredCap", func(t *testing.T) {
+		a.scrollbackBytes = 1 << 20
+		parts, _, _ := partsFor(t, a)
+		whole := unpackParts(t, a, parts)
+		if got := numberedLines(whole); got >= 4000 || got < 1000 {
+			t.Fatalf("with a 1 MiB cap the parts carry %d/4000 lines", got)
+		}
+		if hist := len(whole); hist > (1<<20)+(1<<18) {
+			t.Fatalf("with a 1 MiB cap the snapshot unpacks to %d B", hist)
+		}
+	})
+
+	// No byte cap configured (REMINAL_SCROLLBACK_BYTES=0): the line cap alone,
+	// never the one-frame cap.
+	t.Run("WithNoByteCapIsNotCutToAFrame", func(t *testing.T) {
+		a.scrollbackBytes = 0
+		parts, _, _ := partsFor(t, a)
+		if got := numberedLines(unpackParts(t, a, parts)); got != 4000 {
+			t.Fatalf("with no byte cap the parts carry %d/4000 lines", got)
+		}
+	})
 }
 
 // Who gets parts: only joiners that asked, and none at all when any joiner
@@ -200,16 +217,6 @@ func TestSnapshotJoinersTakePartsOnlyWhenEveryoneCan(t *testing.T) {
 	a.noteSnapshotJoiner("v-new", snapCapParts, a.buf.NextSeq()) // caught up: owed none
 	if j := a.takeSnapshotJoiners(); j != nil {
 		t.Fatalf("a caught-up resume: parts to %v", j)
-	}
-}
-
-// No byte cap configured (REMINAL_SCROLLBACK_BYTES=0): the line cap alone,
-// never the one-frame cap.
-func TestASnapshotInPartsWithNoByteCapIsNotCutToAFrame(t *testing.T) {
-	a := colouredSession(t, 4000, 0)
-	parts, _, _ := partsFor(t, a)
-	if got := numberedLines(unpackParts(t, a, parts)); got != 4000 {
-		t.Fatalf("with no byte cap the parts carry %d/4000 lines", got)
 	}
 }
 
