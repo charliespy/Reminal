@@ -259,11 +259,14 @@ func SnapshotScrollbackLines() int {
 // portion of an attach snapshot, so a wide/colorful history can't balloon the
 // payload even within the line limit. The visible screen is always included on
 // top of this. It bounds the snapshot a joining viewer is sent in parts,
-// gzip-compressed (client/snapshot_parts.go): 8 MiB holds about what the
-// 10000-line cap does of a coding agent's coloured answers (~600 B a line),
-// and compresses to 1–2.3 MB. A plain one-frame snapshot is held to far less
-// regardless (client.maxSnapshotPlaintext).
-const DefaultSnapshotScrollbackBytes = 8 << 20 // 8 MiB
+// gzip-compressed (client/snapshot_parts.go). 2 MiB is the size pages have
+// been opening with all along; the page paints the whole history before it
+// takes a key, so a bigger budget is a slower first keystroke on a phone until
+// the page paints the screen first (8 MiB would hold about what the
+// 10000-line cap does of a coding agent's coloured answers, ~600 B a line).
+// REMINAL_SCROLLBACK_BYTES raises it. A plain one-frame snapshot is held to
+// far less regardless (client.maxSnapshotPlaintext).
+const DefaultSnapshotScrollbackBytes = 2 << 20 // 2 MiB
 
 // SnapshotScrollbackBytes returns the byte cap for snapshot scrollback.
 // REMINAL_SCROLLBACK_BYTES overrides the default; 0 means "no byte cap" (the
