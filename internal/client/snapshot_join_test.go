@@ -729,9 +729,16 @@ func TestJoinHistoryKeyNotReused(t *testing.T) {
 		}
 		return []byte(b.String())
 	}
+	// A search for a reuse, not a proof of one case: under the race detector
+	// (6x slower, and run in the same job as the plain build, which searches
+	// all 300) a sixth of the attempts.
+	attempts := 300
+	if raceDetector {
+		attempts = 50
+	}
 	found := 0
 	a := clearingAgent(t, 80, 24)
-	for attempt := 0; attempt < 300; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		resetAgent(a, 20000)
 		a.record(hist("AAAA"))
 		_ = joinFrame(t, a) // fills the kept stages
@@ -756,7 +763,7 @@ func TestJoinHistoryKeyNotReused(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("collisions: %d of 300", found)
+	t.Logf("collisions: %d of %d", found, attempts)
 }
 
 // Random sequences of what a session writes and how it is resized (Innovator
@@ -792,8 +799,15 @@ func TestJoinRandomMatchesOldPath(t *testing.T) {
 			return "repeats"
 		},
 	}
+	// Random sequences search for a difference; they prove no one case. Under
+	// the race detector (6x slower, and run in the same job as the plain
+	// build, which runs all 60) the first 10 seeds.
+	seeds := 60
+	if raceDetector {
+		seeds = 10
+	}
 	a := clearingAgent(t, 80, 24)
-	for seed := 1; seed <= 60; seed++ {
+	for seed := 1; seed <= seeds; seed++ {
 		rng := seed * 7919
 		next := func() int { rng = (rng*1103515245 + 12345) & 0x7fffffff; return rng }
 		maxLines := 20000

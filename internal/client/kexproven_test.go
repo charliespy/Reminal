@@ -46,12 +46,16 @@ func simulate(n int, proven bool) (answered int, longestGap time.Duration) {
 		a.markProvenSource("H")
 	}
 	pace := make([]relayPace, n)
+	names := make([]string, n)
+	for i := range names {
+		names[i] = fmt.Sprintf("S%d", i)
+	}
 	last := base
 	for sec := 0; sec < 3*3600; sec += 10 {
 		now := base.Add(time.Duration(sec) * time.Second)
 		for i := range pace {
 			if pace[i].take(now) {
-				a.allowKexFrom(now, fmt.Sprintf("S%d", i))
+				a.allowKexFrom(now, names[i])
 			}
 		}
 		// Asks between the others' refill moments, not in step with them.
@@ -75,6 +79,9 @@ func TestKexProvenSourceKeepsBeingAnswered(t *testing.T) {
 		got, gap := simulate(n, true)
 		if got < 30 || gap > 15*time.Minute {
 			t.Errorf("%d other sources: proven source answered %d of 60, longest gap %v", n, got, gap)
+		}
+		if raceDetector {
+			continue // the comparison below is only logged, and it is the other half of the cost
 		}
 		first, firstGap := simulate(n, false)
 		t.Logf("%d other sources: proven %d/60 (gap %v); first-time %d/60 (gap %v)", n, got, gap, first, firstGap)
