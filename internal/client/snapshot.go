@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"
 )
 
@@ -49,7 +50,14 @@ func trimHistorySeam(history, screen []string) []string {
 // lines (newest kept when over the cap; maxLines <= 0 means no cap). The
 // caller must hold whatever lock guards e.
 func renderScrollback(e *vt.Emulator, maxLines int) []string {
-	lines := e.Scrollback().Lines()
+	return renderLines(e.Scrollback().Lines(), maxLines)
+}
+
+// renderLines is renderScrollback of rows already taken from the scrollback.
+// The scrollback clones every row it is pushed and never changes one after,
+// so a copy of its row list, taken under the emulator's lock, may be rendered
+// without it (Agent.joinHistory).
+func renderLines(lines []uv.Line, maxLines int) []string {
 	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
@@ -87,8 +95,27 @@ func renderScrollback(e *vt.Emulator, maxLines int) []string {
 // The caller must hold the emulator lock for the duration (the emulator is read
 // across several calls here and must not be mutated mid-snapshot).
 func buildSnapshot(e *vt.Emulator, history, screenRows []string, maxBytes int, reserveLastRow bool) string {
-	alt := e.IsAltScreen()
-	width, height := e.Width(), e.Height()
+	return paintSnapshot(viewOf(e), history, screenRows, maxBytes, reserveLastRow)
+}
+
+// snapView is what of the emulator a snapshot paints: read under its lock
+// (viewOf), so the paint itself needs none.
+type snapView struct {
+	alt           bool
+	width, height int
+	screen        string // e.Render()
+	cursor        uv.Position
+}
+
+// viewOf reads e for a snapshot. The caller holds whatever lock guards e.
+func viewOf(e *vt.Emulator) snapView {
+	return snapView{alt: e.IsAltScreen(), width: e.Width(), height: e.Height(), screen: e.Render(), cursor: e.CursorPosition()}
+}
+
+// paintSnapshot is buildSnapshot of a view already read: a pure function.
+func paintSnapshot(v snapView, history, screenRows []string, maxBytes int, reserveLastRow bool) string {
+	alt := v.alt
+	width, height := v.width, v.height
 	if alt {
 		// The full-screen app owns the view; the rebuild only reconstructs the
 		// main buffer behind it, which is already folded into history.
@@ -116,7 +143,7 @@ func buildSnapshot(e *vt.Emulator, history, screenRows []string, maxBytes int, r
 	if fromRebuild {
 		screen = append([]string(nil), screenRows...)
 	} else {
-		screen = strings.Split(e.Render(), "\n")
+		screen = strings.Split(v.screen, "\n")
 	}
 	if len(screen) > height {
 		screen = screen[:height]
@@ -187,7 +214,7 @@ func buildSnapshot(e *vt.Emulator, history, screenRows []string, maxBytes int, r
 	}
 
 	b.WriteString("\x1b[?7h") // restore autowrap
-	pos := e.CursorPosition()
+	pos := v.cursor
 	if len(history) > 0 && !alt {
 		// The screen is the bottom block of what was painted, and in a viewer
 		// taller than it that block sits lower than its row numbers: an

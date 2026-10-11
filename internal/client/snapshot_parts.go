@@ -81,8 +81,13 @@ func (a *Agent) snapshotParts(joiners []string) (map[string][]string, uint64, er
 	if a.screen == nil || a.box == nil || len(joiners) == 0 {
 		return nil, 0, nil
 	}
+	// As snapshotFrame: only a copy under screenMu, the rest outside it
+	// (joinInputs, joinHistory).
 	a.screenMu.Lock()
-	history := a.snapshotHistory()
+	in := a.joinInputs()
+	latest := a.buf.LatestSeq()
+	a.screenMu.Unlock()
+	history := a.joinHistory(in)
 	// The configured cap on a snapshot's history (REMINAL_SCROLLBACK_BYTES;
 	// 0: none, the line cap only) — not the one-frame cap the plain
 	// snapshot is held to.
@@ -90,9 +95,7 @@ func (a *Agent) snapshotParts(joiners []string) (map[string][]string, uint64, er
 	if budget <= 0 {
 		budget = 1 << 40
 	}
-	snap := buildSnapshot(a.screen, history, nil, budget, false)
-	latest := a.buf.LatestSeq()
-	a.screenMu.Unlock()
+	snap := paintSnapshot(in.view, history, nil, budget, false)
 	if snap == "" {
 		return nil, 0, nil
 	}

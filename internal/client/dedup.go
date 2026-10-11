@@ -178,25 +178,30 @@ func frameMatchedDropMask(history []string, refWords []string) []bool {
 	return coverageDropMask(history, buildShingles(refWords), set)
 }
 
+// shingle is one 8-word window of a word stream. Kept as the words
+// themselves, not joined into one string: looking one up then allocates
+// nothing (coverageDropMask looks up one for every word of the history). The
+// same windows match as joined ones would: a word (dedupWord) never holds the
+// \x00 they were joined with.
+type shingle [dedupFrameShingle]string
+
 // buildShingles indexes an ordered word stream by its 8-word windows.
-func buildShingles(words []string) map[string]bool {
-	m := make(map[string]bool, len(words))
-	for i := 0; i+dedupFrameShingle <= len(words); i++ {
-		m[strings.Join(words[i:i+dedupFrameShingle], "\x00")] = true
-	}
+func buildShingles(words []string) map[shingle]bool {
+	m := make(map[shingle]bool, len(words))
+	addShingles(m, words)
 	return m
 }
 
 // addShingles extends an existing shingle index with another word stream.
-func addShingles(m map[string]bool, words []string) {
+func addShingles(m map[shingle]bool, words []string) {
 	for i := 0; i+dedupFrameShingle <= len(words); i++ {
-		m[strings.Join(words[i:i+dedupFrameShingle], "\x00")] = true
+		m[shingle(words[i:i+dedupFrameShingle])] = true
 	}
 }
 
 // coverageDropMask marks history lines whose words are covered by matched runs
 // against a pre-built shingle index (see frameMatchedDropMask's doc above).
-func coverageDropMask(history []string, shingles map[string]bool, refWords map[string]bool) []bool {
+func coverageDropMask(history []string, shingles map[shingle]bool, refWords map[string]bool) []bool {
 	mask := make([]bool, len(history))
 	if len(shingles) == 0 {
 		return mask
@@ -213,7 +218,7 @@ func coverageDropMask(history []string, shingles map[string]bool, refWords map[s
 	}
 	covered := make([]bool, len(hw))
 	for i := 0; i+dedupFrameShingle <= len(hw); i++ {
-		if shingles[strings.Join(hw[i:i+dedupFrameShingle], "\x00")] {
+		if shingles[shingle(hw[i:i+dedupFrameShingle])] {
 			for k := i; k < i+dedupFrameShingle; k++ {
 				covered[k] = true
 			}

@@ -18,11 +18,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"
 	"github.com/gorilla/websocket"
 	xterm "golang.org/x/term"
@@ -160,6 +162,9 @@ type Agent struct {
 	// flaw that sank the v2.3.0 position-only band (it swallowed everything between
 	// two resizes, including a fresh agent's entire history). Guarded by screenMu.
 	resizeSegs []resizeSeg
+	// segsGen counts every change to resizeSegs, so a cached snapshot history
+	// (joinHistory) is of the segments it was made with. Guarded by screenMu.
+	segsGen uint64
 	// resizedAt is when the screen last changed size. A resize makes every
 	// program redraw, and a redraw is output: for attnResizeGrace after it
 	// the attention probe does not read a changing screen as "working".
@@ -390,6 +395,13 @@ type Agent struct {
 	// histKey what it was of (renderedHistory). Guarded by screenMu.
 	histCache []string
 	histKey   string
+	// joinDeduped and joinFinal are the later stages of a join's history
+	// (joinHistory), each with the key it is of: what dedupBlocks made of the
+	// rendered history and its resize segments, and what dedupAgainstFrame
+	// then made of that and the screen. Guarded by screenMu; never changed
+	// once made, so handed out as they are.
+	joinDeduped, joinFinal       []string
+	joinDedupedKey, joinFinalKey string
 	// hostOldState is the cooked-mode terminal state captured by
 	// xterm.MakeRaw when Run() entered raw mode. Used by the hot-restart
 	// path to restore the terminal before Exec'ing the new binary, so
@@ -2244,6 +2256,7 @@ func (a *Agent) noteScrollbackLen() {
 	n := a.screen.Scrollback().Len()
 	if n < a.sbLen {
 		a.resizeSegs = nil
+		a.segsGen++
 	}
 	a.sbLen = n
 }
@@ -2345,6 +2358,7 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	if len(a.resizeSegs) > maxResizeSegs {
 		a.resizeSegs = a.resizeSegs[len(a.resizeSegs)-maxResizeSegs:]
 	}
+	a.segsGen++
 	if a.buf != nil {
 		// Marker for the history rebuild: bytes after this point were emitted
 		// for the new geometry. Under screenMu so it orders correctly against
@@ -2565,11 +2579,22 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 func (a *Agent) snapshotHistory() []string {
 	lines := renderScrollback(a.screen, 0) // uncapped: segment indices are absolute
 	lines = a.dropResizeRepaints(lines)
-	if a.scrollbackLines > 0 && len(lines) > a.scrollbackLines {
-		lines = lines[len(lines)-a.scrollbackLines:]
+	screen := a.screen.Render()
+	return dedupAgainstFrame(dedupHistory(lines, a.resizeSegs, screen, a.scrollbackLines, true), strings.Split(screen, "\n"))
+}
+
+// dedupHistory is snapshotHistory's middle, of what it is given: the resize
+// repaints dropped (unless dropped already: dropped), the newest maxLines
+// kept, and dedupBlocks. A pure function of its arguments, so it runs outside
+// screenMu (joinHistory).
+func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int, dropped bool) []string {
+	if !dropped {
+		lines = dropRepaints(lines, segs, screen)
 	}
-	lines = dedupBlocks(lines)
-	return dedupAgainstFrame(lines, strings.Split(a.screen.Render(), "\n"))
+	if maxLines > 0 && len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return dedupBlocks(lines)
 }
 
 // dropResizeRepaints removes, for every resize EXCEPT the newest, the lines its frame
@@ -2582,11 +2607,31 @@ func (a *Agent) snapshotHistory() []string {
 // Skipped entirely once the emulator may have evicted from the front of scrollback
 // (absolute indices would be stale). Caller holds screenMu.
 func (a *Agent) dropResizeRepaints(lines []string) []string {
-	if len(a.resizeSegs) < 2 {
+	if a.staleSegs(len(lines)) {
 		return lines
 	}
-	if a.scrollbackLines > 0 && len(lines) >= a.scrollbackLines {
+	return dropRepaints(lines, a.resizeSegs, a.screen.Render())
+}
+
+// staleSegs says whether the resize segments are of no use for a history of n
+// lines, and forgets them when its front may have been evicted (absolute
+// indices would be stale). Caller holds screenMu.
+func (a *Agent) staleSegs(n int) bool {
+	if len(a.resizeSegs) < 2 {
+		return true
+	}
+	if a.scrollbackLines > 0 && n >= a.scrollbackLines {
 		a.resizeSegs = nil // eviction possible: indices stale, start fresh
+		a.segsGen++
+		return true
+	}
+	return false
+}
+
+// dropRepaints is dropResizeRepaints of what it is given: segs (at least two,
+// none stale) and the live screen as rendered. Pure, so outside screenMu.
+func dropRepaints(lines []string, segs []resizeSeg, screenRender string) []string {
+	if len(segs) < 2 {
 		return lines
 	}
 	drop := make([]bool, len(lines))
@@ -2597,10 +2642,10 @@ func (a *Agent) dropResizeRepaints(lines []string) []string {
 	// whose pushed copy is the ONLY copy) never does, so it can never be lost —
 	// even for apps whose repaint covers less than the captured screen.
 	var scw []string
-	for _, r := range strings.Split(a.screen.Render(), "\n") {
+	for _, r := range strings.Split(screenRender, "\n") {
 		scw = append(scw, dedupWords(r)...)
 	}
-	last := a.resizeSegs[len(a.resizeSegs)-1]
+	last := segs[len(segs)-1]
 	corpus := buildShingles(scw)
 	corpusWords := make(map[string]bool, len(scw))
 	addWords := func(ws []string) {
@@ -2612,10 +2657,10 @@ func (a *Agent) dropResizeRepaints(lines []string) []string {
 	lastRegion := regionWords(lines, last.start, len(lines))
 	addShingles(corpus, lastRegion)
 	addWords(lastRegion)
-	for i := len(a.resizeSegs) - 2; i >= 0; i-- {
-		seg := a.resizeSegs[i]
+	for i := len(segs) - 2; i >= 0; i-- {
+		seg := segs[i]
 		end := seg.start + seg.maxOver
-		if nxt := a.resizeSegs[i+1].start; nxt < end {
+		if nxt := segs[i+1].start; nxt < end {
 			end = nxt
 		}
 		if end > len(lines) {
@@ -2652,7 +2697,13 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 	// (Verified against real Claude Code: on resize it repaints only its bounded frame,
 	// ~one screen, not the whole session — so scrolled-off history is genuinely clean.)
 	a.screenMu.Lock()
-	history := a.snapshotHistory()
+	in := a.joinInputs()
+	latest := a.buf.LatestSeq()
+	a.screenMu.Unlock()
+	// What a join paints is made from that copy, outside screenMu: output
+	// and other viewers wait only for the copy, not for the render and the
+	// dedup passes over the whole history (joinHistory).
+	history := a.joinHistory(in)
 	// Clamp the plaintext budget so the ENCRYPTED frame fits the relay's 1 MiB WS
 	// limit. The snapshot is sent as ONE un-chunked frame (unlike uploads/downloads),
 	// box.Encrypt base64-inflates it ~4/3, and the screen + message wrapper add more —
@@ -2664,9 +2715,7 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 	if budget <= 0 || budget > maxSnapshotPlaintext {
 		budget = maxSnapshotPlaintext
 	}
-	snap := buildSnapshot(a.screen, history, nil, budget, false)
-	latest := a.buf.LatestSeq()
-	a.screenMu.Unlock()
+	snap := paintSnapshot(in.view, history, nil, budget, false)
 	if snap == "" {
 		return "", 0
 	}
@@ -2675,6 +2724,88 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 		return "", 0
 	}
 	return enc, latest
+}
+
+// joinIn is what a join's snapshot is made of, copied under screenMu
+// (joinInputs) so the rest needs no lock.
+type joinIn struct {
+	rows     []uv.Line   // a copy of the scrollback's row list (at its cap the scrollback shifts its own in place); the rows themselves never change
+	histKey  string      // historyKey(rows): what renderedHistory's cache is keyed by
+	segs     []resizeSeg // nil when of no use (staleSegs)
+	segsGen  uint64
+	maxLines int
+	view     snapView
+}
+
+// joinInputs copies what a join needs. Cheap: one screen rendered, the rows'
+// list and the segments copied, the history's key. Caller holds screenMu.
+func (a *Agent) joinInputs() joinIn {
+	rows := a.screen.Scrollback().Lines()
+	in := joinIn{rows: append([]uv.Line(nil), rows...), histKey: historyKey(rows), maxLines: a.scrollbackLines, view: viewOf(a.screen)}
+	if !a.staleSegs(len(rows)) {
+		// Shared, not copied: a segment is never changed once made, and the
+		// list is only appended to (past this one's length), trimmed or
+		// dropped — each leaves what this slice sees as it was.
+		in.segs = a.resizeSegs
+	}
+	in.segsGen = a.segsGen
+	return in
+}
+
+// joinHistory is snapshotHistory of a join's copy, made outside screenMu and
+// kept: each stage is reused while what it is of is unchanged, so a join to a
+// session whose history and screen have not moved since the last renders
+// nothing. The stages, and what each is keyed by:
+//   - the rendered rows: the history (renderedHistory's cache, shared with the
+//     hot-restart dump) — rendered capped at maxLines, which the scrollback
+//     itself is capped at, so the same rows snapshotHistory renders uncapped;
+//   - those with the resize repaints dropped, capped, dedupBlocks: and the
+//     segments (segsGen), and the screen while there are segments to drop by
+//     (dropRepaints reads it);
+//   - that, dedupAgainstFrame: and the screen.
+//
+// Byte for byte what snapshotHistory gives for the same state
+// (TestJoinHistoryIsSnapshotHistory).
+func (a *Agent) joinHistory(in joinIn) []string {
+	dedupKey, finalKey := joinKeys(in)
+	a.screenMu.Lock()
+	if a.joinFinal != nil && a.joinFinalKey == finalKey {
+		h := a.joinFinal
+		a.screenMu.Unlock()
+		return h
+	}
+	var rendered, deduped []string
+	if a.joinDeduped != nil && a.joinDedupedKey == dedupKey {
+		deduped = a.joinDeduped
+	} else if a.histCache != nil && a.histKey == in.histKey {
+		rendered = a.histCache
+	}
+	a.screenMu.Unlock()
+	if deduped == nil {
+		if rendered == nil {
+			rendered = renderLines(in.rows, in.maxLines)
+			a.screenMu.Lock()
+			a.histCache, a.histKey = rendered, in.histKey
+			a.screenMu.Unlock()
+		}
+		deduped = dedupHistory(rendered, in.segs, in.view.screen, in.maxLines, false)
+	}
+	final := dedupAgainstFrame(deduped, strings.Split(in.view.screen, "\n"))
+	a.screenMu.Lock()
+	a.joinDeduped, a.joinDedupedKey = deduped, dedupKey
+	a.joinFinal, a.joinFinalKey = final, finalKey
+	a.screenMu.Unlock()
+	return final
+}
+
+// joinKeys are what joinHistory's later stages are kept by: everything each
+// is made from (TestJoinKeysAreOfWhatTheStagesRead).
+func joinKeys(in joinIn) (dedupKey, finalKey string) {
+	dedupKey = in.histKey + "\x00" + strconv.FormatUint(in.segsGen, 10)
+	if in.segs != nil {
+		dedupKey += "\x00" + in.view.screen // dropRepaints reads the screen too
+	}
+	return dedupKey, dedupKey + "\x00" + in.view.screen
 }
 
 // scrollback. The sender goroutine drains the scrollback over the websocket.
