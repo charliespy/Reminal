@@ -385,12 +385,15 @@ type Agent struct {
 	// re-encrypted under the new session key). Applied after initScreen so
 	// the emulator and buffer match what viewers had before the exec.
 	resumeDump *scrollbackDump
-	// snapJoiners are the viewers owed a snapshot that can take it in parts,
-	// snapPlain whether one owed it cannot (snapshot_parts.go). Guarded by
-	// snapMu.
+	// snapJoiners are the viewers owed a snapshot that can take it in parts
+	// (true: paced, screen first), snapPlain whether one owed it cannot;
+	// snapXfers the paced snapshots under way and snapWake their acks' signal
+	// to the sender (snapshot_parts.go). Guarded by snapMu.
 	snapMu      sync.Mutex
 	snapJoiners map[string]bool
 	snapPlain   bool
+	snapXfers   []*snapXfer
+	snapWake    chan struct{}
 	// histCache is the rendered scrollback the last dump carried, and
 	// histKey what it was of (renderedHistory). Guarded by screenMu.
 	histCache []string
@@ -2707,7 +2710,7 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 	// Clamp the plaintext budget so the ENCRYPTED frame fits the relay's 1 MiB WS
 	// limit. The snapshot is sent as ONE un-chunked frame (unlike uploads/downloads),
 	// box.Encrypt base64-inflates it ~4/3, and the screen + message wrapper add more —
-	// so a 2 MiB history budget (the default) produced a ~1.1 MiB frame that the relay
+	// so a 2 MiB history budget (once the default) produced a ~1.1 MiB frame that the relay
 	// (Cloudflare DO / SetReadLimit) drops, breaking reconnect for large-scrollback
 	// sessions. maxSnapshotPlaintext keeps the frame safely under the cap; smaller
 	// snapshots are unaffected.
@@ -3222,8 +3225,18 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				a.viewerCount = 1
 			}
 			a.viewerSizeMu.Unlock()
-			a.noteSnapshotJoiner(msg.Viewer, msg.Snap, cursor)
+			a.noteSnapshotJoiner(msg.Viewer, msg.Snap, msg.SnapAck, cursor)
 			pushCursor(cursorCh, cursor)
+		case protocol.TypeSnapshotAck:
+			plaintext, err := a.box.Decrypt(msg.Data)
+			if err != nil {
+				continue
+			}
+			var ack protocol.Message
+			if json.Unmarshal(plaintext, &ack) != nil {
+				continue
+			}
+			a.ackSnapshot(ack.Viewer, ack.Snap, ack.Seq)
 		case protocol.TypePakeInit:
 			a.handlePakeInit(conn, msg.ExID, msg.Data, msg.Frames, msg.Src)
 		case protocol.TypeKexInit:
@@ -3391,6 +3404,10 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				// again with them.
 				a.sight.clear()
 			}
+			if msg.Count == 0 {
+				// No one is left to take the rest of a paced snapshot.
+				a.dropSnapshotXfers()
+			}
 			if rebroadcast {
 				sizeLog("viewer left, forget wraps  %s", a.sizeBook.dump())
 				a.sizeBook.forgetWraps()
@@ -3417,6 +3434,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 // resume rather than pushing chunks the relay would forward to nobody.
 func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-chan struct{}, local bool) error {
 	notify := a.buf.Notify()
+	acked := a.snapAcks()
 	var cursor uint64
 	sending := false
 
@@ -3442,6 +3460,7 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 		// whether or not any RELAY viewer is watching. Only the relay path parks
 		// on a zero viewer count.
 		if !local && a.currentViewerCount() == 0 {
+			a.dropSnapshotXfers()
 			sending = false
 			continue
 		}
@@ -3456,13 +3475,30 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			// Joiners that asked for it get the whole history, compressed and
 			// in parts addressed to them; anyone else owed a snapshot gets the
 			// one plain frame as always (snapshot_parts.go).
-			if joiners := a.takeSnapshotJoiners(); len(joiners) > 0 {
-				latest, err := a.sendSnapshotParts(conn, joiners)
-				if err != nil {
-					return err
+			// Those that paint the screen first are sent it now, and their
+			// history paced behind the live output below; the output goes on
+			// from the older of the two snapshots (a viewer drops what its
+			// own already shows).
+			if joiners, paced := a.takeSnapshotJoiners(); len(joiners)+len(paced) > 0 {
+				var from uint64
+				if len(paced) > 0 {
+					latest, err := a.startPacedSnapshot(conn, paced)
+					if err != nil {
+						return err
+					}
+					from = latest
 				}
-				if latest > 0 {
-					cursor = latest + 1
+				if len(joiners) > 0 {
+					latest, err := a.sendSnapshotParts(conn, joiners)
+					if err != nil {
+						return err
+					}
+					if from == 0 || (latest > 0 && latest < from) {
+						from = latest
+					}
+				}
+				if from > 0 {
+					cursor = from + 1
 				}
 			} else if frame, latest := a.snapshotFrame(); frame != "" {
 				if err := a.writeMsg(conn, protocol.Message{
@@ -3488,12 +3524,30 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			cursor = e.Seq + 1
 		}
 
+		// A part of each paced snapshot that may go, then round again for
+		// whatever output came meanwhile: live output waits behind one part.
+		more, err := a.pumpSnapshotParts(conn)
+		if err != nil {
+			return err
+		}
+		if more {
+			select {
+			case <-stop:
+				return nil
+			case c := <-cursorCh:
+				cursor = c
+			default:
+			}
+			continue
+		}
+
 		select {
 		case <-stop:
 			return nil
 		case c := <-cursorCh:
 			cursor = c
 		case <-notify:
+		case <-acked:
 		}
 	}
 }

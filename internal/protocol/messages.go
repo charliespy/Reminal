@@ -41,6 +41,14 @@ const (
 	// (inside the payload: a sealed frame carries no address); Seq = the
 	// snapshot's seq, as a plain snapshot frame's.
 	TypeSnapshotPart MessageType = "snapshot_part"
+	// TypeSnapshotAck is viewer→agent: how many parts of a paced snapshot
+	// (one whose resume set SnapAck) the viewer holds. Data = encrypted JSON
+	// {"viewer": its id, "snap": the snapshot's id, "seq": parts 0..seq-1 are
+	// in} (inside the payload: a sealed frame carries no more than its type,
+	// seq and payload). The agent sends the next parts only as these come
+	// back, so the viewer's live output is never queued behind the whole
+	// history (client/snapshot_parts.go).
+	TypeSnapshotAck  MessageType = "snapshot_ack"
 	TypeAgentOnline  MessageType = "agent_online"
 	TypeAgentOffline MessageType = "agent_offline"
 	// TypeKexInit and TypeKexResp were the PIN handshake before 3.15.6.
@@ -385,6 +393,10 @@ type Message struct {
 	// ("gz+parts": TypeSnapshotPart, addressed to its Viewer id). Absent: a
 	// plain snapshot frame, as always.
 	Snap string `json:"snap,omitempty"`
+	// SnapAck, on a resume with Snap "gz+parts": the viewer paints the screen
+	// first and acknowledges parts (TypeSnapshotAck), so they can be paced
+	// behind its live output. Absent: the parts all go at once, as always.
+	SnapAck bool `json:"snap_ack,omitempty"`
 	// Count carries the live viewer count when the relay sends a presence
 	// event (TypeConnected / TypeClosed) to the agent, so the host can
 	// show "(N active)" without tracking churn itself.
