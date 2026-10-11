@@ -380,6 +380,10 @@ type Agent struct {
 	// re-encrypted under the new session key). Applied after initScreen so
 	// the emulator and buffer match what viewers had before the exec.
 	resumeDump *scrollbackDump
+	// histCache is the rendered scrollback the last dump carried, and
+	// histKey what it was of (renderedHistory). Guarded by screenMu.
+	histCache []string
+	histKey   string
 	// hostOldState is the cooked-mode terminal state captured by
 	// xterm.MakeRaw when Run() entered raw mode. Used by the hot-restart
 	// path to restore the terminal before Exec'ing the new binary, so

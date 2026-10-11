@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/vt"
@@ -115,8 +116,10 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 		// repaints. Should the replay draw them again, the copy is the
 		// history's tail matching the frame, which the snapshot drops
 		// (dedupAgainstFrame).
-		dump.History = renderScrollback(a.screen, a.scrollbackLines)
-		if !a.screen.IsAltScreen() { // a full-screen app's screen is not history
+		// A copy: the cache is not ours to grow. A full-screen app's screen
+		// (the alternate one) is not history.
+		dump.History = append([]string(nil), a.renderedHistory()...)
+		if !a.screen.IsAltScreen() {
 			dump.History = append(dump.History, renderedScreenRows(a.screen)...)
 		}
 		if n := len(dump.History) - a.scrollbackLines; a.scrollbackLines > 0 && n > 0 {
@@ -336,10 +339,15 @@ func replayDump(e *vt.Emulator, d *scrollbackDump, after ...func()) {
 
 // historySeam is how much of history to put back before the ring is
 // replayed: all of it but the tail the ring draws again (again: what the
-// replay alone renders). The tail is found as the longest run of lines the
-// two share, starting from one of again's first non-blank lines (a ring cut
-// mid-frame begins with debris) and running to the history's end; with none
-// of three lines or more, the ring draws nothing of it and all of it goes in.
+// replay alone renders). The replay ends where the history ends (both end
+// with the screen), so the tail is again from one of its first non-blank
+// lines on (a ring cut mid-frame begins with debris), matched to the
+// history's end: first at the one place that lines both ends up, else at a
+// later occurrence of that line. The history goes in up to the match — the
+// debris before it in again is drawn as extra lines, never in place of
+// history. With no match of three lines or more, the ring draws nothing of
+// it and all of it goes in. Bounded: repetitive history (one line ten
+// thousand times) costs what the direct alignment does.
 func historySeam(history, again []string) int {
 	plain := func(ls []string) []string {
 		out := make([]string, len(ls))
@@ -349,29 +357,71 @@ func historySeam(history, again []string) int {
 		return out
 	}
 	h, r := plain(history), plain(again)
-	at := make(map[string][]int, len(h))
-	for i, l := range h {
-		if l != "" {
-			at[l] = append(at[l], i)
+	run := func(p, j int) int {
+		n := 0
+		for p+n < len(h) && j+n < len(r) && h[p+n] == r[j+n] {
+			n++
 		}
+		return n
 	}
-	best, bestRun := len(h), 0
+	var at map[string][]int
+	best, bestRun, budget := len(h), 0, 4*len(h)+4*len(r)+1024
 	for j := 0; j < len(r) && j < 64; j++ {
 		if r[j] == "" {
 			continue
 		}
-		for _, p := range at[r[j]] {
-			run := 0
-			for p+run < len(h) && j+run < len(r) && h[p+run] == r[j+run] {
-				run++
+		direct := len(h) - len(r) + j
+		if direct >= 0 && direct < len(h) && h[direct] == r[j] {
+			if n := run(direct, j); direct+n == len(h) {
+				if j+n == len(r) {
+					return direct // both ends line up: the tail is the replay, exactly
+				}
+				if n > bestRun {
+					best, bestRun = direct, n
+				}
 			}
-			if run > bestRun && (p+run == len(h) || j+run == len(r)) {
-				best, bestRun = p-j, run
+		}
+		if at == nil {
+			at = make(map[string][]int, len(h))
+			for i, l := range h {
+				if l != "" {
+					at[l] = append(at[l], i)
+				}
+			}
+		}
+		// Later occurrences only: a match must run to the history's end, and
+		// one starting before the direct alignment would outrun the replay.
+		occ := at[r[j]]
+		for k := len(occ) - 1; k >= 0 && occ[k] > direct && budget > 0; k-- {
+			p := occ[k]
+			n := run(p, j)
+			budget -= n + 1
+			if p+n == len(h) && n > bestRun {
+				best, bestRun = p, n
 			}
 		}
 	}
 	if bestRun < 3 {
 		return len(h)
 	}
-	return max(best, 0)
+	return best
+}
+
+// renderedHistory is renderScrollback of the live emulator, kept from one dump
+// to the next (saveRestore dumps every restoreSaveEvery while output flows)
+// while the scrollback is unchanged: the same length, and the same first and
+// last lines (lines pushed past the cap evict the first). Caller holds
+// screenMu; the slice returned is not to be changed.
+func (a *Agent) renderedHistory() []string {
+	sb := a.screen.Scrollback()
+	n := sb.Len()
+	key := strconv.Itoa(n)
+	if lines := sb.Lines(); n > 0 && len(lines) > 0 {
+		key += "\x00" + lines[0].Render() + "\x00" + lines[len(lines)-1].Render()
+	}
+	if a.histCache != nil && a.histKey == key {
+		return a.histCache
+	}
+	a.histCache, a.histKey = renderScrollback(a.screen, a.scrollbackLines), key
+	return a.histCache
 }

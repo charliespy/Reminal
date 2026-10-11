@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/vt"
 
@@ -218,5 +219,93 @@ func TestAHotRestartWithTheHistoryInItsRingShowsNothingTwice(t *testing.T) {
 	}
 	if twice > 0 || sb > 5000 {
 		t.Fatalf("%d lines show twice after the restart (scrollback %d lines for 5000)", twice, sb)
+	}
+}
+
+// historySeam: the ring's replay, however it begins, joins the history it put
+// back with nothing lost and nothing twice; and repetitive history costs no
+// more than any other (it ran before the PTY pump, on every restart).
+func TestTheHistorySeamLosesNothingAndRepeatsNothing(t *testing.T) {
+	h := make([]string, 100)
+	for i := range h {
+		h[i] = fmt.Sprintf("history line %03d", i)
+	}
+	tail := h[50:]
+	withDebris := func(debris ...string) []string { return append(append([]string(nil), debris...), tail...) }
+	cases := []struct {
+		name  string
+		again []string
+		want  int
+	}{
+		{"the ring draws the tail exactly", withDebris(), 50},
+		{"a blank line first", withDebris(""), 50},
+		{"five lines of frame debris first", withDebris("\x1b[2m| live row 3", "* Thinking… (4.0s)", "| live row 4", "| live row 5", "> "), 50},
+		{"cut in the middle of a line", withDebris("ne 049"), 50},
+		{"nothing of the history", []string{"something else", "entirely", "on the screen", "now"}, 100},
+	}
+	for _, c := range cases {
+		got := historySeam(h, c.again)
+		if got != c.want {
+			t.Errorf("%s: seam %d, want %d", c.name, got, c.want)
+			continue
+		}
+		// What a viewer then scrolls through: the history up to the seam, then
+		// what the replay draws.
+		out := append(append([]string(nil), h[:got]...), c.again...)
+		seen := map[string]int{}
+		for _, l := range out {
+			seen[l]++
+		}
+		for _, l := range h {
+			if seen[l] != 1 {
+				t.Errorf("%s: %q shows %d times", c.name, l, seen[l])
+			}
+		}
+	}
+
+	same := make([]string, 10000)
+	for i := range same {
+		same[i] = "the same line, ten thousand times"
+	}
+	start := time.Now()
+	got := historySeam(same, same[:2000])
+	if el := time.Since(start); el > 250*time.Millisecond {
+		t.Errorf("10000 identical lines: %v (it runs before the PTY pump)", el)
+	}
+	if got != 8000 {
+		t.Errorf("10000 identical lines: seam %d, want 8000", got)
+	}
+}
+
+// The rendered history a dump carries is kept between dumps only while the
+// scrollback is unchanged — including at its cap, where its length stays the
+// same as lines are pushed through it.
+func TestTheDumpsRenderedHistoryIsKeptOnlyWhileUnchanged(t *testing.T) {
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := handoverAgent(t, box)
+	a.scrollbackLines = 50
+	a.screen.Scrollback().SetMaxLines(50)
+	for i := 1; i <= 200; i++ {
+		a.record([]byte(fmt.Sprintf("line %d\r\n", i)))
+	}
+	a.screenMu.Lock()
+	first := a.renderedHistory()
+	again := a.renderedHistory()
+	a.screenMu.Unlock()
+	if len(first) != 50 || &first[0] != &again[0] {
+		t.Fatalf("unchanged: %d lines, kept=%v", len(first), &first[0] == &again[0])
+	}
+	a.record([]byte("line 201\r\n")) // at the cap: one in, one out, the same length
+	a.screenMu.Lock()
+	after := a.renderedHistory()
+	a.screenMu.Unlock()
+	if s, _ := distinctLines(strings.Join(after, "\n")); s != 50 {
+		t.Fatalf("after one more line at the cap: %d distinct lines", s)
+	}
+	plain := func(ls []string, i int) string { return strings.TrimSpace(stripANSI(ls[i])) }
+	if plain(first, 0) != "line 122" || plain(first, 49) != "line 171" || plain(after, 0) != "line 123" || plain(after, 49) != "line 172" {
+		t.Fatalf("at the cap the history must move by the line pushed: before %q…%q, after %q…%q",
+			plain(first, 0), plain(first, 49), plain(after, 0), plain(after, 49))
 	}
 }
