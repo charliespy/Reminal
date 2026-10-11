@@ -263,14 +263,26 @@ func (a *Agent) restoreResumedScrollback() {
 		// against the history's tail, and the history goes in up to there.
 		scratch := vt.NewEmulator(max(d.BaseCols, 1), max(d.BaseRows, 1))
 		scratch.Scrollback().SetMaxLines(len(d.History) + 1000)
-		go io.Copy(io.Discard, scratch)
+		// Its answers to what the replay asks of it (a cursor report, say)
+		// are written to a pipe that blocks until read: drained while it
+		// replays.
+		drained := make(chan struct{})
+		go func() {
+			_, _ = io.Copy(io.Discard, scratch)
+			close(drained)
+		}()
 		replayDump(scratch, d)
 		again := append(renderScrollback(scratch, 0), renderedScreenRows(scratch)...)
-		// Not closed: Close races the drain's Read (vt). Its memory goes
-		// instead; its drain idles out the process, one per restart.
-		_, _ = scratch.Write([]byte("\x1bc"))
-		scratch.ClearScrollback()
-		scratch.Resize(1, 1)
+		// Then let go of it whole: its pipe closed, the drain reads its end
+		// and returns, and nothing holds the emulator — its scrollback, as
+		// much as the history, goes with it. Not scratch.Close: that sets a
+		// field the drain's Read checks unguarded (a race). Nor its
+		// ClearScrollback: vt keeps the cleared lines reachable, so that
+		// freed nothing and every restored process kept them.
+		if pw, ok := scratch.InputPipe().(io.Closer); ok {
+			_ = pw.Close()
+			<-drained
+		}
 		restoreHistory(a.screen, d.History[:historySeam(d.History, again)], d.HistoryCols)
 		a.noteScrollbackLen()
 	}
