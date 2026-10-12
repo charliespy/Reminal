@@ -267,6 +267,10 @@ type Agent struct {
 	// attnFGAt is when attnFG last changed: a harness that has only just
 	// started is drawing itself, and keys typed into it then are lost.
 	attnFGAt time.Time
+	// agentGoneAt is when the attention probe saw an agent reminal can
+	// resume leave the foreground (guarded by metaMu): what a restore
+	// record's save judges a person's quit keys against (typedToQuit).
+	agentGoneAt time.Time
 	// fgFallback is the foreground found among the shell's children, where
 	// the console cannot say (Windows), as of fgFallbackAt.
 	fgFallback   string

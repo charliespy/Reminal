@@ -386,6 +386,11 @@ func (a *Agent) noteShells(n int) {
 func (a *Agent) noteForeground(fg string, pgrp int) {
 	a.metaMu.Lock()
 	changed := fg != a.attnFG
+	if _, was := resumers[a.attnFG]; changed && was {
+		if _, still := resumers[fg]; !still {
+			a.agentGoneAt = time.Now() // see typedToQuit
+		}
+	}
 	a.attnFG = fg
 	if changed {
 		a.attnFGAt = time.Now()

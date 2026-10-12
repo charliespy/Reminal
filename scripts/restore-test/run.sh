@@ -9,6 +9,7 @@
 #
 #   scripts/restore-test/run.sh          # build, then run check.sh
 #   scripts/restore-test/run.sh shared   # build, then run check-shared.sh
+#   scripts/restore-test/run.sh shutdown [MODE]   # build, then run check-shutdown.sh
 #   scripts/restore-test/run.sh down     # remove it all
 set -e
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -42,4 +43,5 @@ docker run -d --name reminal-restore-box --init --network "$NET" -v reminal-rest
     -e REMINAL_RELAY=ws://reminal-restore-relay:8080/ws -e REMINAL_WEB=http://reminal-restore-relay:8080 \
     "$IMG" >/dev/null
 if [ "$1" = shared ]; then exec "$DIR/check-shared.sh"; fi
+if [ "$1" = shutdown ]; then exec "$DIR/check-shutdown.sh" "$2"; fi
 exec "$DIR/check.sh"

@@ -92,14 +92,10 @@ func (a *Agent) saveRestore() {
 	if !a.agentLastSeen.IsZero() {
 		sinceAgent = now.Sub(a.agentLastSeen)
 	}
-	// A person typing since the agent was last seen running — or, never
-	// seen in this run, since the session started: what says it was quit.
-	since := a.agentLastSeen
-	if since.IsZero() {
-		since = a.startedAt
-	}
+	// A person typing the agent's quit: what says it was quit, and not
+	// stopped by something else.
 	a.metaMu.Lock()
-	typed := a.lastInput.After(since)
+	typed := typedToQuit(a.lastInput, a.agentLastSeen, a.agentGoneAt, a.startedAt)
 	a.metaMu.Unlock()
 	if r.Fg == "" && holdPreviousAgent(a.restoring, a.restoreAgentSeen, atPrompt, typed, time.Since(a.startedAt), sinceAgent) {
 		if prev, err := session.ReadRestore(a.sessionID); err == nil {
@@ -162,6 +158,32 @@ func holdPreviousAgent(restoring, agentSeen, atPrompt, typed bool, since, sinceA
 	}
 	return restoring && !agentSeen && since < restoreSettle
 }
+
+// typedToQuit says a person typed the agent's quit: keys from just before it
+// left (quitKeysBefore) or anything after. The keys that quit it — /exit and
+// Return, a last ^C or ^D — come a moment before it goes, and a save can land
+// between them and its exit, still seeing it running: judged against that
+// sighting alone, the quit read as nobody typing and the record kept the
+// agent for good. gone is when the attention probe saw it leave (to within
+// a fraction of a second); without that, its last sighting stands in. Never
+// seen in this run: anything typed since the session started.
+func typedToQuit(input, seen, gone, started time.Time) bool {
+	if input.IsZero() {
+		return false
+	}
+	ref := seen
+	if gone.After(seen) {
+		ref = gone
+	}
+	if ref.IsZero() {
+		return input.After(started)
+	}
+	return input.After(ref.Add(-quitKeysBefore))
+}
+
+// quitKeysBefore is how long before an agent leaves the keys that quit it
+// may come.
+const quitKeysBefore = 3 * time.Second
 
 // agentGoneGrace is how long a prompt goes on naming the agent that just
 // left it (see holdPreviousAgent): two saves.

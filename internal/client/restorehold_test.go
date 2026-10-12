@@ -77,3 +77,42 @@ func TestHoldPreviousAgent(t *testing.T) {
 		})
 	}
 }
+
+// Whether a person typed the agent's quit (typedToQuit). The keys that quit
+// it — /exit and Return, a last ^C or ^D — come a moment before it leaves,
+// and a save can land between them and its exit: still seen running then,
+// the keys were before that sighting, and the record kept the agent for good.
+// So keys from just before it left count, as does anything typed after.
+func TestTypedToQuit(t *testing.T) {
+	base := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	at := func(s float64) time.Time { return base.Add(time.Duration(s * float64(time.Second))) }
+	never := time.Time{}
+	cases := []struct {
+		name                       string
+		input, seen, gone, started time.Time
+		want                       bool
+	}{
+		// The race: /exit typed at 0, a save at 0.4 still saw claude, it left at 0.9.
+		{"quit keys, then a save still saw it, then it left", at(0), at(0.4), at(0.9), at(-600), true},
+		// …and with no probe to say when it left: keys just before the last sighting.
+		{"quit keys just before the last sighting, no probe", at(0), at(0.4), never, at(-600), true},
+		// A person typing at the shell after it left.
+		{"typed after it left", at(20), at(0), at(5), at(-600), true},
+		// Nobody typed near its leaving: a machine going down stopped it.
+		{"last keys a minute before it left", at(-60), at(0), at(5), at(-600), false},
+		{"nobody typed at all", never, at(0), at(5), at(-600), false},
+		// A departure from an earlier run of it, seen running again since:
+		// the keys are judged against the sighting, not that old departure.
+		{"an old departure, seen running since", at(-30), at(0), at(-29), at(-600), false},
+		// Never seen in this run: anything typed since the session started.
+		{"never seen, typed since start", at(10), never, never, at(0), true},
+		{"never seen, nobody typed", never, never, never, at(0), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := typedToQuit(c.input, c.seen, c.gone, c.started); got != c.want {
+				t.Fatalf("typedToQuit(input=%v, seen=%v, gone=%v, started=%v) = %v, want %v", c.input, c.seen, c.gone, c.started, got, c.want)
+			}
+		})
+	}
+}

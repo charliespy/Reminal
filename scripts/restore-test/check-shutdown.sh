@@ -60,7 +60,7 @@ docker restart $BOX >/dev/null
 ok "shut down ($MODE), then rebooted"
 # Restored one after another, each agent typed once its shell is quiet.
 for i in $(seq 1 60); do
-    n=$(box "grep -c -- '--resume' /root/.fake-claude/argv.log 2>/dev/null || echo 0")
+    n=$(box "grep -c -- '--resume' /root/.fake-claude/argv.log 2>/dev/null"); n=${n:-0}
     [ "$n" -ge "$N" ] && break
     sleep 1
 done
