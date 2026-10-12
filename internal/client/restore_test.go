@@ -251,3 +251,22 @@ func TestProgramFromWindowsNpmArgs(t *testing.T) {
 		t.Errorf("a script in a folder called pi was taken for pi")
 	}
 }
+
+// A record that names an agent never comes back silent: when nothing can be
+// started, a line says why. A record naming none says nothing.
+func TestResumePlanSaysWhyNothingIsStarted(t *testing.T) {
+	useHelp(t)
+	for _, r := range []session.Restore{
+		{ID: "P", Fg: "claude", FgArgs: []string{"claude", "-p", "summarize the repo"}, Cwd: "/w"}, // a one-shot run
+		{ID: "U", Fg: "someagent", FgArgs: []string{"someagent"}, Cwd: "/w"},                       // one reminal cannot resume
+	} {
+		argv, note := resumePlan(r, []session.Restore{r})
+		if argv != nil || note == "" || !strings.Contains(note, r.Fg) {
+			t.Errorf("%s (%s): got %q %q, want nothing started and a line naming %s and why", r.ID, r.FgArgs, argv, note, r.Fg)
+		}
+	}
+	none := session.Restore{ID: "N", Cwd: "/w"}
+	if argv, note := resumePlan(none, []session.Restore{none}); argv != nil || note != "" {
+		t.Errorf("no agent: got %q %q, want nothing at all", argv, note)
+	}
+}

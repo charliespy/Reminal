@@ -10,7 +10,7 @@
 #   C     claude quit a moment before the machine went down: still resumed
 #   D, E  E was started with --continue and picked up D's conversation: it is
 #         resumed once, in D, and E opens the list with a line saying why
-BOX=reminal-restore-box
+BOX=${BOX:-reminal-restore-box}
 fails=0
 ok()   { echo "ok   $*"; }
 fail() { echo "FAIL $*"; fails=$((fails+1)); }
@@ -18,7 +18,7 @@ box()  { docker exec $BOX sh -c "$1"; }
 send() { box "mcp.sh send $1 '$2' >/dev/null"; }
 screen() { box "mcp.sh read $1"; }
 newsession() { box "mkdir -p $2 && cd $2 && reminal new $1 2>&1"; }
-idof()  { echo "$1" | sed -n 's/.*background session · v[^ ]* · \([A-Z0-9]*\).*/\1/p'; }
+idof()  { echo "$1" | sed -n 's/^ *Session: *\([A-Z0-9]*\).*/\1/p' | head -1; }
 convof() { screen $1 | sed -nE 's/.*fake-claude: (new|resumed) conversation (conv-[0-9a-f]+).*/\2/p' | tail -1; }
 W=/root/shared
 
