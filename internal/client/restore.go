@@ -92,7 +92,16 @@ func (a *Agent) saveRestore() {
 	if !a.agentLastSeen.IsZero() {
 		sinceAgent = now.Sub(a.agentLastSeen)
 	}
-	if r.Fg == "" && holdPreviousAgent(a.restoring, a.restoreAgentSeen, atPrompt, time.Since(a.startedAt), sinceAgent) {
+	// A person typing since the agent was last seen running — or, never
+	// seen in this run, since the session started: what says it was quit.
+	since := a.agentLastSeen
+	if since.IsZero() {
+		since = a.startedAt
+	}
+	a.metaMu.Lock()
+	typed := a.lastInput.After(since)
+	a.metaMu.Unlock()
+	if r.Fg == "" && holdPreviousAgent(a.restoring, a.restoreAgentSeen, atPrompt, typed, time.Since(a.startedAt), sinceAgent) {
 		if prev, err := session.ReadRestore(a.sessionID); err == nil {
 			r.Fg, r.FgArgs, r.Conv = prev.Fg, prev.FgArgs, prev.Conv
 		}
@@ -137,10 +146,18 @@ func (a *Agent) saveRestore() {
 // A prompt within agentGoneGrace of the agent last being seen is held too.
 // As a machine shuts down, the agent often quits a moment before reminal
 // does; a save in that moment saw only the prompt, and the record forgot the
-// agent the restart was meant to bring back. A person who really quit it is
-// recorded as such at the first save after the grace.
-func holdPreviousAgent(restoring, agentSeen, atPrompt bool, since, sinceAgent time.Duration) bool {
-	if !atPrompt || sinceAgent < agentGoneGrace {
+// agent the restart was meant to bring back.
+//
+// And past that, a prompt with nobody having typed since the agent was last
+// seen (typed false) is held for as long as that lasts: an agent is quit by a
+// person — /exit, ^C, ^D, then the shell — and one that left with nobody
+// typing was stopped by something else, most often a machine going down,
+// which may take minutes to reach reminal after it reached the agent. Timed
+// alone, the grace ran out first: a restart brought 18 sessions back with a
+// bare prompt, their records having forgotten claude. A person
+// who quits it is recorded as such at the first save after the grace.
+func holdPreviousAgent(restoring, agentSeen, atPrompt, typed bool, since, sinceAgent time.Duration) bool {
+	if !atPrompt || sinceAgent < agentGoneGrace || !typed {
 		return true
 	}
 	return restoring && !agentSeen && since < restoreSettle
@@ -361,7 +378,16 @@ func resumeArgv(r session.Restore) []string {
 // person picks — or, for an agent with none, it is not started and the
 // line says how to find the conversation.
 func resumePlan(r session.Restore, peers []session.Restore) (argv []string, note string) {
-	rs := resumers[r.Fg]
+	if r.Fg == "" {
+		return nil, ""
+	}
+	rs, known := resumers[r.Fg]
+	if !known {
+		return nil, r.Fg + " was running here; reminal does not know how to resume it — start it again by hand"
+	}
+	if _, ok := resumeFlags(r); !ok {
+		return nil, r.Fg + " was running a one-off command here, not a conversation — nothing to resume"
+	}
 	taken := r.Conv != "" && !ownsConv(r, peers)
 	if taken {
 		// Another session has this conversation, and had it first: resuming
@@ -370,7 +396,10 @@ func resumePlan(r session.Restore, peers []session.Restore) (argv []string, note
 		r.Conv = ""
 	}
 	argv = resumeArgv(r)
-	if argv == nil || (r.Conv != "" && rs.byID != nil) || (!taken && !sharesFolder(r, peers)) {
+	if argv == nil {
+		return nil, r.Fg + " was running here; reminal cannot resume it — start it again by hand"
+	}
+	if (r.Conv != "" && rs.byID != nil) || (!taken && !sharesFolder(r, peers)) {
 		return argv, ""
 	}
 	flags, _ := resumeFlags(r)
@@ -627,7 +656,12 @@ func (a *Agent) restoreStart() {
 		}
 	}
 	body, tail, err := PrepareInjectKeysSplit(run, true)
-	if err != nil || a.injectKeys(body) != nil {
+	if err == nil {
+		err = a.injectKeys(body)
+	}
+	if err != nil {
+		// Never silent: the person is told what would have resumed it.
+		a.record([]byte("\x1b[2mreminal could not start it again (" + err.Error() + "); to resume: " + run + "\x1b[0m\r\n"))
 		return
 	}
 	if tail != nil {

@@ -6,7 +6,7 @@
 # reboot the daemon brings a session back as itself — same id and PIN, its
 # scrollback, a shell where it was — with its agent resumed on the SAME
 # conversation; and a session ended on purpose stays ended.
-BOX=reminal-restore-box RELAY=reminal-restore-relay
+BOX=${BOX:-reminal-restore-box} RELAY=${RELAY:-reminal-restore-relay}
 fails=0
 ok()   { echo "ok   $*"; }
 fail() { echo "FAIL $*"; fails=$((fails+1)); }
@@ -14,7 +14,7 @@ box()  { docker exec $BOX sh -c "$1"; }
 send() { box "mcp.sh send $1 '$2' >/dev/null"; }
 screen() { box "mcp.sh read $1"; }
 newsession() { box "mkdir -p $2 && cd $2 && reminal new $1 2>&1"; }
-idof()  { echo "$1" | sed -n 's/.*background session · v[^ ]* · \([A-Z0-9]*\).*/\1/p'; }
+idof()  { echo "$1" | sed -n 's/^ *Session: *\([A-Z0-9]*\).*/\1/p' | head -1; }
 pinof() { echo "$1" | sed -n 's/.*PIN: *\([0-9]*\).*/\1/p'; }
 
 out=$(newsession work /root/project); ID=$(idof "$out"); PIN=$(pinof "$out")
