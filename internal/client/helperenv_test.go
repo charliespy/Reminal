@@ -10,14 +10,14 @@ import (
 	"testing"
 )
 
-// The capture helper gets our environment minus the dynamic loader's
-// variables and reminal's own helper overrides; the lid dimmer's test
-// stand-in only from a build without a version.
+// A bundled helper (reminal-capture, reminal-overlay) gets our environment
+// minus the dynamic loader's variables and reminal's own helper overrides; the
+// lid dimmer's test stand-in only from a build without a version.
 func TestFilterHelperEnv(t *testing.T) {
 	env := []string{
 		"HOME=/h", "PATH=/bin", "REMINAL_RELAY=ws://x",
 		"DYLD_INSERT_LIBRARIES=/tmp/x.dylib", "DYLD_LIBRARY_PATH=/tmp", "LD_PRELOAD=/tmp/x.so",
-		"REMINAL_CAPTURE_HELPER=/tmp/fake", "REMINAL_LIDDIM_FAKE=/tmp/f",
+		"REMINAL_CAPTURE_HELPER=/tmp/fake", "REMINAL_OVERLAY_BIN=/tmp/fake-overlay", "REMINAL_LIDDIM_FAKE=/tmp/f",
 		"MY_DYLD_THING=kept", "LDFLAGS=-O2",
 	}
 	for _, tc := range []struct {
