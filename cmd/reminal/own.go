@@ -14,6 +14,7 @@ import (
 	"golang.org/x/term"
 
 	"reminal/internal/client"
+	"reminal/internal/session"
 )
 
 // runOwn prints this device's public owner id and the exact command to paste on
@@ -205,6 +206,24 @@ func parseAddOwnerArgs(args []string) (id, label string, yes bool) {
 	return id, label, yes
 }
 
+// printRekeyed says which sessions a revoke restarted, and their new PINs:
+// the revoked device may have learned the old ones (an owner's Share menu
+// shows them), so they change, as with repin.
+func printRekeyed(rs []session.Active) {
+	if len(rs) == 0 {
+		return
+	}
+	fmt.Printf("  %s Signed out of %d open session(s) here. Each has a new PIN; the old ones and links made with them no longer work:\n", cGreen("✓"), len(rs))
+	for i := range rs {
+		pin, err := newPINOf(&rs[i])
+		if err != nil {
+			fmt.Printf("    %-24s %v\n", repinLabel(&rs[i]), err)
+			continue
+		}
+		fmt.Printf("    %-24s new PIN %s\n", repinLabel(&rs[i]), pin)
+	}
+}
+
 // runOwners lists the machine's owner devices, or renames/revokes one.
 // Usage: reminal owners [rename <id|label> <new-label> | revoke <id|label>]
 func runOwners(args []string) error {
@@ -255,7 +274,7 @@ func runOwners(args []string) error {
 				if err := sudoReexec(); err != nil {
 					return err
 				}
-				client.RekeySessions()
+				printRekeyed(client.RekeySessions())
 				return nil
 			}
 			if err != nil {
@@ -279,9 +298,7 @@ func runOwners(args []string) error {
 			// Signed out of the sessions open on this machine straight away:
 			// each restarts in place under a new key (programs keep running,
 			// PIN viewers and the remaining owners reconnect on their own).
-			if n := client.RekeySessions(); n > 0 {
-				fmt.Printf("  %s Signed out of %d open session(s) here.\n", cGreen("✓"), n)
-			}
+			printRekeyed(client.RekeySessions())
 			// The background daemon stays installed — it is the machine's permanent
 			// presence + stats layer, not an ownership-gated feature (see above).
 			// But bounce it so it re-keys the machine channel NOW: a revoked device

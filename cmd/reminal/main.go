@@ -1592,6 +1592,11 @@ func repinOne(a *session.Active) (string, error) {
 		}
 		return "", err
 	}
+	return newPINOf(a)
+}
+
+// newPINOf waits for session a, restarting with a new PIN, to come back with it.
+func newPINOf(a *session.Active) (string, error) {
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(200 * time.Millisecond)

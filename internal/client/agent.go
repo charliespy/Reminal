@@ -3309,7 +3309,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// `top` on macOS), which must not stall the reader that also carries
 			// viewer keystrokes. writeMsg is mutex-guarded, so concurrent replies
 			// are safe.
-			go a.handleHostInfo(conn)
+			go a.handleHostInfo(conn, msg.Data)
 		case protocol.TypeNewSession:
 			go a.handleNewSession(conn, msg.Data)
 		case protocol.TypeChangelog:

@@ -224,6 +224,11 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 		// one, and the revoked device's fresh handshake is refused. Only if
 		// the owner set is not what this process began with: a burst of
 		// revokes already covered by one restart does not restart again.
+		//
+		// With a new PIN, as repin: a device that owned this machine could
+		// have learned the PIN as it was (an owner's Share menu shows it),
+		// and a key change alone would let it back in with that. Sent only
+		// on a revoke, so any change since this process began is one.
 		if currentOwnersFingerprint() == a.ownersFP {
 			_, _ = fmt.Fprintln(conn, "ok unchanged")
 			return
@@ -232,6 +237,19 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			_, _ = fmt.Fprintln(conn, "ok restarting")
 			return
 		}
+		pin, err := session.NewPIN(6)
+		if err != nil {
+			a.rekeying.Store(false)
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		hash, err := session.HashPIN(pin)
+		if err != nil {
+			a.rekeying.Store(false)
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		a.nextPIN, a.nextPinHash = pin, hash
 		fallthrough
 	case line == "restart":
 		// Hot-restart: ack the CLI first (so it doesn't see the WS

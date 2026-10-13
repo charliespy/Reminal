@@ -196,22 +196,24 @@ func currentOwnersFingerprint() string {
 // same programs, same PIN — under a new session key, so a revoked device's
 // open viewer is cut off and its fresh handshake refused; one it did not
 // change (a burst of revokes already covered by its restart) does nothing.
-// Best-effort, a short cap per session; returns how many were told.
-func RekeySessions() int {
+// Best-effort, a short cap per session; returns the sessions that restart,
+// each with a new PIN, as they were before (their old PIN, to tell the new
+// one from).
+func RekeySessions() []session.Active {
 	recs, err := session.ReadAllActive()
 	if err != nil {
-		return 0
+		return nil
 	}
-	n := 0
+	var out []session.Active
 	for _, r := range recs {
 		if r.PID <= 0 {
 			continue
 		}
-		if _, err := sendControlToDeadline(r.PID, "rekey", 2*time.Second); err == nil {
-			n++
+		if reply, err := sendControlToDeadline(r.PID, "rekey", 2*time.Second); err == nil && reply == "" {
+			out = append(out, r) // a plain "ok": restarting with a new PIN
 		}
 	}
-	return n
+	return out
 }
 
 // tokenBucket is a leaky-bucket limiter: burst up to max, refilling perSec.

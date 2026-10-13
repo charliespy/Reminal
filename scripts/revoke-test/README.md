@@ -13,8 +13,14 @@ machine):
 3. `mcr.microsoft.com/playwright` in that container's network, the viewer at
    `http://localhost:8080`: `node revoke.js joins.txt`.
 
-Every field must come out as: `revokedLiveCut` true and `revokedState.key`
-false (the revoked device's open viewer has no key), `pinViewerReconnected` 1,
-`enrolledOwnerBack` true, `revokedFreshDial.key` false, `twoRevokesRestarts` 1
-with `twoCut` both true, `selfRevokeOK` true, `selfRevokedState.key` false,
-`selfRevokeRestarts` 1 — and the ticker alive with its count still rising.
+The loop also writes the session's PIN (`reminal info`) to `/p/pins` each
+round. Every field must come out as:
+- `ownerLearnedPIN` true: a device's Share menu could fetch the PIN;
+- `ownerStoredNoPIN` true: a device that only ever connected as an owner keeps no PIN;
+- `revokedLiveCut` true and `revokedState.key` false: the revoked device's open viewer has no key;
+- `oldPinRefused` true, `newPinPrinted` true, `newPinWorks` true: the PIN changed with the key;
+- `enrolledOwnerBack` true: an owner still enrolled reconnects with no PIN;
+- `revokedFreshDial.key` false, and `revokedPinDial` "PIN mismatch": the revoked device gets in neither as an owner nor with the PIN it learned;
+- `twoRevokesRestarts` 1, with `twoCut` both true: two devices in one command, one restart;
+- `selfRevokeOK` true, `selfRevokedState.key` false, `selfRevokeRestarts` 1;
+- and the ticker alive, its count still rising.
