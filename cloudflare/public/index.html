@@ -5451,6 +5451,7 @@
         data: u8ToBase64(cp.mine),
         frames: 1,
       }));
+      sendEarlyResume(sock, exID);
       dbg('▶ pake_init sent ex=' + exID.slice(0, 6) + ' agentLive=' + agentLive + ' (outstanding=' + kexAttempts.size + ')');
       // Arm a watchdog: if completeKex doesn't clear it within
       // KEX_TIMEOUT_MS, all outstanding replies are presumed lost.
@@ -5739,6 +5740,7 @@
           device_sig: u8ToBase64(sig),
           frames: 1,
         }));
+        sendEarlyResume(sock, exID);
         if (ownerTimer) clearTimeout(ownerTimer);
         ownerTimer = setTimeout(() => {
           ownerTimer = 0;
@@ -7407,7 +7409,13 @@
         if (upgradeState && upgradeState.stage === 'restart') upgradeState.reconnected = true;
         term.write('\r\n\x1b[2m[reminal] Reconnected to ' + sessionId + ' — press Enter to refresh the prompt.\x1b[0m\r\n');
       }
-      sendResume();
+      // Sent already, right behind the handshake whose answer brought the
+      // key (sendEarlyResume). Behind any other — one answered pake_busy, an
+      // owner attempt that fell back to the PIN — its screen came before
+      // there was a key to open it, and is asked for again.
+      const early = earlyResume;
+      earlyResume = null;
+      if (!(early && early.sock === ws && early.exID === keyExID)) sendResume();
       publishSize();
       term.focus();
       if (winStreamsNeedRestart) {
@@ -8251,6 +8259,24 @@
       if (window.visualViewport) visualViewport.addEventListener('resize', position);
     })();
 
+    // The resume goes right behind the handshake instead of after its answer:
+    // the agent answers a handshake before it reads the next frame, so its
+    // answer — the session key — is always ahead of the screen the resume
+    // asks for, and the screen comes a round trip sooner. A resume carries no
+    // secret (it is unsealed, as ever: a seq and this viewer's id), and the
+    // frames that come back are sealed under the key the answer brings; they
+    // wait for it (keyComing), never the other way round.
+    // One per connection, with the first attempt: { sock, exID }.
+    let earlyResume = null;
+    let keyExID = ''; // the attempt whose answer gave this connection its key
+    function sendEarlyResume(sock, exID) {
+      if (sock !== ws || !ownsTerminal || (earlyResume && earlyResume.sock === sock)) return;
+      sendResume();
+      earlyResume = { sock, exID };
+    }
+    // A handshake answer being worked on (the key derived, unwrapped): the
+    // sealed frames behind it on the same connection wait for it.
+    let keyComing = null; // { sock, done }
     function sendResume() {
       // Resume rewinds the agent's output cursor, and the agent holds ONE
       // socket to the relay which fans out — so a pane tab asking to resume
@@ -8759,6 +8785,12 @@
 
     async function handleMessage(msg) {
       const msgSock = ws; // the connection this message arrived on
+      // Behind a handshake answer still being opened: wait for its key,
+      // in arrival order (the waits resume in the order they began).
+      if (!cryptoKey && keyComing && keyComing.sock === msgSock && (msg.type === 'sealed' || sealable(msg.type))) {
+        await keyComing.done;
+        if (ws !== msgSock) return;
+      }
       if (msg.type === 'sealed') {
         if (!sealState) {
           // The agent seals, but this connection's handshake answer said it
@@ -8817,7 +8849,10 @@
           break;
         case 'own_resp':
           try {
-            await completeOwner(msg);
+            const done = completeOwner(msg);
+            keyComing = { sock: msgSock, done: done.catch(() => {}) };
+            await done;
+            if (cryptoKey && ws === msgSock) keyExID = String(msg.ex_id || '');
           } catch (e) {
             if (ws !== msgSock) break; // an older connection's answer; this one is unaffected
             if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
@@ -8844,7 +8879,10 @@
         }
         case 'pake_resp':
           try {
-            await completeKex(msg);
+            const done = completeKex(msg);
+            keyComing = { sock: msgSock, done: done.catch(() => {}) };
+            await done;
+            if (cryptoKey && ws === msgSock) keyExID = String(msg.ex_id || '');
           } catch (e) {
             // AES-GCM tag mismatch lands here. Could be a typo'd PIN
             // (saved creds went stale, recents row points at the
@@ -8909,7 +8947,8 @@
               // those attempts are dropped and only a new one counts.
               cryptoKey = null;
               sealState = null;
-              if (msg.type === 'agent_online') { kexAttempts.clear(); ownerAttempts.clear(); kexExID = ''; ownerCheckingSock = null; }
+              // The agent away: the resume sent with the handshake went with it.
+              if (msg.type === 'agent_online') { kexAttempts.clear(); ownerAttempts.clear(); kexExID = ''; ownerCheckingSock = null; earlyResume = null; }
               retryWebRTC('agent reattach', 0); // renegotiate P2P with the (possibly new) agent
               // Only when the kex_init auth_ok already sent cannot serve.
               // "connected" is the relay stating the agent was there as we
