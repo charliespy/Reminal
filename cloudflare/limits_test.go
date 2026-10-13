@@ -56,8 +56,8 @@ export async function resolve(spec, ctx, next) {
 }
 
 // Before any session's or rendezvous's object is touched, a caller's sockets
-// (/ws, /rv) and a forwarded app's requests (/p, its own host) are counted
-// per caller, by the rate limiter: past the count, 429, and no object asked.
+// (/ws, /rv) are counted per caller, by the rate limiter: past the count,
+// 429, and no object asked.
 func TestTheRelayCountsACallerBeforeItTouchesAnyObject(t *testing.T) {
 	got := runWorkerTS(t, `
 import worker from "SRC/index.ts";
@@ -74,8 +74,6 @@ const req = (path, host = "live.reminal.app") => new Request("https://" + host +
 for (const [name, path, host, scope] of [
   ["ws", "/ws/ABC123/viewer", undefined, "sockets:"],
   ["rv", "/rv/CODE12/source", undefined, "sockets:"],
-  ["p", "/p/ABC123/", undefined, "tunnel:"],
-  ["port", "/", "port-abc123.reminal.app", "tunnel:"],
 ]) {
   const no = env([scope]);
   const r = await worker.fetch(req(path, host), no.e);
@@ -90,8 +88,59 @@ console.log(out.join("\n"));
 	for _, want := range []string{
 		"ws denied 429 touched 0", "ws allowed asked lim:sockets:2001:db8:1:2::/64 touched 1",
 		"rv denied 429 touched 0", "rv allowed asked lim:sockets:2001:db8:1:2::/64 touched 1",
-		"p denied 429 touched 0", "p allowed asked lim:tunnel:2001:db8:1:2::/64 touched 1",
-		"port denied 429 touched 0", "port allowed asked lim:tunnel:2001:db8:1:2::/64 touched 1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %q in:\n%s", want, got)
+		}
+	}
+}
+
+// A forwarded app's requests (/p, its own host) are counted in the isolate,
+// each, and by the rate limiter once a batch of twenty: a page of fifty
+// assets asks it three times, not fifty. Its no stands for the whole batch,
+// with no object touched; and an isolate alone (no limiter) stops a caller
+// at 1200 a minute.
+func TestAForwardedAppsRequestsAskTheLimiterOnceABatch(t *testing.T) {
+	got := runWorkerTS(t, `
+import worker from "SRC/index.ts";
+const out = [];
+function env(deny, bound = true) {
+  const seen = [];
+  const e = {
+    SESSION: { idFromName: (n) => n, get: (n) => ({ fetch: async () => { seen.push("session"); return new Response("ok"); } }) },
+  };
+  if (bound) e.LIMITER = { idFromName: (n) => n, get: (n) => ({ fetch: async () => { seen.push("lim:" + n); return new Response(JSON.stringify({ success: !deny })); } }) };
+  return { seen, e, n: (p) => seen.filter((s) => s.startsWith(p)).length };
+}
+const req = (ip, path, host = "live.reminal.app") => new Request("https://" + host + path, { headers: { host, "cf-connecting-ip": ip } });
+// a page and its assets, at once
+const page = env(false);
+const rs = await Promise.all(Array.from({ length: 50 }, (_, i) => worker.fetch(req("2001:db8:a::1", "/p/ABC123/a" + i), page.e)));
+out.push("page " + rs.filter((r) => r.status === 200).length + " ok, limiter asked " + page.n("lim:tunnel:") + ", sessions " + page.n("session"));
+// a batch refused: the first request and the 19 after it, no object touched, one ask
+const no = env(true);
+const st = [];
+for (let i = 0; i < 20; i++) st.push((await worker.fetch(req("2001:db8:b::1", "/p/ABC123/"), no.e)).status);
+out.push("refused " + st.filter((s) => s === 429).length + "/20, limiter asked " + no.n("lim:") + ", sessions " + no.n("session"));
+await worker.fetch(req("2001:db8:b::1", "/p/ABC123/"), no.e);
+out.push("next batch asks again: " + no.n("lim:"));
+// a forwarded port's own host, the same
+const port = env(true);
+const pr = await worker.fetch(req("2001:db8:c::1", "/", "port-abc123.reminal.app"), port.e);
+out.push("port " + pr.status + " asked " + port.n("lim:tunnel:") + " sessions " + port.n("session"));
+// no limiter bound: the isolate's own count, 1200 a minute
+const solo = env(false, false);
+let ok = 0, last = 0;
+for (let i = 0; i < 1201; i++) { last = (await worker.fetch(req("2001:db8:d::1", "/p/ABC123/"), solo.e)).status; if (last === 200) ok++; }
+out.push("unbound " + ok + " ok then " + last);
+console.log(out.join("\n"));
+`)
+	for _, want := range []string{
+		"page 50 ok, limiter asked 3, sessions 50",
+		"refused 20/20, limiter asked 1, sessions 0",
+		"next batch asks again: 2",
+		"port 429 asked 1 sessions 0",
+		"unbound 1200 ok then 429",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("want %q in:\n%s", want, got)

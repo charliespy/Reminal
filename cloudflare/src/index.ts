@@ -55,10 +55,39 @@ const TUNNEL_PER_MIN = 1200;
 const socketAsks = new Map<string, number[]>();
 const tunnelAsks = new Map<string, number[]>();
 
-async function callerWithin(env: Env, request: Request, scope: string, counts: Map<string, number[]>, perMin: number): Promise<boolean> {
-  const who = addressGroup(request.headers.get("cf-connecting-ip") ?? "");
-  const c = await allow(env, scope, who, perMin, 60);
-  return c === true || (c === null && inIsolate(counts, who, perMin, 60));
+function caller(request: Request): string {
+  return addressGroup(request.headers.get("cf-connecting-ip") ?? "");
+}
+
+async function socketsWithin(env: Env, request: Request): Promise<boolean> {
+  const who = caller(request);
+  const c = await allow(env, "sockets", who, SOCKETS_PER_MIN, 60);
+  return c === true || (c === null && inIsolate(socketAsks, who, SOCKETS_PER_MIN, 60));
+}
+
+// A forwarded app's requests are many (a page is its assets), so the limiter
+// is not asked for each: this isolate counts every one, and the limiter is
+// asked once for each TUNNEL_BATCH of a caller's requests here — counting
+// batches, TUNNEL_PER_MIN / TUNNEL_BATCH of them a minute — its answer
+// standing for the whole batch, those that come while it is asked included.
+// A batch lasts no longer than the minute it was counted in.
+const TUNNEL_BATCH = 20;
+const tunnelBatches = new Map<string, { left: number; at: number; ok: Promise<boolean> }>();
+
+async function tunnelWithin(env: Env, request: Request): Promise<boolean> {
+  const who = caller(request);
+  if (!inIsolate(tunnelAsks, who, TUNNEL_PER_MIN, 60)) return false;
+  const now = Date.now();
+  let b = tunnelBatches.get(who);
+  tunnelBatches.delete(who);
+  if (!b || b.left <= 0 || now - b.at >= 60_000) {
+    b = { left: TUNNEL_BATCH, at: now, ok: allow(env, "tunnel", who, TUNNEL_PER_MIN / TUNNEL_BATCH, 60).then((c) => c !== false) };
+  }
+  b.left--;
+  // Most recently asked last: past 5000 callers, the oldest half goes.
+  tunnelBatches.set(who, b);
+  if (tunnelBatches.size > 5000) for (const k of [...tunnelBatches.keys()].slice(0, 2500)) tunnelBatches.delete(k);
+  return b.ok;
 }
 
 function tooMany(): Response {
@@ -106,7 +135,7 @@ export default {
     const hostHeader = request.headers.get("host") || url.hostname;
     const hostSub = hostHeader.match(/^port-([a-z0-9]+)\./i);
     if (hostSub) {
-      if (!(await callerWithin(env, request, "tunnel", tunnelAsks, TUNNEL_PER_MIN))) return tooMany();
+      if (!(await tunnelWithin(env, request))) return tooMany();
       const sessionId = hostSub[1].toUpperCase();
       const id = env.SESSION.idFromName(sessionId);
       const stub = env.SESSION.get(id);
@@ -124,7 +153,7 @@ export default {
     // tunnel is for port-forward agents (registered by `reminal expose`).
     const wsMatch = url.pathname.match(/^\/ws\/([A-Z0-9]+)\/(agent|viewer|tunnel)$/i);
     if (wsMatch) {
-      if (!(await callerWithin(env, request, "sockets", socketAsks, SOCKETS_PER_MIN))) return tooMany();
+      if (!(await socketsWithin(env, request))) return tooMany();
       const sessionId = wsMatch[1].toUpperCase();
       const role = wsMatch[2].toLowerCase();
       const id = env.SESSION.idFromName(sessionId);
@@ -138,7 +167,7 @@ export default {
     // Routed to a per-code RendezvousRoom DO that blindly pairs the two.
     const rvMatch = url.pathname.match(/^\/rv\/([A-Z0-9]+)\/(source|paste)$/i);
     if (rvMatch) {
-      if (!(await callerWithin(env, request, "sockets", socketAsks, SOCKETS_PER_MIN))) return tooMany();
+      if (!(await socketsWithin(env, request))) return tooMany();
       const code = rvMatch[1].toUpperCase();
       const role = rvMatch[2].toLowerCase();
       const id = env.RENDEZVOUS.idFromName(code);
@@ -188,7 +217,7 @@ export default {
           headers: { Location: `${ownOrigin}${rest}${url.search}` },
         });
       }
-      if (!(await callerWithin(env, request, "tunnel", tunnelAsks, TUNNEL_PER_MIN))) return tooMany();
+      if (!(await tunnelWithin(env, request))) return tooMany();
       const id = env.SESSION.idFromName(sessionId);
       const stub = env.SESSION.get(id);
       const doUrl = new URL(request.url);
