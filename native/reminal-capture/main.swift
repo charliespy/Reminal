@@ -459,6 +459,8 @@ if args.count >= 2, args[1] == "liddim" {
         }
         try? FileManager.default.removeItem(atPath: statePath)
     }
+    // redims: -1 until this shut's first dim, then how many more it took.
+    var redims = -1
     func dim() {
         guard let now = brightness() else { return }
         if now > dark {
@@ -468,13 +470,23 @@ if args.count >= 2, args[1] == "liddim" {
             if saved() == nil { // none, or one that cannot be trusted
                 guard (try? String(now).write(toFile: statePath, atomically: true, encoding: .utf8)) != nil else { return }
             }
-            if setBrightness(0) { say("dimmed from \(now) (saved \(saved().map { String($0) } ?? "nothing"))") }
+            // Logged once a shut: auto-brightness can light the screen again
+            // every few seconds under the lid, and a line each time would be
+            // tens of thousands a night. The rest are counted, and said at open.
+            if setBrightness(0) {
+                if redims < 0 { say("dimmed from \(now) (saved \(saved().map { String($0) } ?? "nothing"))") }
+                redims += 1
+            }
         }
     }
     var wasShut: Bool?
     func check() {
         guard let shut = lidShut() else { return }
-        if shut != wasShut { say(shut ? "lid shut" : "lid open") }
+        if shut != wasShut {
+            say(shut ? "lid shut" : "lid open")
+            if !shut && redims > 0 { say("re-dimmed \(redims) times while shut") }
+            redims = -1
+        }
         wasShut = shut
         if shut { dim() } else { restore() }
     }

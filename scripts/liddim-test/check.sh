@@ -135,4 +135,16 @@ waitfor '[ -n "$(pgrep -f "capture-test liddim")" ]' 40; echo 1 > $F/lid; waitfo
 grep -q "liddim: .*dimmed from 0.6" $HOME/daemon.log && grep -q "liddim: .*restored 0.6" $HOME/daemon.log && pass "h: daemon log: $(grep 'liddim:' $HOME/daemon.log | tr '\n' '|')" || fail "h: daemon log has: $(grep -c . $HOME/daemon.log) lines, liddim: $(grep 'liddim' $HOME/daemon.log | head -3 | tr '\n' '|')"
 pkill -f "reminal-dev daemon"
 
+echo "== i: re-dims while shut are counted, not logged one by one"
+clean; rm -rf $F $ST; mkdir -p $F; echo 0.6 > $F/brightness; echo 1 > $F/lid; mkfifo /tmp/liddim-test/in.i 2>/dev/null
+(REMINAL_LIDDIM_FAKE=$F $B/reminal-capture-test liddim $ST < /tmp/liddim-test/in.i > /tmp/liddim-test/i.out 2>&1 &); exec 7>/tmp/liddim-test/in.i
+waitfor 'isf "$(cat $F/brightness)" 0' 10
+for n in 1 2 3; do echo 0.3 > $F/brightness; waitfor 'isf "$(cat $F/brightness)" 0' 10; done   # auto-brightness lighting it under the lid
+echo 0 > $F/lid; waitfor 'isf "$(cat $F/brightness)" 0.6' 10; sleep 1
+d=$(grep -c "dimmed from" /tmp/liddim-test/i.out)
+[ "$d" = 1 ] && grep -q "re-dimmed 3 times while shut" /tmp/liddim-test/i.out && pass "i: one 'dimmed from', then: $(grep re-dimmed /tmp/liddim-test/i.out)" || fail "i: $d 'dimmed from' lines: $(tr '\n' '|' < /tmp/liddim-test/i.out)"
+echo 1 > $F/lid; waitfor 'isf "$(cat $F/brightness)" 0' 10; sleep 1
+[ "$(grep -c "dimmed from" /tmp/liddim-test/i.out)" = 2 ] && pass "i: the next shut logs its own first dim" || fail "i: next shut: $(grep -c 'dimmed from' /tmp/liddim-test/i.out) lines"
+exec 7>&-; rm -f /tmp/liddim-test/in.i
+
 clean; echo "fails=$fails"
