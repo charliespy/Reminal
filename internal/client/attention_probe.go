@@ -36,6 +36,8 @@ import (
 // tick to that file — the Phase-0 measurement log used to tune the thresholds.
 
 const (
+	// attnInterval is the closest two reads of the screen come: output
+	// arriving faster than this is read at this pace, not per chunk.
 	attnInterval = 300 * time.Millisecond
 	attnTailRows = 12
 	// attnPromptRows is how much of the bottom of the screen may overrule a
@@ -74,6 +76,21 @@ func (a *Agent) startAttention() {
 	go a.runAttention(os.Getenv("REMINAL_ATTENTION_PROBE"), stop)
 }
 
+// kickAttention tells the detector something it reads may have changed: PTY
+// output, a resize, a hook's new state. Cheap and never blocks — kicks
+// arriving together are one read.
+func (a *Agent) kickAttention() {
+	select {
+	case a.attnKicks() <- struct{}{}:
+	default:
+	}
+}
+
+func (a *Agent) attnKicks() chan struct{} {
+	a.attnKickOnce.Do(func() { a.attnKick = make(chan struct{}, 1) })
+	return a.attnKick
+}
+
 // stopAttention ends the detector: the session is going, and a probe that
 // outlives its PTY polls a closed file (a data race the tests caught).
 func (a *Agent) stopAttention() {
@@ -105,8 +122,24 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		}
 	}
 
-	ticker := time.NewTicker(attnInterval)
-	defer ticker.Stop()
+	// The screen is read when something says it may have changed — a kick
+	// (output, a resize, a hook) — and when a reading made earlier comes due
+	// (a screen settling, a hook's "working" going stale), never on a clock
+	// of its own: a session nobody is touching costs nothing. A kick within
+	// attnInterval of the last read waits out the rest of it.
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	var due time.Time // when timer fires; zero when it is not set
+	at := func(t time.Time) {
+		if !due.IsZero() && !t.Before(due) {
+			return
+		}
+		due = t
+		timer.Reset(time.Until(t))
+	}
+	due = time.Now()
+	var lastRead time.Time
+	kicks := a.attnKicks()
 
 	var lastTail string
 	lastChange := time.Now()
@@ -116,8 +149,16 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		select {
 		case <-stop:
 			return
-		case <-ticker.C:
+		case <-kicks:
+			if next := lastRead.Add(attnInterval); time.Now().Before(next) {
+				at(next)
+				continue
+			}
+		case <-timer.C:
 		}
+		due = time.Time{}
+		timer.Stop()
+		lastRead = time.Now()
 		a.screenMu.Lock()
 		scr := a.screen
 		if scr == nil { // snapshot disabled / torn down — nothing to read
@@ -208,7 +249,8 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// going is honestly "done", and "done · 1 shell" is the thing worth
 		// knowing before deciding it needs nothing from you.
 		a.noteShells(attnShellCount(agentActive, bottom))
-		state, source := resolveAttn(screenState, session.ReadHookStateAnyAge(a.sessionID), last, fgAt, idleMs,
+		hs := session.ReadHookStateAnyAge(a.sessionID)
+		state, source := resolveAttn(screenState, hs, last, fgAt, idleMs,
 			attnLooksLikePrompt(bottom), attnLooksBusy(bottom), hookTurns[prog])
 		if a.harnessDown() {
 			// It cannot work at all: that is what to report, not what it
@@ -216,6 +258,9 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 			state, source = harnessLoggedOut, "screen(login)"
 		}
 		a.setAttnState(state)
+		if next, ok := attnNextRead(now, lastChange, last, hs, fgPgrpSeen == 0 && a.term != nil); ok {
+			at(next)
+		}
 
 		if enc != nil {
 			_ = enc.Encode(attentionProbeSample{
@@ -224,6 +269,45 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 			})
 		}
 	}
+}
+
+// attnNextRead is when a reading made at now goes out of date with nothing
+// else happening — no output, no resize, no hook — or false if it stays
+// true until one of those comes:
+//   - a changing screen settles attnSettleMs after its last change;
+//   - output may be followed by a program taking the foreground, which says
+//     nothing (the shell echoes the command, then starts it), so it is read
+//     again once that output has settled too;
+//   - a hook's "working" stops being believed past its TTL, or once the
+//     screen has been still for hookWorkingSilentMs;
+//   - a console whose foreground cannot be asked (Windows) is read at
+//     attnInterval, as its program is found among the shell's children.
+func attnNextRead(now, lastChange, lastActivity time.Time, hs *session.HookState, blindForeground bool) (time.Time, bool) {
+	var next time.Time
+	soonest := func(t time.Time) {
+		if t.After(now) && (next.IsZero() || t.Before(next)) {
+			next = t
+		}
+	}
+	settle := time.Duration(attnSettleMs) * time.Millisecond
+	soonest(lastChange.Add(settle))
+	if !lastActivity.IsZero() {
+		soonest(lastActivity.Add(settle))
+	}
+	if hs != nil && hs.State == "working" {
+		soonest(hs.TS.Add(session.HookStateTTL))
+		if !lastActivity.IsZero() {
+			soonest(lastActivity.Add(hookWorkingSilentMs * time.Millisecond))
+		}
+	}
+	if blindForeground {
+		soonest(now.Add(attnInterval))
+	}
+	// A millisecond past the threshold, so the read lands after it, not on it.
+	if next.IsZero() {
+		return next, false
+	}
+	return next.Add(time.Millisecond), true
 }
 
 // hookWorkingSilentMs is how long a screen may stay completely still before a
