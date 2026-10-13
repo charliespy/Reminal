@@ -959,7 +959,16 @@ func (a *Agent) Run() error {
 	// virtual display up while the machine is headless so remote view/control
 	// survive "unplug everything and shut the lid". Gated at runtime by the
 	// closed-lid setting, which it re-reads every poll.
-	go vdisplayLoop(shellExit, false) // sessions defer to the daemon; see vdisplayLoop
+	// Its own stop, closed when the shell ends or Run returns, whichever is
+	// first: a `reminal kill` unwinds Run before the shell is gone, and the
+	// loop must still get to clean up (see the end of Run).
+	vdisplayStop, vdisplayDone := make(chan struct{}), make(chan struct{})
+	var stopVdisplay sync.Once
+	go func() {
+		<-shellExit
+		stopVdisplay.Do(func() { close(vdisplayStop) })
+	}()
+	go func() { vdisplayLoop(vdisplayStop, false); close(vdisplayDone) }() // sessions defer to the daemon; see vdisplayLoop
 
 	// Serve this machine's owner-derived directory channel so owners can list
 	// every session across the machines they own (`reminal machines`). No-op
@@ -1009,8 +1018,21 @@ func (a *Agent) Run() error {
 		}
 	}()
 
-	return a.serveRelay(shellExit)
+	err := a.serveRelay(shellExit)
+	// Leaving: give closed-lid mode's loop its moment to clean up (the lid
+	// dimmer puts the screen's brightness back) before this process exits
+	// underneath it.
+	stopVdisplay.Do(func() { close(vdisplayStop) })
+	select {
+	case <-vdisplayDone:
+	case <-time.After(vdisplayCleanupWait):
+	}
+	return err
 }
+
+// vdisplayCleanupWait bounds how long an ending session waits for closed-lid
+// mode's loop: the lid dimmer's own stop grace (3s) and a little more.
+const vdisplayCleanupWait = 5 * time.Second
 
 // closeRelayConn hangs up with a WebSocket close frame before the socket
 // goes. A bare TCP close was enough for a relay in the same process, but the

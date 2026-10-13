@@ -145,21 +145,29 @@ func (h *winHelper) errorText() string {
 	return ""
 }
 
-// captureHelperPath finds the reminal-capture binary: an explicit override
-// first (handy for local testing), then next to the running reminal binary
-// (how releases bundle it), then PATH. macOS-only — the helper needs
+// buildVersion is the running binary's version ("dev" for a build without
+// one), set once at startup by SetBuildVersion. It decides what the capture
+// helper may be pointed at and given (captureHelperPath, helperEnv).
+var buildVersion = "dev"
+
+// SetBuildVersion records the binary's version for the package. main calls it
+// first thing.
+func SetBuildVersion(v string) { buildVersion = v }
+
+// captureHelperPath finds the reminal-capture binary: next to the running
+// reminal binary (how releases bundle it). A build without a version also
+// takes an explicit override (handy for local testing) and PATH. A release
+// build takes the override only when it resolves inside its own app bundle,
+// and never searches PATH: the helper runs with every grant the app has, so a
+// release runs only the one it shipped with. macOS-only — the helper needs
 // ScreenCaptureKit; other platforms fall back to the screencapture path.
 func captureHelperPath() (string, error) {
 	if runtime.GOOS != "darwin" {
 		return "", errors.New("capture helper is macOS-only")
 	}
-	if p := strings.TrimSpace(os.Getenv("REMINAL_CAPTURE_HELPER")); p != "" {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, nil
-		}
-		return "", fmt.Errorf("REMINAL_CAPTURE_HELPER=%s not found", p)
-	}
-	if exe, err := os.Executable(); err == nil {
+	release := isReleaseBuild(buildVersion)
+	exe, exeErr := os.Executable()
+	if exeErr == nil {
 		// Resolve symlinks: the release installs reminal.app and symlinks the CLI
 		// (~/.local/bin/reminal -> reminal.app/Contents/MacOS/reminal), so the
 		// helper lives next to the RESOLVED path (inside the bundle), not next to
@@ -167,15 +175,80 @@ func captureHelperPath() (string, error) {
 		if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
 			exe = resolved
 		}
+	}
+	if p := strings.TrimSpace(os.Getenv("REMINAL_CAPTURE_HELPER")); p != "" {
+		if release && (exeErr != nil || !inAppBundle(p, exe)) {
+			return "", fmt.Errorf("REMINAL_CAPTURE_HELPER=%s is outside this release's app bundle; not used", p)
+		}
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p, nil
+		}
+		return "", fmt.Errorf("REMINAL_CAPTURE_HELPER=%s not found", p)
+	}
+	if exeErr == nil {
 		cand := filepath.Join(filepath.Dir(exe), "reminal-capture")
 		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
 			return cand, nil
 		}
 	}
-	if p, err := exec.LookPath("reminal-capture"); err == nil {
-		return p, nil
+	if !release {
+		if p, err := exec.LookPath("reminal-capture"); err == nil {
+			return p, nil
+		}
 	}
 	return "", errors.New("reminal-capture not found")
+}
+
+// inAppBundle reports whether p, symlinks resolved, lies inside the .app
+// bundle that holds exe (itself already resolved). False when exe is in no
+// bundle.
+func inAppBundle(p, exe string) bool {
+	i := strings.Index(exe, ".app/Contents/")
+	if i < 0 {
+		return false
+	}
+	bundle := exe[:i+len(".app")] + string(filepath.Separator)
+	rp, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false
+	}
+	if abs, err := filepath.Abs(rp); err == nil {
+		rp = abs
+	}
+	return strings.HasPrefix(rp, bundle)
+}
+
+// helperCommand is exec.Command for the capture helper, with its environment
+// filtered (helperEnv). Every reminal-capture spawn goes through it or
+// runHelper.
+func helperCommand(path string, args ...string) *exec.Cmd {
+	cmd := exec.Command(path, args...)
+	cmd.Env = helperEnv()
+	return cmd
+}
+
+// helperEnv is our environment minus what must not reach the capture helper:
+// the dynamic loader's variables (DYLD_*, LD_*), which would load code into a
+// process holding the app's Screen Recording and Accessibility grants, and
+// reminal's own helper overrides. REMINAL_LIDDIM_FAKE, the lid dimmer's test
+// stand-in, passes only from a build without a version.
+func helperEnv() []string {
+	return filterHelperEnv(os.Environ(), isReleaseBuild(buildVersion))
+}
+
+func filterHelperEnv(env []string, release bool) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		switch {
+		case strings.HasPrefix(name, "DYLD_"), strings.HasPrefix(name, "LD_"),
+			name == "REMINAL_CAPTURE_HELPER",
+			name == "REMINAL_LIDDIM_FAKE" && release:
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // startWinHelper spawns the helper for window id and returns it once it's proven
@@ -192,7 +265,7 @@ func startWinHelper(id string, maxWidth, quality, fps int, codec string) (*winHe
 	if codec == "h264" {
 		args = append(args, codec)
 	}
-	cmd := exec.Command(path, args...)
+	cmd := helperCommand(path, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err

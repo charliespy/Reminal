@@ -193,7 +193,7 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		}
 		// REMINAL_FORCE_VDISPLAY exists purely so this path is testable with a
 		// monitor attached (census is skipped above when forcing).
-		cmd := exec.Command(helper, "vdisplay", strconv.Itoa(lastW), strconv.Itoa(lastH))
+		cmd := helperCommand(helper, "vdisplay", strconv.Itoa(lastW), strconv.Itoa(lastH))
 		stdin, err := cmd.StdinPipe() // lifeline
 		if err != nil {
 			continue

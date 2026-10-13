@@ -140,7 +140,7 @@ func handleMirrorConn(conn net.Conn) {
 func writeHelperCheck(conn net.Conn, sub string) {
 	out := "no"
 	if p, e := captureHelperPath(); e == nil {
-		if o, e := run(p, sub); e == nil {
+		if o, e := runHelper(p, sub); e == nil {
 			out = strings.TrimSpace(o)
 		}
 	}
@@ -188,7 +188,7 @@ func mirrorServeCapture(conn net.Conn, args []string) {
 	if codec != "" {
 		cargs = append(cargs, codec)
 	}
-	cmd := exec.Command(helper, cargs...)
+	cmd := helperCommand(helper, cargs...)
 	// Capture the helper's stderr. Without this Go wires a nil Stderr to
 	// /dev/null, so the ONE line explaining why capture failed ("window 1234
 	// not found", "stream stopped: …") was discarded before anything could see
@@ -542,7 +542,7 @@ func (m *captureMux) startLocked(helper string) bool {
 	if m.stdin != nil {
 		return true // someone else started one while we waited
 	}
-	cmd := exec.Command(helper, "serve")
+	cmd := helperCommand(helper, "serve")
 	cmd.Stderr = &lineLogger{prefix: "reminal: ", onLine: noteCaptureFailure}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

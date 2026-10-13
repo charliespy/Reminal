@@ -198,7 +198,7 @@ func RequestPermission(which string) error {
 // surface the Screen Recording (TCC) dialog; the helper blocks until answered.
 func requestScreenRecording() {
 	if helper, err := captureHelperPath(); err == nil {
-		_ = exec.Command(helper, "request").Run()
+		_ = helperCommand(helper, "request").Run()
 	}
 }
 
@@ -206,7 +206,7 @@ func requestScreenRecording() {
 // alive polling (~30s) so the dialog isn't dropped if it's queued behind another.
 func requestAccessibilityGrant() {
 	if helper, err := captureHelperPath(); err == nil {
-		_ = exec.Command(helper, "accessibility").Run()
+		_ = helperCommand(helper, "accessibility").Run()
 	}
 }
 

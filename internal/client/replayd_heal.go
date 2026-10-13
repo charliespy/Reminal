@@ -112,7 +112,7 @@ func captureGrantedByPreflight() bool {
 	if err != nil {
 		return false
 	}
-	out, err := run(p, "check")
+	out, err := runHelper(p, "check")
 	return err == nil && strings.TrimSpace(out) == "ok"
 }
 
