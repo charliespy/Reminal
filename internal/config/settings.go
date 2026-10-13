@@ -21,7 +21,8 @@ type Settings struct {
 	// sleep via `sudo pmset -a disablesleep` when this is toggled, and running
 	// agents watch the display census — when the machine goes fully headless
 	// (lid shut, no monitor) they spin up a virtual display so windows keep a
-	// coordinate space and remote view/control keep working. Off by default:
+	// coordinate space and remote view/control keep working, and a lid dimmer
+	// turns the built-in screen to 0 while the lid is shut. Off by default:
 	// it costs battery when unplugged and a closed hot laptop must not be
 	// bagged, so it's an explicit opt-in.
 	ClosedLid bool `json:"closed_lid,omitempty"`
