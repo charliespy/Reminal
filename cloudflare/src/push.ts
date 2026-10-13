@@ -43,16 +43,17 @@ function allowedEndpoint(raw: unknown): URL | null {
 
 // What one alert may cost, counted where the count is the count (the
 // RateLimiter, src/limiter.ts), each isolate's own only where that cannot be
-// asked: per caller (its address, IPv6 by its /64), per subscription, and per
-// push service. A machine's watcher sends a handful of alerts a day; these
-// are brakes on a runaway loop or on someone sending through this relay,
-// not quotas. In an isolate, the oldest counts go first, never all at once.
-const PER_CALLER = { calls: 30, period: 60 };
+// asked: per subscription, and per caller (its address, IPv6 by its /64). A
+// machine's watcher sends a handful of alerts a day; these are brakes on a
+// runaway loop or on someone sending through this relay, not quotas. An
+// address can be many machines (one NAT, one cloud's way out), so a caller
+// has room for many subscriptions' worth. Nothing is counted per push
+// service: one count for everyone is one anyone could use up.
+// In an isolate, the oldest counts go first, never all at once.
+const PER_CALLER = { calls: 600, period: 60 };
 const PER_ENDPOINT = { calls: 20, period: 60 };
-const PER_SERVICE = { calls: 600, period: 60 };
 const callers = new Map<string, number[]>();
 const endpoints = new Map<string, number[]>();
-const services = new Map<string, number[]>();
 
 async function within(env: LimiterEnv, scope: string, counts: Map<string, number[]>, key: string, lim: { calls: number; period: number }): Promise<boolean> {
   const c = await allow(env, scope, key, lim.calls, lim.period);
@@ -140,8 +141,7 @@ export async function handlePush(request: Request, env: PushEnv): Promise<Respon
   const now = Date.now();
   const caller = addressGroup(request.headers.get("cf-connecting-ip") ?? "");
   if (!(await within(env, "push-caller", callers, caller, PER_CALLER)) ||
-    !(await within(env, "push-endpoint", endpoints, ep.href, PER_ENDPOINT)) ||
-    !(await within(env, "push-service", services, ep.origin, PER_SERVICE))) {
+    !(await within(env, "push-endpoint", endpoints, ep.href, PER_ENDPOINT))) {
     return json({ error: "too many alerts; slow down" }, 429);
   }
 

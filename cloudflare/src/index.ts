@@ -50,19 +50,26 @@ function internalHeaders(src: Headers): Headers {
 // (/p, its own host: a page's assets come many at once). Counted where the
 // count is the count (the RateLimiter), each isolate's own only where that
 // cannot be asked.
+// An address is not one machine: machines behind one NAT, or one cloud's
+// way out, share it, and after a relay's restart all their agents come back
+// at once. So the machines' own sockets (/ws agent, tunnel) are counted
+// apart from the viewers' and copies', with room for many machines.
 const SOCKETS_PER_MIN = 120;
+const AGENT_SOCKETS_PER_MIN = 1200;
 const TUNNEL_PER_MIN = 1200;
 const socketAsks = new Map<string, number[]>();
+const agentSocketAsks = new Map<string, number[]>();
 const tunnelAsks = new Map<string, number[]>();
 
 function caller(request: Request): string {
   return addressGroup(request.headers.get("cf-connecting-ip") ?? "");
 }
 
-async function socketsWithin(env: Env, request: Request): Promise<boolean> {
+async function socketsWithin(env: Env, request: Request, machine: boolean): Promise<boolean> {
   const who = caller(request);
-  const c = await allow(env, "sockets", who, SOCKETS_PER_MIN, 60);
-  return c === true || (c === null && inIsolate(socketAsks, who, SOCKETS_PER_MIN, 60));
+  const [scope, counts, perMin] = machine ? ["agent-sockets", agentSocketAsks, AGENT_SOCKETS_PER_MIN] as const : ["sockets", socketAsks, SOCKETS_PER_MIN] as const;
+  const c = await allow(env, scope, who, perMin, 60);
+  return c === true || (c === null && inIsolate(counts, who, perMin, 60));
 }
 
 // A forwarded app's requests are many (a page is its assets), so the limiter
@@ -153,9 +160,9 @@ export default {
     // tunnel is for port-forward agents (registered by `reminal expose`).
     const wsMatch = url.pathname.match(/^\/ws\/([A-Z0-9]+)\/(agent|viewer|tunnel)$/i);
     if (wsMatch) {
-      if (!(await socketsWithin(env, request))) return tooMany();
       const sessionId = wsMatch[1].toUpperCase();
       const role = wsMatch[2].toLowerCase();
+      if (!(await socketsWithin(env, request, role !== "viewer"))) return tooMany();
       const id = env.SESSION.idFromName(sessionId);
       const stub = env.SESSION.get(id);
       const doUrl = new URL(request.url);
@@ -167,7 +174,7 @@ export default {
     // Routed to a per-code RendezvousRoom DO that blindly pairs the two.
     const rvMatch = url.pathname.match(/^\/rv\/([A-Z0-9]+)\/(source|paste)$/i);
     if (rvMatch) {
-      if (!(await socketsWithin(env, request))) return tooMany();
+      if (!(await socketsWithin(env, request, false))) return tooMany();
       const code = rvMatch[1].toUpperCase();
       const role = rvMatch[2].toLowerCase();
       const id = env.RENDEZVOUS.idFromName(code);
