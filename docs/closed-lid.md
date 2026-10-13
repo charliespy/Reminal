@@ -127,6 +127,10 @@ never loses it, and on open it is put back only if the screen is still dark: a
 brightness you set in the meantime stands. Like the display helper, it treats
 stdin EOF as an exit order, and puts the brightness back on the way out.
 
+If reminal isn't running when the lid opens (it was stopped while the lid was
+shut, or uninstalled), the screen stays dark until reminal next runs and puts
+the brightness back. The brightness keys bring it back straight away.
+
 ## Why bother
 
 Once a lid-shut Mac keeps rendering, the rest follows. reminal streams every
