@@ -10,6 +10,7 @@
 #   scripts/restore-test/run.sh          # build, then run check.sh
 #   scripts/restore-test/run.sh shared   # build, then run check-shared.sh
 #   scripts/restore-test/run.sh shutdown [MODE]   # build, then run check-shutdown.sh
+#   scripts/restore-test/run.sh hostile  # build, then run check-hostile-args.sh
 #   scripts/restore-test/run.sh down     # remove it all
 set -e
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -44,4 +45,5 @@ docker run -d --name reminal-restore-box --init --network "$NET" -v reminal-rest
     "$IMG" >/dev/null
 if [ "$1" = shared ]; then exec "$DIR/check-shared.sh"; fi
 if [ "$1" = shutdown ]; then exec "$DIR/check-shutdown.sh" "$2"; fi
+if [ "$1" = hostile ]; then exec "$DIR/check-hostile-args.sh"; fi
 exec "$DIR/check.sh"

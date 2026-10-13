@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -161,14 +162,13 @@ func writeRestoreLocked(r Restore) error {
 	return nil
 }
 
-// ReadRestore reads one session's restore record: the sealed one, or a plain
-// one an older version wrote, whichever is newer — a session still running
-// the old binary after an upgrade keeps rewriting its plain record. A plain
-// record is sealed on the way unless its session is still running (the old
-// process would only write it again, and its own cleanup would miss the
-// sealed copy). A record that will never open (its key is gone, it is
-// damaged) is moved to quarantine and reported as missing. atrest.ErrLocked
-// means try later.
+// ReadRestore reads one session's restore record: the sealed one — or, only
+// when there is none, a plain one a version from before sealing wrote,
+// sealed at once and its plain copy removed. A plain record beside a sealed
+// one is never read: anything that can write the folder could otherwise put
+// words in a session's mouth (what it types when restored) without the key.
+// A record that will never open (its key is gone, it is damaged) is moved
+// to quarantine and reported as missing. atrest.ErrLocked means try later.
 func ReadRestore(id string) (*Restore, error) {
 	id = strings.ToUpper(id)
 	p, err := restorePath(id, ".sealed")
@@ -176,10 +176,13 @@ func ReadRestore(id string) (*Restore, error) {
 		return nil, err
 	}
 	lp, _ := restorePath(id, ".json")
-	sfi, serr := os.Stat(p)
-	lfi, lerr := os.Stat(lp)
-	if lerr == nil && (serr != nil || lfi.ModTime().After(sfi.ModTime())) {
+	_, serr := os.Stat(p)
+	_, lerr := os.Stat(lp)
+	if lerr == nil && errors.Is(serr, os.ErrNotExist) {
 		return readLegacyRestore(id)
+	}
+	if lerr == nil {
+		_ = os.Remove(lp) // superseded by the sealed one, and not to be trusted
 	}
 	blob, err := os.ReadFile(p)
 	if err != nil {
@@ -221,9 +224,12 @@ func readLegacyRestore(id string) (*Restore, error) {
 	if r.ID == "" {
 		r.ID = id
 	}
-	if sessionRunning(id) {
-		return &r, nil
+	// Its own record, or none: a plain file named for one session but
+	// written for another would hand it that one's identity.
+	if !strings.EqualFold(r.ID, id) {
+		return nil, os.ErrNotExist
 	}
+	r.ID = id
 	unlock, err := lockSession(id)
 	if err != nil {
 		return &r, nil // someone else is migrating it; read it as it is
@@ -241,6 +247,10 @@ func readLegacyRestore(id string) (*Restore, error) {
 			if cur.ID == "" {
 				cur.ID = id
 			}
+			if !strings.EqualFold(cur.ID, id) {
+				return nil, os.ErrNotExist
+			}
+			cur.ID = id
 			r = cur
 		}
 		_ = writeRestoreLocked(r) // seals the scrollback too, then drops the plain copies
@@ -251,11 +261,6 @@ func readLegacyRestore(id string) (*Restore, error) {
 func plainNewer(plain string, sealed os.FileInfo) bool {
 	fi, err := os.Stat(plain)
 	return err == nil && fi.ModTime().After(sealed.ModTime())
-}
-
-func sessionRunning(id string) bool {
-	a, err := ReadActiveByID(id)
-	return err == nil && a != nil
 }
 
 // migrateLegacyScrollback seals the plain scrollback an older version kept
@@ -403,9 +408,19 @@ func ClearRestore(id string) error {
 	return nil
 }
 
+// convIDRe is what a conversation id may look like. It is typed into a shell
+// when the session is restored, so nothing else is ever taken as one.
+var convIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$`)
+
+// ValidConv says s may be a conversation id.
+func ValidConv(s string) bool { return convIDRe.MatchString(s) }
+
 // WriteConv records the conversation id a coding agent's hook reported for
 // the session it runs in — what lets it be resumed by id, not "the latest".
 func WriteConv(id, conv string) error {
+	if !ValidConv(conv) {
+		return errors.New("not a conversation id")
+	}
 	p, err := restorePath(id, ".conv")
 	if err != nil {
 		return err
@@ -438,5 +453,10 @@ func ReadConvAt(id string) (string, time.Time) {
 	if err != nil {
 		return "", time.Time{}
 	}
-	return strings.TrimSpace(string(b)), fi.ModTime()
+	// Whatever wrote it, only an id is taken: it is typed into a shell.
+	conv := strings.TrimSpace(string(b))
+	if !ValidConv(conv) {
+		return "", time.Time{}
+	}
+	return conv, fi.ModTime()
 }

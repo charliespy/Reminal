@@ -157,15 +157,13 @@ func TestActivePINSealedOnDisk(t *testing.T) {
 	}
 }
 
-// A session still running the old binary after an upgrade keeps rewriting its
-// plain record: it is read (the newer copy wins over a stale sealed one) but
-// not sealed, so its own cleanup on exit still removes everything.
-func TestLiveOldSessionNotMigrated(t *testing.T) {
+// A plain record from before sealing is taken only when there is no sealed
+// one, and is sealed at once — even while its session still runs: a plain
+// record is never trusted beside a sealed one (TestPlainRecordBesideASealedOneIsNotRead).
+func TestPlainRecordSealedAtOnce(t *testing.T) {
 	dir := isolateHome(t)
 	rd := filepath.Join(dir, "restore")
 	_ = os.MkdirAll(rd, 0o700)
-	_ = WriteRestore(Restore{ID: "LIVE2345", PIN: "000001", Name: "stale", SavedAt: time.Now()})
-	time.Sleep(20 * time.Millisecond)
 	plain, _ := json.Marshal(Restore{ID: "LIVE2345", PIN: "000001", Name: "fresh", SavedAt: time.Now()})
 	_ = os.WriteFile(filepath.Join(rd, "LIVE2345.json"), plain, 0o600)
 	act, _ := json.Marshal(Active{ID: "LIVE2345", PID: os.Getpid(), StartedAt: time.Now()})
@@ -173,18 +171,10 @@ func TestLiveOldSessionNotMigrated(t *testing.T) {
 
 	r, err := ReadRestore("LIVE2345")
 	if err != nil || r.Name != "fresh" {
-		t.Fatalf("read %+v %v, want the newer plain record", r, err)
-	}
-	if _, err := os.Stat(filepath.Join(rd, "LIVE2345.json")); err != nil {
-		t.Fatal("a live session's plain record was migrated away")
-	}
-	// Once it is not running, the next read seals it.
-	_ = os.Remove(filepath.Join(dir, "active-LIVE2345.json"))
-	if r, _ := ReadRestore("LIVE2345"); r == nil || r.Name != "fresh" {
-		t.Fatalf("after exit: %+v", r)
+		t.Fatalf("read %+v %v, want the plain record", r, err)
 	}
 	if _, err := os.Stat(filepath.Join(rd, "LIVE2345.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("plain record kept after its session stopped running")
+		t.Fatal("the plain record was kept, not sealed")
 	}
 	if r, _ := ReadRestore("LIVE2345"); r == nil || r.Name != "fresh" {
 		t.Fatalf("sealed copy: %+v", r)

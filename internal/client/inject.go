@@ -264,6 +264,9 @@ func (a *Agent) wrapPaste(data []byte) []byte {
 	if !printable {
 		return data
 	}
+	// The paste's own end marker, inside it, would end it early and have
+	// the rest read as keys pressed: never passed through.
+	data = bytes.ReplaceAll(data, pasteEnd, nil)
 	out := make([]byte, 0, len(data)+len(pasteStart)+len(pasteEnd))
 	out = append(out, pasteStart...)
 	out = append(out, data...)
