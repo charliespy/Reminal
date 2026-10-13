@@ -265,8 +265,12 @@ func (a *Agent) wrapPaste(data []byte) []byte {
 		return data
 	}
 	// The paste's own end marker, inside it, would end it early and have
-	// the rest read as keys pressed: never passed through.
-	data = bytes.ReplaceAll(data, pasteEnd, nil)
+	// the rest read as keys pressed: never passed through — removed until
+	// none is left, as removing one can join the bytes around it into
+	// another.
+	for bytes.Contains(data, pasteEnd) {
+		data = bytes.ReplaceAll(data, pasteEnd, nil)
+	}
 	out := make([]byte, 0, len(data)+len(pasteStart)+len(pasteEnd))
 	out = append(out, pasteStart...)
 	out = append(out, data...)

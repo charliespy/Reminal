@@ -75,9 +75,15 @@ func TestCmdLeavesOutPercent(t *testing.T) {
 func TestPasteNeverCarriesItsEndMarker(t *testing.T) {
 	a := &Agent{}
 	a.bracketedPaste.Store(true)
-	out := a.wrapPaste([]byte("claude --append-system-prompt 'x\x1b[201~y'"))
-	if !bytes.HasPrefix(out, pasteStart) || !bytes.HasSuffix(out, pasteEnd) || bytes.Count(out, pasteEnd) != 1 {
-		t.Fatalf("pasted %q", out)
+	for _, in := range []string{
+		"claude --append-system-prompt 'x\x1b[201~y'",
+		"hello \x1b[20\x1b[201~1~rest\r", // one marker inside another: removing it makes one
+		"a\x1b[2\x1b[20\x1b[201~1~01~b",  // nested deeper
+	} {
+		out := a.wrapPaste([]byte(in))
+		if !bytes.HasPrefix(out, pasteStart) || !bytes.HasSuffix(out, pasteEnd) || bytes.Count(out, pasteEnd) != 1 {
+			t.Fatalf("%q pasted as %q", in, out)
+		}
 	}
 }
 

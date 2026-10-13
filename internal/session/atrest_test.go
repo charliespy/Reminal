@@ -158,9 +158,12 @@ func TestActivePINSealedOnDisk(t *testing.T) {
 }
 
 // A plain record from before sealing is taken only when there is no sealed
-// one, and is sealed at once — even while its session still runs: a plain
-// record is never trusted beside a sealed one (TestPlainRecordBesideASealedOneIsNotRead).
-func TestPlainRecordSealedAtOnce(t *testing.T) {
+// one (a plain record is never trusted beside a sealed one:
+// TestPlainRecordBesideASealedOneIsNotRead). While its session still runs
+// the old binary that writes it, it is read and not sealed — its later
+// writes would be lost, and its own cleanup on exit removes only the plain
+// copy; once it is not running, it is sealed.
+func TestPlainRecordSealedOnceNotRunning(t *testing.T) {
 	dir := isolateHome(t)
 	rd := filepath.Join(dir, "restore")
 	_ = os.MkdirAll(rd, 0o700)
@@ -173,8 +176,15 @@ func TestPlainRecordSealedAtOnce(t *testing.T) {
 	if err != nil || r.Name != "fresh" {
 		t.Fatalf("read %+v %v, want the plain record", r, err)
 	}
+	if _, err := os.Stat(filepath.Join(rd, "LIVE2345.json")); err != nil {
+		t.Fatal("a running session's plain record was sealed away")
+	}
+	_ = os.Remove(filepath.Join(dir, "active-LIVE2345.json"))
+	if r, _ := ReadRestore("LIVE2345"); r == nil || r.Name != "fresh" {
+		t.Fatalf("after exit: %+v", r)
+	}
 	if _, err := os.Stat(filepath.Join(rd, "LIVE2345.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("the plain record was kept, not sealed")
+		t.Fatal("the plain record was kept after its session stopped running")
 	}
 	if r, _ := ReadRestore("LIVE2345"); r == nil || r.Name != "fresh" {
 		t.Fatalf("sealed copy: %+v", r)

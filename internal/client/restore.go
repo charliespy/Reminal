@@ -617,7 +617,7 @@ func shellCommand(argv []string, shell string) string {
 			}
 		}
 		return strings.Join(q, " ")
-	case strings.HasPrefix(base, "cmd"):
+	case isCmdShell(shell):
 		q := make([]string, len(argv))
 		for i, a := range argv {
 			if shellSafe.MatchString(a) && !strings.ContainsAny(a, "%") {

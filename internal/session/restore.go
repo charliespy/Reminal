@@ -164,7 +164,8 @@ func writeRestoreLocked(r Restore) error {
 
 // ReadRestore reads one session's restore record: the sealed one — or, only
 // when there is none, a plain one a version from before sealing wrote,
-// sealed at once and its plain copy removed. A plain record beside a sealed
+// sealed on the way (unless its session still runs) and its plain copy
+// removed. A plain record beside a sealed
 // one is never read: anything that can write the folder could otherwise put
 // words in a session's mouth (what it types when restored) without the key.
 // A record that will never open (its key is gone, it is damaged) is moved
@@ -230,6 +231,13 @@ func readLegacyRestore(id string) (*Restore, error) {
 		return nil, os.ErrNotExist
 	}
 	r.ID = id
+	// Still running an old binary that writes it in the clear: read, not
+	// sealed — its later writes would be lost, and its own cleanup on exit
+	// removes only the plain copy, so a sealed one would bring an ended
+	// session back.
+	if sessionRunning(id) {
+		return &r, nil
+	}
 	unlock, err := lockSession(id)
 	if err != nil {
 		return &r, nil // someone else is migrating it; read it as it is
@@ -261,6 +269,11 @@ func readLegacyRestore(id string) (*Restore, error) {
 func plainNewer(plain string, sealed os.FileInfo) bool {
 	fi, err := os.Stat(plain)
 	return err == nil && fi.ModTime().After(sealed.ModTime())
+}
+
+func sessionRunning(id string) bool {
+	a, err := ReadActiveByID(id)
+	return err == nil && a != nil
 }
 
 // migrateLegacyScrollback seals the plain scrollback an older version kept
