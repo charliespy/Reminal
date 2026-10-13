@@ -75,7 +75,7 @@ const MAX_AUTH_BODY_BYTES = 64 * 1024;
 const WS_OPEN_TIMEOUT_MS = 10 * 1000;
 
 // Cookie name scoped per-session so multiple port-forwards can each
-// have their own auth state in a single browser.
+// have their own auth state in a single browser. See authCookieName.
 const AUTH_COOKIE_PREFIX = "reminal_auth_";
 const COOKIE_MAX_AGE = 30 * 24 * 3600; // 30 days
 
@@ -753,10 +753,13 @@ export class SessionRoom {
     // visitor must already hold the auth cookie from a normal page load.
     if (!meta.public) {
       const cookies = parseCookies(request.headers.get("Cookie") ?? "");
-      const cookieVal = cookies[AUTH_COOKIE_PREFIX + sessionId] ?? "";
+      const cookieVal = cookies[authCookieName(sessionId, hostMode)] ?? "";
       const expected = await hmacHex(meta.signingKey, "ok");
       if (!timingSafeEqual(cookieVal, expected)) {
         return new Response("reminal: authentication required\n", { status: 401 });
+      }
+      if (fromAnotherTunnel(request)) {
+        return new Response("reminal: refused, sent from another site\n", { status: 403 });
       }
     }
 
@@ -944,7 +947,7 @@ export class SessionRoom {
     // Public tunnels skip the gate entirely.
     if (!meta.public) {
       const cookies = parseCookies(request.headers.get("Cookie") ?? "");
-      const cookieVal = cookies[AUTH_COOKIE_PREFIX + sessionId] ?? "";
+      const cookieVal = cookies[authCookieName(sessionId, hostMode)] ?? "";
       const expected = await hmacHex(meta.signingKey, "ok");
       if (!timingSafeEqual(cookieVal, expected)) {
         // In host-mode the visitor's real path is `rest`; in path-mode it's the
@@ -968,6 +971,14 @@ export class SessionRoom {
         return new Response(pinGatePage(sessionId, wantTo, "", authAction), {
           status: 200,
           headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      // The visitor holds the cookie, but the browser sent it on a request
+      // another tunnel's page made (see fromAnotherTunnel): refuse it.
+      if (fromAnotherTunnel(request)) {
+        return new Response("reminal: refused, sent from another site\n", {
+          status: 403,
+          headers: { "Content-Type": "text/plain" },
         });
       }
     }
@@ -1210,14 +1221,14 @@ export class SessionRoom {
       }
       for (const v of values) putHeader(name, v, true);
     }
+    // Only the list below reaches the visitor as Set-Cookie. A Set-Cookie in
+    // the flat or the repeated headers comes from an agent that isn't ours
+    // (ours sends them in setCookies), and would skip forwardableCookie.
+    respHeaders.delete("Set-Cookie");
     if (hostMode) {
-      // stripLoopbackCookieDomain: an app that scopes its session cookie to its
-      // own loopback address emits "Domain=127.0.0.1", which the browser MUST
-      // reject on port-<id>.reminal.app — the login appears to succeed and is
-      // gone by the next request. Same reasoning as loopbackLocationPath: a
-      // loopback host is unambiguously wrong for a public tunnel.
       for (const c of out.setCookies ?? []) {
-        putHeader("Set-Cookie", stripLoopbackCookieDomain(c), true);
+        const fc = forwardableCookie(c, sessionId);
+        if (fc) putHeader("Set-Cookie", fc, true);
       }
     } else {
       // Path-mode is symmetric with the inbound gate above: every tunnel shares
@@ -1351,7 +1362,7 @@ export class SessionRoom {
 
     const cookieVal = await hmacHex(meta.signingKey, "ok");
     const cookie =
-      `${AUTH_COOKIE_PREFIX}${sessionId}=${cookieVal}; ` +
+      `${authCookieName(sessionId, hostMode)}=${cookieVal}; ` +
       `Path=${root}; ` +
       `Max-Age=${COOKIE_MAX_AGE}; ` +
       `HttpOnly; Secure; SameSite=Lax`;
@@ -1586,34 +1597,29 @@ function loopbackLocationPath(loc: string): string | null {
   return isLoopback ? u.pathname + u.search : null;
 }
 
-// stripLoopbackCookieDomain removes a Domain attribute that names a loopback
-// host, leaving the rest of the cookie byte-for-byte alone.
+// forwardableCookie is an app's Set-Cookie as the visitor may receive it:
+// with no Domain attribute, so it is host-only for the tunnel's own origin; or
+// "" when it names reminal's own gate cookie, which no app may set.
 //
-// An app behind the tunnel believes it is serving 127.0.0.1, so it scopes its
-// session cookie there: "sid=…; Path=/; Domain=127.0.0.1". The visitor's origin
-// is port-<id>.reminal.app, and a browser correctly refuses a cookie for a
-// domain it is not on — so the cookie silently vanishes and the user is logged
-// out on the very next request, with nothing in any log to explain it.
-//
-// Dropping the attribute (rather than rewriting it to the public host) makes the
-// cookie host-only for the tunnel's own origin: strictly the narrower scope, and
-// it can never widen one. A Domain naming any OTHER host is left untouched, the
-// same way a genuine off-site Location redirect is. Cookies carrying the
-// __Host- prefix become valid rather than invalid here, since that prefix
-// forbids Domain outright.
-function stripLoopbackCookieDomain(cookie: string): string {
+// Every port-<id>.reminal.app is the same site, so a cookie one tunnel's app
+// set for Domain=reminal.app would reach every other tunnel's app too: an
+// app could log a visitor into another tunnel's app as someone else. Host-only
+// is strictly the narrower scope, and can never widen one. It also mends the
+// commonest Domain an app sends: one that believes it serves 127.0.0.1 emits
+// "Domain=127.0.0.1", which the browser rightly refuses on port-<id>.reminal.app
+// (the login appears to succeed and is gone by the next request). Cookies
+// carrying the __Host- prefix become valid rather than invalid here, since that
+// prefix forbids Domain outright. The rest of the cookie is left byte for byte.
+function forwardableCookie(cookie: string, sessionId: string): string {
   const parts = cookie.split(";");
+  const eq0 = parts[0].indexOf("=");
+  const name = (eq0 < 0 ? "" : parts[0].slice(0, eq0)).trim();
+  if (isAuthCookie(name, sessionId)) return "";
   const kept = parts.filter((part, i) => {
     if (i === 0) return true; // the name=value pair itself is never an attribute
     const eq = part.indexOf("=");
-    if (eq < 0) return true; // valueless attribute (Secure, HttpOnly)
-    if (part.slice(0, eq).trim().toLowerCase() !== "domain") return true;
-    // A Domain may carry a leading dot ("Domain=.127.0.0.1"), which is legal and
-    // means the same host; strip it before deciding.
-    const host = part.slice(eq + 1).trim().toLowerCase().replace(/^\./, "");
-    const isLoopback =
-      host === "localhost" || host === "::1" || host === "[::1]" || host.startsWith("127.");
-    return !isLoopback;
+    const attr = (eq < 0 ? part : part.slice(0, eq)).trim().toLowerCase();
+    return attr !== "domain";
   });
   return kept.join(";");
 }
@@ -1691,6 +1697,35 @@ function isNavigationRequest(request: Request): boolean {
   return (request.headers.get("accept") ?? "").includes("text/html");
 }
 
+// authCookieName is the PIN gate's cookie. On a tunnel's own origin it carries
+// the __Host- prefix, so the browser keeps only one set by that very host, at
+// Path=/, with no Domain: another port-<id>.reminal.app (same site, and an
+// attacker's tunnel can be one) cannot set or shadow it. Under /p/<id>/ on the
+// relay's host it is confined to that path, which __Host- does not allow.
+function authCookieName(sessionId: string, hostMode: boolean): string {
+  return (hostMode ? "__Host-" : "") + AUTH_COOKIE_PREFIX + sessionId;
+}
+
+// isAuthCookie: either form of the gate's cookie for this tunnel. Browsers
+// match the __Host- prefix without regard to case.
+function isAuthCookie(name: string, sessionId: string): boolean {
+  const n = name.toLowerCase();
+  const base = (AUTH_COOKIE_PREFIX + sessionId).toLowerCase();
+  return n === base || n === "__host-" + base;
+}
+
+// fromAnotherTunnel reports a request that another tunnel's page made to this
+// one. Every port-<id>.reminal.app is the same site, so the gate cookie
+// (SameSite=Lax) goes along on it: an attacker's tunnel could otherwise post
+// forms and run fetches against a visitor's other tunnels as them. Browsers
+// mark such a request Sec-Fetch-Site: same-site (a tunnel's own requests are
+// same-origin). Only a plain link followed, a GET navigation, still passes,
+// as it would from any other site.
+function fromAnotherTunnel(request: Request): boolean {
+  if (request.headers.get("sec-fetch-site") !== "same-site") return false;
+  return request.method !== "GET" || request.headers.get("sec-fetch-mode") !== "navigate";
+}
+
 function parseCookies(header: string): Record<string, string> {
   const out: Record<string, string> = {};
   if (!header) return out;
@@ -1698,6 +1733,11 @@ function parseCookies(header: string): Record<string, string> {
     const eq = part.indexOf("=");
     if (eq < 0) continue;
     const name = part.slice(0, eq).trim();
+    // The first of a repeated name wins. A browser sends the most specific
+    // first (the longest Path, then the oldest); a later one of the same name
+    // is a cookie some other host of the site set at a wider scope, to shadow
+    // the visitor's own.
+    if (Object.prototype.hasOwnProperty.call(out, name)) continue;
     const raw = part.slice(eq + 1).trim();
     // decodeURIComponent THROWS on a malformed escape, and this runs over every
     // cookie the visitor carries — not just ours. One app cookie containing a
@@ -1720,7 +1760,6 @@ function parseCookies(header: string): Record<string, string> {
 // their original substrings (no decode/re-encode) so nothing is corrupted.
 function stripAuthCookie(header: string, sessionId: string): string {
   if (!header) return "";
-  const authName = AUTH_COOKIE_PREFIX + sessionId;
   return header
     .split(";")
     .map((p) => p.trim())
@@ -1728,7 +1767,7 @@ function stripAuthCookie(header: string, sessionId: string): string {
       if (!p) return false;
       const eq = p.indexOf("=");
       const name = (eq < 0 ? p : p.slice(0, eq)).trim();
-      return name !== authName;
+      return !isAuthCookie(name, sessionId);
     })
     .join("; ");
 }
