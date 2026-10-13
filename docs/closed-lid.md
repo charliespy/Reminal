@@ -111,6 +111,22 @@ treats EOF as an exit order. If the agent dies — SIGKILL, crash, upgrade — t
 pipe closes and the display goes with it. No orphaned lies about monitors that
 outlive the thing that needed them.
 
+## The screen behind the lid
+
+With sleep disabled, a shut MacBook doesn't turn its built-in screen off: it
+stays online, lit at whatever brightness it had, behind the lid. So while
+closed-lid mode is on the agent also runs `reminal-capture liddim`, which
+watches the lid (`AppleClamshellState` on the root power domain) and sets the
+built-in screen's brightness to 0 when it shuts and back when it opens.
+
+Brightness rather than display sleep, because display sleep is all-or-nothing:
+it would take the virtual display down too, stop the compositor that mirroring
+reads from, and can lock the Mac. The brightness it took away is written to
+`~/.reminal/liddim-brightness` before the screen goes dark, so a killed helper
+never loses it, and on open it is put back only if the screen is still dark: a
+brightness you set in the meantime stands. Like the display helper, it treats
+stdin EOF as an exit order, and puts the brightness back on the way out.
+
 ## Why bother
 
 Once a lid-shut Mac keeps rendering, the rest follows. reminal streams every

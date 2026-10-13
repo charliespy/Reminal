@@ -46,6 +46,7 @@ func settingRows() []settingRow {
 			label: "Closed-lid mode",
 			desc: "Leave & forget: keep serving with the lid shut and nothing plugged in. Disables lid-close sleep (asks for your admin password via sudo pmset) and " +
 				"auto-creates a virtual display while no monitor is attached, so remote view and control keep working in any unplug order. " +
+				"The built-in screen goes dark while the lid is shut and comes back when it opens. " +
 				"Costs battery when unplugged — and never bag a running laptop.",
 			get:   func(s *config.Settings) bool { return s.ClosedLid },
 			set:   func(s *config.Settings, v bool) { s.ClosedLid = v },

@@ -120,6 +120,8 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 	}
 	defer reap()
 	defer releaseCensusLease()
+	var dim lidDimmer
+	defer dim.stop()
 
 	for {
 		if sleepOrStop(stop, vdisplayPoll) {
@@ -135,14 +137,17 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 			// Yield anything we were holding from before the owner appeared;
 			// it picks the display up on its next tick, once the lock is free.
 			reap()
+			dim.stop()
 			continue
 		}
 		claimCensusLease()
 
 		if !config.LoadSettings().ClosedLid {
 			reap()
+			dim.stop()
 			continue
 		}
+		dim.ensure()
 		// A child that died on its own (interface change, manual kill) must not
 		// look like coverage.
 		if child != nil {

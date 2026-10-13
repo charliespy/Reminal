@@ -33,6 +33,7 @@ import CoreServices
 import CoreVideo
 import Foundation
 import ImageIO
+import IOKit
 import ScreenCaptureKit
 import VideoToolbox
 
@@ -268,6 +269,10 @@ if args.count >= 2, args[1] == "auto-check" {
     exit(0)
 }
 
+// liddimCheck is how the IOKit interest callback, a C function pointer that
+// cannot capture, reaches the liddim subcommand's check.
+var liddimCheck: (() -> Void)?
+
 func die(_ msg: String) -> Never {
     FileHandle.standardError.write(Data((msg + "\n").utf8))
     exit(1)
@@ -303,6 +308,162 @@ let flagH264Key: UInt8 = 2
 // prefix marking an out-of-band error frame (why the stream is ending) rather
 // than a picture.
 let errFrameMagic: UInt32 = 0xFFFF_FFFF
+
+// Lid dimmer subcommand: `reminal-capture liddim <state-file>`, run by the
+// agent while closed-lid mode is on. With sleep disabled, a shut MacBook keeps
+// its built-in screen online, lit at whatever brightness it had, behind the
+// lid. This watches the lid and turns that screen's brightness to 0 when it
+// shuts, and back to what it was when it opens. Brightness rather than display
+// sleep: display sleep is all-or-nothing on macOS (the virtual display too),
+// stops the compositor, so mirroring freezes, and can lock the Mac.
+//
+// The brightness it took away is written to <state-file> before the screen is
+// dimmed, so it is never lost: a helper killed while the lid is shut puts it
+// back the next time it runs with the lid open. On open it is restored only if
+// the screen is still at 0; a brightness someone set in the meantime stands.
+// Stdin is the agent's lifeline: EOF (closed-lid mode off, agent gone) and
+// SIGTERM restore before exiting.
+//
+// The lid is the root power domain's AppleClamshellState, re-read on every
+// power-management interest message and every 2s as a backstop. Brightness is
+// the private DisplayServices framework (what the brightness keys use), loaded
+// at runtime: a macOS without it, or a Mac with no built-in screen, makes this
+// exit(1) and the agent stops asking.
+//
+// REMINAL_LIDDIM_FAKE=<dir> replaces the lid with <dir>/lid ("1" shut) and the
+// screen with <dir>/brightness (a float), so the logic runs on a machine with
+// neither (a VM). Never set by reminal itself.
+if args.count >= 2, args[1] == "liddim" {
+    guard args.count >= 3 else {
+        FileHandle.standardError.write(Data("usage: reminal-capture liddim <state-file>\n".utf8))
+        exit(2)
+    }
+    let statePath = args[2]
+    let fake = ProcessInfo.processInfo.environment["REMINAL_LIDDIM_FAKE"].flatMap { $0.isEmpty ? nil : $0 }
+    func say(_ s: String) {
+        print(s)
+        FileHandle.standardOutput.synchronizeFile()
+    }
+
+    // ---- the lid ----
+    let rootDomain = fake == nil
+        ? IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain")) : 0
+    func lidShut() -> Bool? {
+        if let fake {
+            guard let s = try? String(contentsOfFile: fake + "/lid", encoding: .utf8) else { return nil }
+            return s.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+        }
+        guard rootDomain != 0,
+              let v = IORegistryEntryCreateCFProperty(rootDomain, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)?
+                  .takeRetainedValue() as? Bool
+        else { return nil }
+        return v
+    }
+    if fake == nil && lidShut() == nil { die("liddim: this Mac reports no lid") }
+
+    // ---- the built-in screen's brightness ----
+    typealias GetFn = @convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Float>) -> Int32
+    typealias SetFn = @convention(c) (CGDirectDisplayID, Float) -> Int32
+    var getB: GetFn?, setB: SetFn?
+    if fake == nil {
+        guard let h = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY),
+              let g = dlsym(h, "DisplayServicesGetBrightness"), let st = dlsym(h, "DisplayServicesSetBrightness")
+        else { die("liddim: DisplayServices unavailable") }
+        getB = unsafeBitCast(g, to: GetFn.self)
+        setB = unsafeBitCast(st, to: SetFn.self)
+    }
+    // The built-in screen, while it is online. With the lid shut and an
+    // external monitor attached macOS takes it offline itself: nothing to dim.
+    func builtin() -> CGDirectDisplayID? {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var n: UInt32 = 0
+        guard CGGetOnlineDisplayList(16, &ids, &n) == .success else { return nil }
+        return ids.prefix(Int(n)).first { CGDisplayIsBuiltin($0) != 0 }
+    }
+    func brightness() -> Float? {
+        if let fake {
+            return (try? String(contentsOfFile: fake + "/brightness", encoding: .utf8))
+                .flatMap { Float($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+        guard let d = builtin(), let getB else { return nil }
+        var v: Float = 0
+        return getB(d, &v) == 0 ? v : nil
+    }
+    func setBrightness(_ v: Float) -> Bool {
+        if let fake {
+            return (try? String(v).write(toFile: fake + "/brightness", atomically: true, encoding: .utf8)) != nil
+        }
+        guard let d = builtin(), let setB else { return false }
+        return setB(d, v) == 0
+    }
+
+    // ---- what was taken away ----
+    func saved() -> Float? {
+        (try? String(contentsOfFile: statePath, encoding: .utf8))
+            .flatMap { Float($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+    let dark: Float = 0.001
+
+    // restore puts the saved brightness back if the screen is still dark.
+    // The record goes either way: once the lid is open, a brightness someone
+    // chose is theirs.
+    func restore() {
+        // No reading (the screen is offline: lid shut with a monitor attached)
+        // says nothing about what someone chose; keep the record for later.
+        guard let was = saved(), let now = brightness() else { return }
+        if now <= dark {
+            if setBrightness(was) { say("restored \(was)") } else { return } // keep the record; try again
+        } else {
+            say("left as set")
+        }
+        try? FileManager.default.removeItem(atPath: statePath)
+    }
+    func dim() {
+        guard let now = brightness() else { return }
+        if now > dark {
+            // The record first: a dark screen with no record is a brightness
+            // lost. An existing one stands: the screen lit again while the lid
+            // stayed shut (auto-brightness) is not what to put back.
+            if saved() == nil {
+                guard (try? String(now).write(toFile: statePath, atomically: true, encoding: .utf8)) != nil else { return }
+            }
+            if setBrightness(0) { say("dimmed from \(now)") }
+        }
+    }
+    func check() {
+        guard let shut = lidShut() else { return }
+        if shut { dim() } else { restore() }
+    }
+
+    let q = DispatchQueue(label: "reminal.liddim")
+    func finish() -> Never {
+        q.sync { restore() }
+        exit(0)
+    }
+    signal(SIGTERM, SIG_IGN)
+    let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: q)
+    term.setEventHandler { restore(); exit(0) }
+    term.resume()
+    DispatchQueue.global(qos: .utility).async {
+        while !FileHandle.standardInput.availableData.isEmpty {}
+        finish() // EOF: the agent is gone or closed-lid mode is off
+    }
+
+    if fake == nil, let port = IONotificationPortCreate(kIOMainPortDefault) {
+        IONotificationPortSetDispatchQueue(port, q)
+        var note: io_object_t = 0
+        IOServiceAddInterestNotification(port, rootDomain, kIOGeneralInterest, { _, _, _, _ in
+            liddimCheck?()
+        }, nil, &note)
+    }
+    liddimCheck = { check() }
+    let tick = DispatchSource.makeTimerSource(queue: q)
+    tick.schedule(deadline: .now(), repeating: .seconds(2))
+    tick.setEventHandler { check() }
+    tick.resume()
+    say("liddim up")
+    dispatchMain()
+}
 
 // Multi-stream server subcommand: `reminal-capture serve` hosts EVERY capture
 // in this one process — see runServeMode below for the protocol and for why

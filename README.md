@@ -414,7 +414,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | `reminal machines [rename <id\|name> <new-name>]` | List every machine you own and its live sessions (web Machines panel manages them) |
 | `reminal info [id\|name] [--all] [--qr] [--json]` | Show connect details — ID / PIN / URL / QR |
 | `reminal qr [id\|name]` | Print just the join QR (for a second screen) |
-| `reminal settings` | Settings page: keep the Mac unlocked for remote control; **closed-lid mode** (serve with the lid shut and nothing plugged in — disables clamshell sleep, auto-creates a virtual display while headless) |
+| `reminal settings` | Settings page: keep the Mac unlocked for remote control; **closed-lid mode** (serve with the lid shut and nothing plugged in — disables clamshell sleep, auto-creates a virtual display while headless, darkens the built-in screen while the lid is shut) |
 | `reminal doctor` | Self-diagnostic: version, relay reachability, terminal, shell |
 | `reminal permissions` | macOS: grant Screen Recording to reminal once, so background (`+`) sessions can mirror windows |
 | `reminal completion <bash\|zsh\|fish\|powershell>` | Print a shell completion script |
