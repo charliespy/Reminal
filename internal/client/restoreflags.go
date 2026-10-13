@@ -42,6 +42,10 @@ var (
 	takesValue = regexp.MustCompile(`^(<[^>]*>|\[[^\]]*\]|[A-Z][A-Z0-9_]*\b)`)
 )
 
+// maxEntryIndent is the deepest a flag's own entry is indented in a
+// --help; descriptions are indented further.
+const maxEntryIndent = 8
+
 // parseHelpFlags reads the flags out of a --help: commander (claude,
 // cursor-agent, pi), clap (codex) and yargs (gemini, qwen, opencode) all
 // list them one to a line, indented, as `-m, --model <MODEL>` or
@@ -55,13 +59,23 @@ func parseHelpFlags(help string) flagSpec {
 	value := false
 	flush := func() {
 		for _, n := range names {
-			spec[n] = value
+			// A flag's own entry comes first; a later one is never let
+			// stand in for it.
+			if _, ok := spec[n]; !ok {
+				spec[n] = value
+			}
 		}
 		names, value = nil, false
 	}
 	for _, line := range lines {
 		t := strings.TrimSpace(line)
-		if !strings.HasPrefix(t, "-") || t == "--" || !strings.HasPrefix(line, " ") {
+		// A flag's entry starts near the left; a line indented as far as
+		// the descriptions is one of them, wrapped — even one that begins
+		// with another flag's name ("--system-prompt or …"), which read
+		// as an entry made a flag that takes a value look like one that
+		// does not.
+		deep := len(line)-len(strings.TrimLeft(line, " \t")) > maxEntryIndent
+		if !strings.HasPrefix(t, "-") || t == "--" || !strings.HasPrefix(line, " ") || deep {
 			// A continuation of the entry above, where yargs may have
 			// wrapped its type.
 			if len(names) > 0 && t != "" {

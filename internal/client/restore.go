@@ -415,7 +415,7 @@ func resumePlanFor(r session.Restore, peers []session.Restore, shell string) (ar
 	argv, note = resumePlanBody(r, peers, shell)
 	if argv != nil {
 		if _, dropped, _ := resumeFlagsFor(r, shellUnsafe(shell)); len(dropped) > 0 {
-			left := "left out " + strings.Join(dropped, ", ") + ": they held characters a terminal would act on"
+			left := "left out " + strings.Join(dropped, ", ")
 			if note != "" {
 				note += "; " + left
 			} else {
@@ -587,12 +587,20 @@ func resumeFlagsFor(r session.Restore, unsafe func(string) bool) (flags, dropped
 			continue
 		}
 		kept := []string{a}
-		if takes && !hasValue && i+1 < len(args) {
+		if takes && !hasValue {
+			// Its value is the next argument. Without one — it came last, or
+			// another flag follows — it is left out: kept bare, it would take
+			// what the resume puts after it (--resume and its id) as its value,
+			// and the agent would start a new conversation.
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				dropped = append(dropped, noteSafe(name, 40)+" (no value of its own)")
+				continue
+			}
 			kept = append(kept, args[i+1])
 			i++
 		}
 		if unsafe(kept[0]) || (len(kept) == 2 && unsafe(kept[1])) {
-			dropped = append(dropped, noteSafe(name, 40))
+			dropped = append(dropped, noteSafe(name, 40)+" (characters a terminal would act on)")
 			continue
 		}
 		flags = append(flags, kept...)
