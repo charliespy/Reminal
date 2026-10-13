@@ -8474,9 +8474,56 @@
     // Waking the page (or the network coming back) shouldn't sit out a 30s
     // backoff that grew while every throttled background retry failed — dial
     // immediately and let the normal machinery take over.
+    // ---- A socket that says it is open but has died ----
+    // A network change (wifi to cell, a new address) leaves the old socket
+    // "open" with nothing behind it: no close ever comes, and what is typed
+    // goes nowhere. So when the network comes back, the page is shown again,
+    // or a key gets nothing back, the socket is asked — a ping — and given
+    // the round trip it has been taking, twice, and a second; silent past
+    // that, it is dropped and the session dialled again at once. Keys typed
+    // from then on wait for the new connection (held, as when connecting);
+    // those already sent into the dead one are counted on screen — never
+    // shown, they may have been a password — so nothing is lost unsaid.
+    let probe = null;     // { sock, timer }: a ping out, waiting for anything back
+    let echoWatch = 0;    // a key sent, nothing back yet
+    let unechoed = 0;     // characters sent since anything last came back
+    function probeDeadline() { return Math.max(1500, 2 * (observedRTT || 0) + 1000); }
+    function noteInbound(sock) {
+      if (sock !== ws) return;
+      unechoed = 0;
+      if (echoWatch) { clearTimeout(echoWatch); echoWatch = 0; }
+      if (probe) { clearTimeout(probe.timer); probe = null; }
+    }
+    function probeSocket(why) {
+      if (!ws || ws.readyState !== WebSocket.OPEN || probe || manualClose || fatal) return;
+      const sock = ws;
+      try { sock.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
+      probe = { sock, timer: setTimeout(() => { probe = null; if (ws === sock) socketDead(why); }, probeDeadline()) };
+    }
+    function noteKeySent(n) {
+      unechoed += n;
+      if (!echoWatch && !probe) echoWatch = setTimeout(() => { echoWatch = 0; probeSocket('no echo'); }, probeDeadline());
+    }
+    function socketDead(why) {
+      dbg('socket silent past ' + probeDeadline() + 'ms (' + why + ') — dialling again');
+      if (echoWatch) { clearTimeout(echoWatch); echoWatch = 0; }
+      const lost = unechoed;
+      unechoed = 0;
+      if (lost) term.write('\r\n\x1b[2m[reminal] The connection dropped: the last ' + lost + ' character' + (lost === 1 ? '' : 's') + ' you typed may not have reached the session.\x1b[0m\r\n');
+      const sock = ws;
+      ws = null;
+      try { sock.onopen = null; sock.onmessage = null; sock.onclose = null; sock.onerror = null; sock.close(); } catch (_) {}
+      authed = false;
+      agentLive = false;
+      if (helloShown) { reconnectMessagePending = true; winStreamsNeedRestart = true; }
+      backoffMs = 1000;
+      cancelReconnect();
+      openSocket();
+    }
     function fastReconnect() {
       if (manualClose || fatal || !helloShown) return;
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+      if (ws && ws.readyState === WebSocket.OPEN) { probeSocket('back'); return; } // open, maybe only in name
+      if (ws && ws.readyState === WebSocket.CONNECTING) return;
       backoffMs = 1000;
       cancelReconnect();
       openSocket();
@@ -8582,6 +8629,9 @@
     function openSocket() {
       cancelReconnect();
       cancelDial();
+      // A probe or a key's wait belongs to the socket it was for.
+      if (probe) { clearTimeout(probe.timer); probe = null; }
+      if (echoWatch) { clearTimeout(echoWatch); echoWatch = 0; }
       if (ws) {
         // Detach handlers BEFORE closing so any messages already in-flight
         // on the old socket don't fire our onmessage as they arrive —
@@ -8702,7 +8752,9 @@
         lastPingAt = Date.now();
       };
 
+      const thisWs = ws;
       ws.onmessage = async (ev) => {
+        noteInbound(thisWs);
         let msg;
         try { msg = JSON.parse(ev.data); } catch { return; }
         await handleMessage(msg);
@@ -9614,6 +9666,7 @@
         bytes.forEach(b => binary += String.fromCharCode(b));
         await send({ type: 'data', data: btoa(binary) });
         bytesSent += bytes.byteLength;
+        noteKeySent(data.length);
       });
       sendChain = result.catch(() => {}); // keep chain alive on errors
       return result;
