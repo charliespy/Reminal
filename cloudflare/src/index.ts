@@ -50,9 +50,9 @@ function internalHeaders(src: Headers): Headers {
 // (/p, its own host: a page's assets come many at once). Counted where the
 // count is the count (the RateLimiter), each isolate's own only where that
 // cannot be asked.
-// An address is not one machine: machines behind one NAT, or one cloud's
-// way out, share it, and after a relay's restart all their agents come back
-// at once. So the machines' own sockets (/ws agent, tunnel) are counted
+// An address is not one machine: machines behind one NAT, or a hosting
+// provider's shared egress, share it, and after a relay's restart all their
+// agents come back at once. So the machines' own sockets (/ws agent, tunnel) are counted
 // apart from the viewers' and copies', with room for many machines.
 const SOCKETS_PER_MIN = 120;
 const AGENT_SOCKETS_PER_MIN = 1200;

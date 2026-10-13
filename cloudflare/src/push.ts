@@ -46,8 +46,8 @@ function allowedEndpoint(raw: unknown): URL | null {
 // asked: per subscription, and per caller (its address, IPv6 by its /64). A
 // machine's watcher sends a handful of alerts a day; these are brakes on a
 // runaway loop or on someone sending through this relay, not quotas. An
-// address can be many machines (one NAT, one cloud's way out), so a caller
-// has room for many subscriptions' worth. Nothing is counted per push
+// address can be many machines (one NAT, a hosting provider's shared
+// egress), so a caller has room for many subscriptions' worth. Nothing is counted per push
 // service: one count for everyone is one anyone could use up.
 // In an isolate, the oldest counts go first, never all at once.
 const PER_CALLER = { calls: 600, period: 60 };

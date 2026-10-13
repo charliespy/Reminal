@@ -86,9 +86,9 @@ for (const [name, path, host, scope] of [
   await worker.fetch(req(path, host), yes.e);
   out.push(name + " allowed asked " + yes.seen.filter((s) => s.startsWith("lim:")).join(",") + " touched " + yes.seen.filter((s) => !s.startsWith("lim:")).length);
 }
-// one address, many machines (a NAT, a cloud's way out): with no limiter
-// bound, the isolate's own count: 120 viewers' sockets a minute, and the
-// machines' own sockets counted apart, 1200
+// one address, many machines (a NAT, a hosting provider's shared egress):
+// with no limiter bound, the isolate's own count: 120 viewers' sockets a
+// minute, and the machines' own sockets counted apart, 1200
 const solo = { SESSION: { idFromName: (n) => n, get: () => ({ fetch: async () => new Response("ok") }) } };
 const ip = (path) => new Request("https://live.reminal.app" + path, { headers: { "cf-connecting-ip": "198.51.100.7" } });
 for (const [name, path, n] of [["viewers", "/ws/ABC123/viewer", 121], ["agents", "/ws/ABC123/agent", 1201]]) {
