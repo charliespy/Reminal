@@ -319,8 +319,11 @@ let errFrameMagic: UInt32 = 0xFFFF_FFFF
 //
 // The brightness it took away is written to <state-file> before the screen is
 // dimmed, so it is never lost: a helper killed while the lid is shut puts it
-// back the next time it runs with the lid open. On open it is restored only if
-// the screen is still at 0; a brightness someone set in the meantime stands.
+// back the next time it runs with the lid open. On open it is restored if the
+// screen is below it, dark or at the low level macOS's auto-brightness picks
+// after a long time in the dark; once the lid is open the record is gone, so a
+// brightness someone sets afterwards stands. Each event is a line on stdout,
+// which the agent logs.
 // Stdin is the agent's lifeline: EOF (closed-lid mode off, agent gone) and
 // SIGTERM restore before exiting.
 //
@@ -346,8 +349,13 @@ if args.count >= 2, args[1] == "liddim" {
     let fake: String? = nil
     #endif
     // fflush, not synchronizeFile: the latter throws when stdout is a pipe.
+    // Each line goes to the agent, which logs it (the daemon's log): what the
+    // dimmer saw and did, so a report from real hardware has evidence.
+    let stamp = ISO8601DateFormatter()
+    stamp.formatOptions = [.withInternetDateTime]
+    stamp.timeZone = .current
     func say(_ s: String) {
-        print(s)
+        print("\(stamp.string(from: Date())) \(s)")
         fflush(stdout)
     }
 
@@ -419,18 +427,35 @@ if args.count >= 2, args[1] == "liddim" {
     }
     func saved() -> Float? { recorded() ?? nil }
 
-    // restore puts the saved brightness back if the screen is still dark.
-    // The record goes either way: once the lid is open, a brightness someone
-    // chose is theirs.
+    // restore puts the saved brightness back if the screen is below it. The
+    // record goes either way: once the lid is open, a brightness someone
+    // chooses is theirs.
+    //
+    // below: how far under the record the screen must be to count as not
+    // put back. Readings round-trip through a float; this is not a choice.
+    let below: Float = 0.01
+    var offlineSaid = false
     func restore() {
-        // No reading (the screen is offline: lid shut with a monitor attached)
-        // says nothing about what someone chose; keep the record for later.
-        guard let rec = recorded(), let now = brightness() else { return }
-        if now <= dark {
-            let was = rec ?? fallback
-            if setBrightness(was) { say("restored \(was)") } else { return } // keep the record; try again
+        guard let rec = recorded() else { return }
+        // No reading (the screen is offline: lid shut with a monitor attached,
+        // or not yet back after a long sleep) says nothing about what someone
+        // chose; keep the record for the next look.
+        guard let now = brightness() else {
+            if !offlineSaid { say("screen not readable; keeping \(rec.map { String($0) } ?? "an unusable record")") }
+            offlineSaid = true
+            return
+        }
+        offlineSaid = false
+        // Put back whenever the screen is below what was taken: macOS's own
+        // auto-brightness sets a low level on open after the sensor sat in the
+        // dark under the lid, and that is not a choice anyone made. Nobody can
+        // lower it on purpose with the lid shut, and once it is open the record
+        // is gone, so a level set after this is left alone.
+        let was = rec ?? fallback
+        if now <= dark || now < was - below {
+            if setBrightness(was) { say("restored \(was) (screen was at \(now))") } else { return } // keep the record; try again
         } else {
-            say("left as set")
+            say("left as set: \(now) (had saved \(rec.map { String($0) } ?? "an unusable record"))")
         }
         try? FileManager.default.removeItem(atPath: statePath)
     }
@@ -443,11 +468,14 @@ if args.count >= 2, args[1] == "liddim" {
             if saved() == nil { // none, or one that cannot be trusted
                 guard (try? String(now).write(toFile: statePath, atomically: true, encoding: .utf8)) != nil else { return }
             }
-            if setBrightness(0) { say("dimmed from \(now)") }
+            if setBrightness(0) { say("dimmed from \(now) (saved \(saved().map { String($0) } ?? "nothing"))") }
         }
     }
+    var wasShut: Bool?
     func check() {
         guard let shut = lidShut() else { return }
+        if shut != wasShut { say(shut ? "lid shut" : "lid open") }
+        wasShut = shut
         if shut { dim() } else { restore() }
     }
 
