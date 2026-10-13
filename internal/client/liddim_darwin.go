@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Closed-lid mode, screen half. With sleep disabled, a shut MacBook keeps its
@@ -45,6 +47,11 @@ type lidDimmer struct {
 
 // ensure starts the dimmer unless it is running or cannot run here.
 func (l *lidDimmer) ensure() {
+	if l.cmd != nil && stoppedProcess(l.cmd.Process.Pid) {
+		// Stopped (SIGSTOP), it would keep the screen dark and never answer the
+		// lid. It is ended, the brightness put back, and a new one started.
+		l.stop()
+	}
 	if l.cmd != nil {
 		select {
 		case <-l.done:
@@ -66,7 +73,7 @@ func (l *lidDimmer) ensure() {
 	if err != nil || state == "" {
 		return
 	}
-	cmd := exec.Command(helper, "liddim", state)
+	cmd := helperCommand(helper, "liddim", state)
 	stdin, err := cmd.StdinPipe() // lifeline: EOF tells it to restore and exit
 	if err != nil {
 		return
@@ -91,9 +98,25 @@ func (l *lidDimmer) stop() {
 		return
 	}
 	_ = l.stdin.Close()
+	if stoppedProcess(l.cmd.Process.Pid) {
+		_ = l.cmd.Process.Kill() // a stopped helper reads no EOF
+	}
 	waitOrKill(l.cmd, l.done)
 	l.cmd, l.stdin, l.done = nil, nil, nil
+	// However it ended (restored and exited, killed after the grace, or died
+	// to a signal earlier), a record it left is put back now.
+	restoreLeftover()
 }
+
+// stoppedProcess reports whether pid is stopped (SIGSTOP, SIGTSTP): alive,
+// but running nothing.
+func stoppedProcess(pid int) bool {
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	return err == nil && kp.Proc.P_stat == sstop
+}
+
+// sstop is SSTOP from <sys/proc.h>: the process is stopped.
+const sstop = 4
 
 // restoreLeftover puts back a brightness that a dimmer killed with the lid
 // shut left in the state file: a short run whose stdin is /dev/null restores
@@ -110,7 +133,7 @@ func restoreLeftover() {
 	if err != nil {
 		return
 	}
-	cmd := exec.Command(helper, "liddim", state)
+	cmd := helperCommand(helper, "liddim", state)
 	if err := cmd.Start(); err != nil {
 		return
 	}

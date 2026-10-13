@@ -45,6 +45,7 @@ var (
 )
 
 func main() {
+	client.SetBuildVersion(version)
 	// Make the console render ANSI escapes (no-op outside Windows/conhost).
 	enableVTConsole()
 	if err := config.ValidateRelayURLs(); err != nil {

@@ -517,7 +517,7 @@ func (darwinWindows) dragPhase(w winInfo, phase string, fx, fy float64) error {
 	}
 	x := w.X + int(fx*float64(w.W))
 	y := w.Y + int(fy*float64(w.H))
-	_, err = run(p, "drag", phase, strconv.Itoa(x), strconv.Itoa(y))
+	_, err = runHelper(p, "drag", phase, strconv.Itoa(x), strconv.Itoa(y))
 	return err
 }
 
@@ -562,7 +562,7 @@ func (darwinWindows) scroll(w winInfo, fx, fy, dx, dy float64) error {
 	// script works, which is why clicks were fine). The helper is also ~5×
 	// faster per event than an osascript spawn.
 	if p, err := captureHelperPath(); err == nil {
-		if _, err := run(p, "scroll", strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(w1), strconv.Itoa(w2)); err == nil {
+		if _, err := runHelper(p, "scroll", strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(w1), strconv.Itoa(w2)); err == nil {
 			return nil
 		}
 	}

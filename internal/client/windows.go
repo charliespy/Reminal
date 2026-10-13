@@ -2899,9 +2899,21 @@ func run(name string, args ...string) (string, error) {
 // never returns holds every request queued behind it, on the whole machine
 // channel, for as long as the daemon lives.
 func runTimeout(d time.Duration, name string, args ...string) (string, error) {
+	return runTimeoutEnv(d, nil, name, args...)
+}
+
+// runHelper is run for the capture helper: its environment filtered as every
+// helper spawn's is (helperEnv).
+func runHelper(path string, args ...string) (string, error) {
+	return runTimeoutEnv(runCeiling, helperEnv(), path, args...)
+}
+
+// runTimeoutEnv is runTimeout with the child's environment given (nil: ours).
+func runTimeoutEnv(d time.Duration, env []string, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = env
 	// Killing the child is not enough: a grandchild it spawned can keep the
 	// stdout pipe open, and Output() then waits on the pipe, not the process.
 	// WaitDelay is what makes the ceiling real.

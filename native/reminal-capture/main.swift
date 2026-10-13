@@ -332,17 +332,23 @@ let errFrameMagic: UInt32 = 0xFFFF_FFFF
 //
 // REMINAL_LIDDIM_FAKE=<dir> replaces the lid with <dir>/lid ("1" shut) and the
 // screen with <dir>/brightness (a float), so the logic runs on a machine with
-// neither (a VM). Never set by reminal itself.
+// neither (a VM). Honoured only by a helper compiled with -D REMINAL_TEST_HOOKS;
+// a release helper ignores it.
 if args.count >= 2, args[1] == "liddim" {
     guard args.count >= 3 else {
         FileHandle.standardError.write(Data("usage: reminal-capture liddim <state-file>\n".utf8))
         exit(2)
     }
     let statePath = args[2]
+    #if REMINAL_TEST_HOOKS
     let fake = ProcessInfo.processInfo.environment["REMINAL_LIDDIM_FAKE"].flatMap { $0.isEmpty ? nil : $0 }
+    #else
+    let fake: String? = nil
+    #endif
+    // fflush, not synchronizeFile: the latter throws when stdout is a pipe.
     func say(_ s: String) {
         print(s)
-        FileHandle.standardOutput.synchronizeFile()
+        fflush(stdout)
     }
 
     // ---- the lid ----
@@ -398,11 +404,20 @@ if args.count >= 2, args[1] == "liddim" {
     }
 
     // ---- what was taken away ----
-    func saved() -> Float? {
-        (try? String(contentsOfFile: statePath, encoding: .utf8))
-            .flatMap { Float($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-    }
     let dark: Float = 0.001
+    // fallback is what a dark screen gets on open when the record cannot be
+    // trusted: lit and readable, rather than left dark.
+    let fallback: Float = 0.5
+    // recorded: nil with no record, else the record's brightness, or nil
+    // inside when it is not one this helper could have written (not a
+    // number, not finite, not in (dark, 1]).
+    func recorded() -> Float?? {
+        guard let s = try? String(contentsOfFile: statePath, encoding: .utf8) else { return nil }
+        guard let v = Float(s.trimmingCharacters(in: .whitespacesAndNewlines)),
+              v.isFinite, v > dark, v <= 1 else { return .some(nil) }
+        return .some(v)
+    }
+    func saved() -> Float? { recorded() ?? nil }
 
     // restore puts the saved brightness back if the screen is still dark.
     // The record goes either way: once the lid is open, a brightness someone
@@ -410,8 +425,9 @@ if args.count >= 2, args[1] == "liddim" {
     func restore() {
         // No reading (the screen is offline: lid shut with a monitor attached)
         // says nothing about what someone chose; keep the record for later.
-        guard let was = saved(), let now = brightness() else { return }
+        guard let rec = recorded(), let now = brightness() else { return }
         if now <= dark {
+            let was = rec ?? fallback
             if setBrightness(was) { say("restored \(was)") } else { return } // keep the record; try again
         } else {
             say("left as set")
@@ -424,7 +440,7 @@ if args.count >= 2, args[1] == "liddim" {
             // The record first: a dark screen with no record is a brightness
             // lost. An existing one stands: the screen lit again while the lid
             // stayed shut (auto-brightness) is not what to put back.
-            if saved() == nil {
+            if saved() == nil { // none, or one that cannot be trusted
                 guard (try? String(now).write(toFile: statePath, atomically: true, encoding: .utf8)) != nil else { return }
             }
             if setBrightness(0) { say("dimmed from \(now)") }
@@ -440,10 +456,15 @@ if args.count >= 2, args[1] == "liddim" {
         q.sync { restore() }
         exit(0)
     }
-    signal(SIGTERM, SIG_IGN)
-    let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: q)
-    term.setEventHandler { restore(); exit(0) }
-    term.resume()
+    // SIGTERM, SIGINT and SIGHUP all end it the same way: brightness first.
+    var enders: [DispatchSourceSignal] = []
+    for sig in [SIGTERM, SIGINT, SIGHUP] {
+        signal(sig, SIG_IGN)
+        let src = DispatchSource.makeSignalSource(signal: sig, queue: q)
+        src.setEventHandler { restore(); exit(0) }
+        src.resume()
+        enders.append(src)
+    }
     DispatchQueue.global(qos: .utility).async {
         while !FileHandle.standardInput.availableData.isEmpty {}
         finish() // EOF: the agent is gone or closed-lid mode is off
@@ -462,7 +483,7 @@ if args.count >= 2, args[1] == "liddim" {
     tick.setEventHandler { check() }
     tick.resume()
     say("liddim up")
-    dispatchMain()
+    withExtendedLifetime(enders) { dispatchMain() }
 }
 
 // Multi-stream server subcommand: `reminal-capture serve` hosts EVERY capture

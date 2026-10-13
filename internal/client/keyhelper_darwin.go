@@ -83,7 +83,7 @@ func (k *keyHelper) start() bool {
 		k.dead = true
 		return false
 	}
-	cmd := exec.Command(path, "keys")
+	cmd := helperCommand(path, "keys")
 	cmd.Stdin = inR
 	cmd.Stdout = outW
 	if err := cmd.Start(); err != nil {
