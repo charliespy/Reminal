@@ -1,7 +1,8 @@
 import { SessionRoom } from "./session";
 import { RendezvousRoom } from "./rendezvous";
 import { handlePush, handlePushKey, type PushEnv } from "./push";
-import { RateLimiter, type LimiterEnv } from "./limiter";
+import { RateLimiter, allow, inIsolate, type LimiterEnv } from "./limiter";
+import { addressGroup } from "./session";
 
 export { SessionRoom, RendezvousRoom, RateLimiter };
 
@@ -41,6 +42,27 @@ function internalHeaders(src: Headers): Headers {
     if (k.toLowerCase().startsWith("x-reminal-")) h.delete(k);
   }
   return h;
+}
+
+// What one caller (its address, an IPv6 one by its /64) may ask of the relay
+// a minute, before any session's or rendezvous's object is touched — every
+// name makes one: sockets opened (/ws, /rv), and a forwarded app's requests
+// (/p, its own host: a page's assets come many at once). Counted where the
+// count is the count (the RateLimiter), each isolate's own only where that
+// cannot be asked.
+const SOCKETS_PER_MIN = 120;
+const TUNNEL_PER_MIN = 1200;
+const socketAsks = new Map<string, number[]>();
+const tunnelAsks = new Map<string, number[]>();
+
+async function callerWithin(env: Env, request: Request, scope: string, counts: Map<string, number[]>, perMin: number): Promise<boolean> {
+  const who = addressGroup(request.headers.get("cf-connecting-ip") ?? "");
+  const c = await allow(env, scope, who, perMin, 60);
+  return c === true || (c === null && inIsolate(counts, who, perMin, 60));
+}
+
+function tooMany(): Response {
+  return new Response("too many requests — try again in a minute", { status: 429 });
 }
 
 // tunnelOrigin returns the origin a forward should be served from, or "" when
@@ -84,6 +106,7 @@ export default {
     const hostHeader = request.headers.get("host") || url.hostname;
     const hostSub = hostHeader.match(/^port-([a-z0-9]+)\./i);
     if (hostSub) {
+      if (!(await callerWithin(env, request, "tunnel", tunnelAsks, TUNNEL_PER_MIN))) return tooMany();
       const sessionId = hostSub[1].toUpperCase();
       const id = env.SESSION.idFromName(sessionId);
       const stub = env.SESSION.get(id);
@@ -101,6 +124,7 @@ export default {
     // tunnel is for port-forward agents (registered by `reminal expose`).
     const wsMatch = url.pathname.match(/^\/ws\/([A-Z0-9]+)\/(agent|viewer|tunnel)$/i);
     if (wsMatch) {
+      if (!(await callerWithin(env, request, "sockets", socketAsks, SOCKETS_PER_MIN))) return tooMany();
       const sessionId = wsMatch[1].toUpperCase();
       const role = wsMatch[2].toLowerCase();
       const id = env.SESSION.idFromName(sessionId);
@@ -114,6 +138,7 @@ export default {
     // Routed to a per-code RendezvousRoom DO that blindly pairs the two.
     const rvMatch = url.pathname.match(/^\/rv\/([A-Z0-9]+)\/(source|paste)$/i);
     if (rvMatch) {
+      if (!(await callerWithin(env, request, "sockets", socketAsks, SOCKETS_PER_MIN))) return tooMany();
       const code = rvMatch[1].toUpperCase();
       const role = rvMatch[2].toLowerCase();
       const id = env.RENDEZVOUS.idFromName(code);
@@ -163,6 +188,7 @@ export default {
           headers: { Location: `${ownOrigin}${rest}${url.search}` },
         });
       }
+      if (!(await callerWithin(env, request, "tunnel", tunnelAsks, TUNNEL_PER_MIN))) return tooMany();
       const id = env.SESSION.idFromName(sessionId);
       const stub = env.SESSION.get(id);
       const doUrl = new URL(request.url);

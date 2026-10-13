@@ -41,6 +41,10 @@ const MAX_WS_FRAME_BYTES = 700 * 1024;
 // accept/close churn (and tunnel_ws_open amplification) that the agent-side cap
 // would only catch after the fact. Matches the agent's maxWSStreams.
 const MAX_VISITOR_SOCKETS = 512;
+// Viewers one session takes at once — open or kept for a quick switch back:
+// every viewer-tagged socket. A person has a few; refused before accepting,
+// so nobody can open sockets on a session without end.
+export const MAX_VIEWER_SOCKETS = 64;
 
 // Largest request body we'll relay. Matches the agent's assembled-body ceiling
 // (maxTunnelResponse), so anything bigger would be truncated into garbage
@@ -173,6 +177,12 @@ export class SessionRoom {
 
     if (role !== "agent" && role !== "viewer" && role !== "tunnel") {
       return new Response("invalid role", { status: 400 });
+    }
+
+    // Refused before accepting, as a visitor past its cap is: no socket, and
+    // no accept-then-close churn to pay for.
+    if (role === "viewer" && this.getSockets("viewer").length >= MAX_VIEWER_SOCKETS) {
+      return new Response("reminal: too many viewers on this session\n", { status: 503 });
     }
 
     const meta = await this.loadMeta();
