@@ -455,7 +455,7 @@ var bootTimeFn = bootTime
 
 // readActiveRaw is a record as it is on disk: no PIN opened or asked for.
 func readActiveRaw(path string) (*Active, error) {
-	data, err := os.ReadFile(path)
+	data, err := readRecord(path, maxActiveRecord)
 	if err != nil {
 		return nil, err
 	}
@@ -467,7 +467,7 @@ func readActiveRaw(path string) (*Active, error) {
 }
 
 func readActiveFile(path string) (*Active, error) {
-	data, err := os.ReadFile(path)
+	data, err := readRecord(path, maxActiveRecord)
 	if err != nil {
 		return nil, err
 	}

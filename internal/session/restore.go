@@ -185,7 +185,7 @@ func ReadRestore(id string) (*Restore, error) {
 	if lerr == nil {
 		_ = os.Remove(lp) // superseded by the sealed one, and not to be trusted
 	}
-	blob, err := os.ReadFile(p)
+	blob, err := readRecord(p, maxRestoreRecord)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func readLegacyRestore(id string) (*Restore, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(lp)
+	b, err := readRecord(lp, maxRestoreRecord)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +245,7 @@ func readLegacyRestore(id string) (*Restore, error) {
 	defer unlock()
 	// Re-read under the lock: another process may have sealed it already,
 	// or the session may have written a newer plain record meanwhile.
-	b, err = os.ReadFile(lp)
+	b, err = readRecord(lp, maxRestoreRecord)
 	if errors.Is(err, os.ErrNotExist) {
 		return &r, nil
 	}
