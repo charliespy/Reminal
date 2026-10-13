@@ -3264,6 +3264,12 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			}
 			a.ackSnapshot(ack.Viewer, ack.Snap, ack.Seq)
 		case protocol.TypePakeInit:
+			// Inline, never on a goroutine of its own: the viewer sends its
+			// resume right behind this, and counts on the answer — the key —
+			// being written before the screen the resume asks for
+			// (TestPakeInitIsAnsweredOnTheReader). An owner handshake below is
+			// answered off the reader, and the viewer asks again for a screen
+			// that came before its key.
 			a.handlePakeInit(conn, msg.ExID, msg.Data, msg.Frames, msg.Src)
 		case protocol.TypeKexInit:
 			// Superseded by pake_init and no longer answered. A viewer that

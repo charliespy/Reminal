@@ -7415,7 +7415,9 @@
       // there was a key to open it, and is asked for again.
       const early = earlyResume;
       earlyResume = null;
-      if (!(early && early.sock === ws && early.exID === keyExID)) sendResume();
+      const dropped = droppedBeforeKey === ws;
+      droppedBeforeKey = null;
+      if (!(early && early.sock === ws && early.exID === keyExID && !dropped)) sendResume();
       publishSize();
       term.focus();
       if (winStreamsNeedRestart) {
@@ -8269,6 +8271,7 @@
     // One per connection, with the first attempt: { sock, exID }.
     let earlyResume = null;
     let keyExID = ''; // the attempt whose answer gave this connection its key
+    let droppedBeforeKey = null; // the connection a sealed frame came on before its key
     function sendEarlyResume(sock, exID) {
       if (sock !== ws || !ownsTerminal || (earlyResume && earlyResume.sock === sock)) return;
       sendResume();
@@ -8799,6 +8802,11 @@
             dbg('sealed frame without a sealed handshake — reconnecting');
             setStatus('Reconnecting…', 'warn');
             try { ws.close(); } catch (_) {}
+          } else {
+            // Before there is a key to open it: what the early resume asked
+            // for came ahead of the handshake's answer (an owner handshake
+            // is answered off the agent's reader), so it is asked for again.
+            droppedBeforeKey = msgSock;
           }
           return;
         }
