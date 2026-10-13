@@ -1,7 +1,8 @@
 import { SessionRoom } from "./session";
 import { RendezvousRoom } from "./rendezvous";
 import { handlePush, handlePushKey, type PushEnv } from "./push";
-import { RateLimiter, type LimiterEnv } from "./limiter";
+import { RateLimiter, allow, inIsolate, type LimiterEnv } from "./limiter";
+import { addressGroup } from "./session";
 
 export { SessionRoom, RendezvousRoom, RateLimiter };
 
@@ -41,6 +42,63 @@ function internalHeaders(src: Headers): Headers {
     if (k.toLowerCase().startsWith("x-reminal-")) h.delete(k);
   }
   return h;
+}
+
+// What one caller (its address, an IPv6 one by its /64) may ask of the relay
+// a minute, before any session's or rendezvous's object is touched — every
+// name makes one: sockets opened (/ws, /rv), and a forwarded app's requests
+// (/p, its own host: a page's assets come many at once). Counted where the
+// count is the count (the RateLimiter), each isolate's own only where that
+// cannot be asked.
+// An address is not one machine: machines behind one NAT, or a hosting
+// provider's shared egress, share it, and after a relay's restart all their
+// agents come back at once. So the machines' own sockets (/ws agent, tunnel) are counted
+// apart from the viewers' and copies', with room for many machines.
+const SOCKETS_PER_MIN = 120;
+const AGENT_SOCKETS_PER_MIN = 1200;
+const TUNNEL_PER_MIN = 1200;
+const socketAsks = new Map<string, number[]>();
+const agentSocketAsks = new Map<string, number[]>();
+const tunnelAsks = new Map<string, number[]>();
+
+function caller(request: Request): string {
+  return addressGroup(request.headers.get("cf-connecting-ip") ?? "");
+}
+
+async function socketsWithin(env: Env, request: Request, machine: boolean): Promise<boolean> {
+  const who = caller(request);
+  const [scope, counts, perMin] = machine ? ["agent-sockets", agentSocketAsks, AGENT_SOCKETS_PER_MIN] as const : ["sockets", socketAsks, SOCKETS_PER_MIN] as const;
+  const c = await allow(env, scope, who, perMin, 60);
+  return c === true || (c === null && inIsolate(counts, who, perMin, 60));
+}
+
+// A forwarded app's requests are many (a page is its assets), so the limiter
+// is not asked for each: this isolate counts every one, and the limiter is
+// asked once for each TUNNEL_BATCH of a caller's requests here — counting
+// batches, TUNNEL_PER_MIN / TUNNEL_BATCH of them a minute — its answer
+// standing for the whole batch, those that come while it is asked included.
+// A batch lasts no longer than the minute it was counted in.
+const TUNNEL_BATCH = 20;
+const tunnelBatches = new Map<string, { left: number; at: number; ok: Promise<boolean> }>();
+
+async function tunnelWithin(env: Env, request: Request): Promise<boolean> {
+  const who = caller(request);
+  if (!inIsolate(tunnelAsks, who, TUNNEL_PER_MIN, 60)) return false;
+  const now = Date.now();
+  let b = tunnelBatches.get(who);
+  tunnelBatches.delete(who);
+  if (!b || b.left <= 0 || now - b.at >= 60_000) {
+    b = { left: TUNNEL_BATCH, at: now, ok: allow(env, "tunnel", who, TUNNEL_PER_MIN / TUNNEL_BATCH, 60).then((c) => c !== false) };
+  }
+  b.left--;
+  // Most recently asked last: past 5000 callers, the oldest half goes.
+  tunnelBatches.set(who, b);
+  if (tunnelBatches.size > 5000) for (const k of [...tunnelBatches.keys()].slice(0, 2500)) tunnelBatches.delete(k);
+  return b.ok;
+}
+
+function tooMany(): Response {
+  return new Response("too many requests — try again in a minute", { status: 429 });
 }
 
 // tunnelOrigin returns the origin a forward should be served from, or "" when
@@ -84,6 +142,7 @@ export default {
     const hostHeader = request.headers.get("host") || url.hostname;
     const hostSub = hostHeader.match(/^port-([a-z0-9]+)\./i);
     if (hostSub) {
+      if (!(await tunnelWithin(env, request))) return tooMany();
       const sessionId = hostSub[1].toUpperCase();
       const id = env.SESSION.idFromName(sessionId);
       const stub = env.SESSION.get(id);
@@ -103,6 +162,7 @@ export default {
     if (wsMatch) {
       const sessionId = wsMatch[1].toUpperCase();
       const role = wsMatch[2].toLowerCase();
+      if (!(await socketsWithin(env, request, role !== "viewer"))) return tooMany();
       const id = env.SESSION.idFromName(sessionId);
       const stub = env.SESSION.get(id);
       const doUrl = new URL(request.url);
@@ -114,6 +174,7 @@ export default {
     // Routed to a per-code RendezvousRoom DO that blindly pairs the two.
     const rvMatch = url.pathname.match(/^\/rv\/([A-Z0-9]+)\/(source|paste)$/i);
     if (rvMatch) {
+      if (!(await socketsWithin(env, request, false))) return tooMany();
       const code = rvMatch[1].toUpperCase();
       const role = rvMatch[2].toLowerCase();
       const id = env.RENDEZVOUS.idFromName(code);
@@ -163,6 +224,7 @@ export default {
           headers: { Location: `${ownOrigin}${rest}${url.search}` },
         });
       }
+      if (!(await tunnelWithin(env, request))) return tooMany();
       const id = env.SESSION.idFromName(sessionId);
       const stub = env.SESSION.get(id);
       const doUrl = new URL(request.url);

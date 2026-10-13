@@ -9,7 +9,10 @@
 // per site, bound to one VAPID key, so every machine must push under the same
 // key. That key belongs to the site, so it lives in the Worker as a secret.
 
-export interface PushEnv {
+import { allow, inIsolate, type LimiterEnv } from "./limiter";
+import { addressGroup } from "./session";
+
+export interface PushEnv extends LimiterEnv {
   // Base64url of the uncompressed P-256 public key (65 bytes). Handed to the
   // page as applicationServerKey when it subscribes.
   VAPID_PUBLIC?: string;
@@ -38,23 +41,23 @@ function allowedEndpoint(raw: unknown): URL | null {
   return PUSH_HOSTS.some((re) => re.test(u.hostname)) ? u : null;
 }
 
-// Per-isolate rate limit, per subscription. Isolates are many and short-lived,
-// so this is a brake on a runaway loop, not a quota — the push services
-// enforce their own. A machine's watcher sends a handful of alerts a day.
-const RATE_WINDOW_MS = 60_000;
-const RATE_MAX = 20;
-const recent = new Map<string, number[]>();
+// What one alert may cost, counted where the count is the count (the
+// RateLimiter, src/limiter.ts), each isolate's own only where that cannot be
+// asked: per subscription, and per caller (its address, IPv6 by its /64). A
+// machine's watcher sends a handful of alerts a day; these are brakes on a
+// runaway loop or on someone sending through this relay, not quotas. An
+// address can be many machines (one NAT, a hosting provider's shared
+// egress), so a caller has room for many subscriptions' worth. Nothing is counted per push
+// service: one count for everyone is one anyone could use up.
+// In an isolate, the oldest counts go first, never all at once.
+const PER_CALLER = { calls: 600, period: 60 };
+const PER_ENDPOINT = { calls: 20, period: 60 };
+const callers = new Map<string, number[]>();
+const endpoints = new Map<string, number[]>();
 
-function rateOK(key: string, now: number): boolean {
-  const hits = (recent.get(key) || []).filter((t) => now - t < RATE_WINDOW_MS);
-  if (hits.length >= RATE_MAX) {
-    recent.set(key, hits);
-    return false;
-  }
-  hits.push(now);
-  recent.set(key, hits);
-  if (recent.size > 5000) recent.clear(); // never grow without bound
-  return true;
+async function within(env: LimiterEnv, scope: string, counts: Map<string, number[]>, key: string, lim: { calls: number; period: number }): Promise<boolean> {
+  const c = await allow(env, scope, key, lim.calls, lim.period);
+  return c === true || (c === null && inIsolate(counts, key, lim.calls, lim.period));
 }
 
 function b64url(bytes: ArrayBuffer | Uint8Array): string {
@@ -136,7 +139,11 @@ export async function handlePush(request: Request, env: PushEnv): Promise<Respon
   // cannot be a sealed message.
   if (payload.length > 4096 || payload.length < 103) return json({ error: "payload size" }, 400);
   const now = Date.now();
-  if (!rateOK(ep.href, now)) return json({ error: "too many alerts; slow down" }, 429);
+  const caller = addressGroup(request.headers.get("cf-connecting-ip") ?? "");
+  if (!(await within(env, "push-caller", callers, caller, PER_CALLER)) ||
+    !(await within(env, "push-endpoint", endpoints, ep.href, PER_ENDPOINT))) {
+    return json({ error: "too many alerts; slow down" }, 429);
+  }
 
   const ttl = typeof req.ttl === "number" && req.ttl >= 0 && req.ttl <= 86400 ? Math.floor(req.ttl) : 3600;
   const urgency = ["very-low", "low", "normal", "high"].includes(req.urgency as string) ? (req.urgency as string) : "normal";
