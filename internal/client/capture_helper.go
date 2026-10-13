@@ -154,17 +154,30 @@ var buildVersion = "dev"
 // first thing.
 func SetBuildVersion(v string) { buildVersion = v }
 
-// captureHelperPath finds the reminal-capture binary: next to the running
-// reminal binary (how releases bundle it). A build without a version also
-// takes an explicit override (handy for local testing) and PATH. A release
-// build takes the override only when it resolves inside its own app bundle,
-// and never searches PATH: the helper runs with every grant the app has, so a
-// release runs only the one it shipped with. macOS-only — the helper needs
-// ScreenCaptureKit; other platforms fall back to the screencapture path.
+// captureHelperPath finds the reminal-capture binary (bundledHelperPath).
+// macOS-only — the helper needs ScreenCaptureKit; other platforms fall back to
+// the screencapture path.
 func captureHelperPath() (string, error) {
 	if runtime.GOOS != "darwin" {
 		return "", errors.New("capture helper is macOS-only")
 	}
+	return bundledHelperPath("reminal-capture", "REMINAL_CAPTURE_HELPER")
+}
+
+// OverlayHelperPath finds the reminal-overlay binary, the window-note badge
+// helper, the same way (bundledHelperPath).
+func OverlayHelperPath() (string, error) {
+	return bundledHelperPath("reminal-overlay", "REMINAL_OVERLAY_BIN")
+}
+
+// bundledHelperPath finds a helper binary shipped next to reminal: next to the
+// running reminal binary (how releases bundle it). A build without a version
+// also takes an explicit override in the environment variable named override
+// (handy for local testing) and PATH. A release build takes the override only
+// when it resolves inside its own app bundle, and never searches PATH: the
+// helpers run with every grant the app has, so a release runs only the ones it
+// shipped with.
+func bundledHelperPath(name, override string) (string, error) {
 	release := isReleaseBuild(buildVersion)
 	exe, exeErr := os.Executable()
 	if exeErr == nil {
@@ -176,27 +189,27 @@ func captureHelperPath() (string, error) {
 			exe = resolved
 		}
 	}
-	if p := strings.TrimSpace(os.Getenv("REMINAL_CAPTURE_HELPER")); p != "" {
+	if p := strings.TrimSpace(os.Getenv(override)); p != "" {
 		if release && (exeErr != nil || !inAppBundle(p, exe)) {
-			return "", fmt.Errorf("REMINAL_CAPTURE_HELPER=%s is outside this release's app bundle; not used", p)
+			return "", fmt.Errorf("%s=%s is outside this release's app bundle; not used", override, p)
 		}
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
 			return p, nil
 		}
-		return "", fmt.Errorf("REMINAL_CAPTURE_HELPER=%s not found", p)
+		return "", fmt.Errorf("%s=%s not found", override, p)
 	}
 	if exeErr == nil {
-		cand := filepath.Join(filepath.Dir(exe), "reminal-capture")
+		cand := filepath.Join(filepath.Dir(exe), name)
 		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
 			return cand, nil
 		}
 	}
 	if !release {
-		if p, err := exec.LookPath("reminal-capture"); err == nil {
+		if p, err := exec.LookPath(name); err == nil {
 			return p, nil
 		}
 	}
-	return "", errors.New("reminal-capture not found")
+	return "", fmt.Errorf("%s not found", name)
 }
 
 // inAppBundle reports whether p, symlinks resolved, lies inside the .app
@@ -218,16 +231,19 @@ func inAppBundle(p, exe string) bool {
 	return strings.HasPrefix(rp, bundle)
 }
 
-// helperCommand is exec.Command for the capture helper, with its environment
-// filtered (helperEnv). Every reminal-capture spawn goes through it or
-// runHelper.
+// helperCommand is exec.Command for a bundled helper, with its environment
+// filtered (helperEnv). Every reminal-capture and reminal-overlay spawn goes
+// through it or runHelper.
 func helperCommand(path string, args ...string) *exec.Cmd {
 	cmd := exec.Command(path, args...)
 	cmd.Env = helperEnv()
 	return cmd
 }
 
-// helperEnv is our environment minus what must not reach the capture helper:
+// HelperCommand is helperCommand for callers outside the package.
+func HelperCommand(path string, args ...string) *exec.Cmd { return helperCommand(path, args...) }
+
+// helperEnv is our environment minus what must not reach a bundled helper:
 // the dynamic loader's variables (DYLD_*, LD_*), which would load code into a
 // process holding the app's Screen Recording and Accessibility grants, and
 // reminal's own helper overrides. REMINAL_LIDDIM_FAKE, the lid dimmer's test
@@ -242,7 +258,7 @@ func filterHelperEnv(env []string, release bool) []string {
 		name, _, _ := strings.Cut(kv, "=")
 		switch {
 		case strings.HasPrefix(name, "DYLD_"), strings.HasPrefix(name, "LD_"),
-			name == "REMINAL_CAPTURE_HELPER",
+			name == "REMINAL_CAPTURE_HELPER", name == "REMINAL_OVERLAY_BIN",
 			name == "REMINAL_LIDDIM_FAKE" && release:
 			continue
 		}

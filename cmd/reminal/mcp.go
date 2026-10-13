@@ -307,26 +307,6 @@ func (s *mcpServer) drainViewerActs() {
 	}
 }
 
-// overlayHelperPath mirrors how the agent finds reminal-capture: explicit
-// override, then alongside this binary (the release layout), then PATH.
-func overlayHelperPath() (string, error) {
-	if p := os.Getenv("REMINAL_OVERLAY_BIN"); p != "" {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, nil
-		}
-	}
-	if exe, err := os.Executable(); err == nil {
-		cand := filepath.Join(filepath.Dir(exe), "reminal-overlay")
-		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
-			return cand, nil
-		}
-	}
-	if p, err := exec.LookPath("reminal-overlay"); err == nil {
-		return p, nil
-	}
-	return "", errors.New("reminal-overlay helper not found next to reminal or on PATH")
-}
-
 func (s *mcpServer) ensureHelper() (*overlayHelper, error) {
 	s.mu.Lock()
 	if s.helper != nil && s.helper.cmd.ProcessState == nil {
@@ -336,13 +316,13 @@ func (s *mcpServer) ensureHelper() (*overlayHelper, error) {
 	}
 	s.mu.Unlock()
 
-	bin, err := overlayHelperPath()
+	bin, err := client.OverlayHelperPath()
 	if err != nil {
 		return nil, err
 	}
 	// No argv: the helper's default mode is a stdin-driven multiplexer. It shows
 	// nothing until a window is attached and a note arrives.
-	cmd := exec.Command(bin)
+	cmd := client.HelperCommand(bin)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -699,11 +679,11 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 	}
 	switch name {
 	case "list_windows":
-		bin, err := overlayHelperPath()
+		bin, err := client.OverlayHelperPath()
 		if err != nil {
 			return "", err
 		}
-		out, err := exec.Command(bin, "windows").Output()
+		out, err := client.HelperCommand(bin, "windows").Output()
 		if err != nil {
 			return "", fmt.Errorf("listing windows: %w", err)
 		}

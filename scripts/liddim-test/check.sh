@@ -96,4 +96,21 @@ echo 1 > $F/lid; waitfor 'isf "$(cat $F/brightness)" 0' 10; echo '{"closed_lid":
 waitfor '[ -z "$(pgrep -f "capture-test liddim")" ] && isf "$(cat $F/brightness)" 0.6' 40 && pass "e: mode off with the lid shut: 0.6, dimmer gone" || fail "e: off: br=$(cat $F/brightness)"
 $B/reminal-dev kill -y e >/dev/null 2>&1
 
+echo "== f: reminal-overlay gets the same treatment (via reminal mcp list_windows)"
+mcp(){ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_windows","arguments":{}}}' | "$@" mcp >/dev/null 2>&1; }
+clean; rm -f $LOG; newhome
+(export DYLD_FOO=1 LD_FOO=1 REMINAL_OVERLAY_BIN=$FAKEH; mcp $B/reminal-dev)
+line=$(grep " windows" $LOG | head -1)
+[ -n "$line" ] || fail "f: overlay never started"
+echo "$line" | grep -q -E "DYLD_FOO|LD_FOO|REMINAL_OVERLAY_BIN" && fail "f: overlay got: ${line#*| }" || pass "f: overlay env: ${line#*| }"
+clean; rm -f $LOG; newhome
+REMINAL_OVERLAY_BIN=$FAKEH mcp $B/reminal-rel
+grep -q " windows" $LOG 2>/dev/null && fail "f: release ran an overlay override outside the bundle" || pass "f: release: override outside the bundle not run"
+rm -f $LOG; mkdir -p /tmp/liddim-test/pathbin; cp $FAKEH /tmp/liddim-test/pathbin/reminal-overlay
+PATH=/tmp/liddim-test/pathbin:$PATH mcp $B/reminal-rel
+grep -q " windows" $LOG 2>/dev/null && fail "f: release ran reminal-overlay from PATH" || pass "f: release: PATH not searched"
+rm -f $LOG; A=/tmp/liddim-test/app/reminal.app/Contents/MacOS; rm -rf /tmp/liddim-test/app; mkdir -p $A; cp $B/reminal-rel $A/reminal; cp $FAKEH $A/reminal-overlay
+mcp $A/reminal; grep -q " windows" $LOG && pass "f: release: bundled overlay runs" || fail "f: release: bundled overlay not run"
+rm -rf /tmp/liddim-test/app /tmp/liddim-test/pathbin
+
 clean; echo "fails=$fails"

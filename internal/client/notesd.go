@@ -31,7 +31,6 @@ package client
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -631,26 +630,6 @@ func (d *notesDaemon) publish() {
 
 // ---- badge helper ----------------------------------------------------------
 
-// overlayBinPath mirrors how the agent finds reminal-capture: explicit
-// override, then alongside this binary (the release layout), then PATH.
-func overlayBinPath() (string, error) {
-	if p := os.Getenv("REMINAL_OVERLAY_BIN"); p != "" {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, nil
-		}
-	}
-	if exe, err := os.Executable(); err == nil {
-		cand := filepath.Join(filepath.Dir(exe), "reminal-overlay")
-		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
-			return cand, nil
-		}
-	}
-	if p, err := exec.LookPath("reminal-overlay"); err == nil {
-		return p, nil
-	}
-	return "", errors.New("reminal-overlay helper not found next to reminal or on PATH")
-}
-
 func (d *notesDaemon) ensureHelper() (*overlayProc, error) {
 	d.spawnMu.Lock()
 	defer d.spawnMu.Unlock()
@@ -662,7 +641,7 @@ func (d *notesDaemon) ensureHelper() (*overlayProc, error) {
 	}
 	d.mu.Unlock()
 
-	bin, err := overlayBinPath()
+	bin, err := OverlayHelperPath()
 	if err != nil {
 		return nil, err
 	}
@@ -670,8 +649,8 @@ func (d *notesDaemon) ensureHelper() (*overlayProc, error) {
 	// nothing until a window is attached and a note arrives. Told who its
 	// daemon is, it exits when that daemon goes (stdin EOF, or the pid gone),
 	// so an upgrade never leaves an orphan badge the new daemon cannot reach.
-	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(), "REMINAL_OVERLAY_PARENT="+strconv.Itoa(os.Getpid()))
+	cmd := helperCommand(bin)
+	cmd.Env = append(cmd.Env, "REMINAL_OVERLAY_PARENT="+strconv.Itoa(os.Getpid()))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
