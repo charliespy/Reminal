@@ -8862,7 +8862,7 @@
           try {
             await startHandshake();
           } catch (e) {
-            setStatus('Handshake failed: ' + e.message, 'error'); forgetCachedScreen(sessionId); forgetCachedScreen(sessionId);
+            setStatus('Handshake failed: ' + e.message, 'error'); forgetCachedScreen(sessionId);
             fatal = true;
             try { ws.close(); } catch (_) {}
           }
