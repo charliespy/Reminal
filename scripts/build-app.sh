@@ -53,9 +53,18 @@ kc=(); [ -n "$KEYCHAIN" ] && kc=(--keychain "$KEYCHAIN")
 
 # Sign the nested helper (its own identifier), then seal the bundle — the main
 # `reminal` inherits CFBundleIdentifier sh.reminal from Info.plist.
-codesign --force --timestamp=none ${kc[@]+"${kc[@]}"} --identifier sh.reminal.capture --sign "$IDENTITY" "$APP/Contents/MacOS/reminal-capture"
-[ -f "$APP/Contents/MacOS/reminal-overlay" ] && codesign --force --timestamp=none ${kc[@]+"${kc[@]}"} --identifier sh.reminal.overlay --sign "$IDENTITY" "$APP/Contents/MacOS/reminal-overlay"
-codesign --force --timestamp=none ${kc[@]+"${kc[@]}"} --sign "$IDENTITY" "$APP"
+#
+# Every binary is signed with the hardened runtime (--options runtime) and no
+# entitlements: the dynamic loader ignores DYLD_* variables for them and they
+# load only libraries signed by Apple or by this same certificate. These
+# processes hold the app's Screen Recording and Accessibility grants, so
+# nothing else gets to run code inside them. The flag is not part of the
+# Designated Requirement (identifier + certificate), so grants made to an
+# earlier build still match.
+rt=(--options runtime)
+codesign --force --timestamp=none "${rt[@]}" ${kc[@]+"${kc[@]}"} --identifier sh.reminal.capture --sign "$IDENTITY" "$APP/Contents/MacOS/reminal-capture"
+[ -f "$APP/Contents/MacOS/reminal-overlay" ] && codesign --force --timestamp=none "${rt[@]}" ${kc[@]+"${kc[@]}"} --identifier sh.reminal.overlay --sign "$IDENTITY" "$APP/Contents/MacOS/reminal-overlay"
+codesign --force --timestamp=none "${rt[@]}" ${kc[@]+"${kc[@]}"} --sign "$IDENTITY" "$APP"
 
 codesign --verify --deep --strict "$APP"
 echo "built: $APP  (identity: ${IDENTITY}, version: ${VERSION})"
