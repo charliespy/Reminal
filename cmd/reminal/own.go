@@ -242,27 +242,46 @@ func runOwners(args []string) error {
 
 	case "revoke":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: reminal owners revoke <id|label>")
+			return fmt.Errorf("usage: reminal owners revoke <id|label>...")
 		}
-		target := args[1]
-		o, n, err := client.RemoveOwner(target)
-		if needsSudoRetry(err) {
-			return sudoReexec()
-		}
-		if err != nil {
-			return err
-		}
-		switch {
-		case n == 0:
-			fmt.Printf("  %s No owner matching %q — run %s to see them.\n", cRed("!"), target, cBold("reminal owners"))
-		case n > 1:
-			printAmbiguous(target)
-		default:
-			name := o.Label
-			if name == "" {
-				name = o.ID
+		// Several at once revoke together, and the sessions restart once
+		// for all of them (RekeySessions, below).
+		revoked := 0
+		for _, target := range args[1:] {
+			o, n, err := client.RemoveOwner(target)
+			if needsSudoRetry(err) {
+				// Run as root for the store; the sessions are this user's, and
+				// this process tells them once root's is done.
+				if err := sudoReexec(); err != nil {
+					return err
+				}
+				client.RekeySessions()
+				return nil
 			}
-			fmt.Printf("  %s Revoked %s  %s\n", cGreen("✓"), cBold(name), cDim("("+o.ID+")"))
+			if err != nil {
+				return err
+			}
+			switch {
+			case n == 0:
+				fmt.Printf("  %s No owner matching %q — run %s to see them.\n", cRed("!"), target, cBold("reminal owners"))
+			case n > 1:
+				printAmbiguous(target)
+			default:
+				revoked++
+				name := o.Label
+				if name == "" {
+					name = o.ID
+				}
+				fmt.Printf("  %s Revoked %s  %s\n", cGreen("✓"), cBold(name), cDim("("+o.ID+")"))
+			}
+		}
+		if revoked > 0 {
+			// Signed out of the sessions open on this machine straight away:
+			// each restarts in place under a new key (programs keep running,
+			// PIN viewers and the remaining owners reconnect on their own).
+			if n := client.RekeySessions(); n > 0 {
+				fmt.Printf("  %s Signed out of %d open session(s) here.\n", cGreen("✓"), n)
+			}
 			// The background daemon stays installed — it is the machine's permanent
 			// presence + stats layer, not an ownership-gated feature (see above).
 			// But bounce it so it re-keys the machine channel NOW: a revoked device

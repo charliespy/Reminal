@@ -106,7 +106,7 @@ func serveDirectoryLocked(stop <-chan struct{}, isDaemon bool, version string) {
 		_ = sleepOrStop(stop, dirHostRetry)
 		return
 	}
-	startFP := ownersFingerprint(of0)
+	startFP := effectiveOwnersFingerprint(of0)
 	agent, err := NewAgentWith(version, AgentOptions{Machine: true, DaemonHost: isDaemon})
 	if err != nil {
 		_ = sleepOrStop(stop, dirHostRetry)
@@ -130,8 +130,8 @@ func serveDirectoryLocked(stop <-chan struct{}, isDaemon bool, version string) {
 		if noOwners(of, err) {
 			return // every owner revoked — stop hosting and release the lock
 		}
-		if ownersFingerprint(of) != startFP {
-			return // owner set changed (add/revoke) — rebuild to re-key
+		if effectiveOwnersFingerprint(of) != startFP {
+			return // owner set changed (add/revoke/self-revoke) — rebuild to re-key
 		}
 	}
 }
@@ -156,6 +156,62 @@ func ownersFingerprint(of *ownersFile) string {
 	}
 	sort.Strings(pubs)
 	return strings.Join(pubs, "\n")
+}
+
+// effectiveOwnersFingerprint is ownersFingerprint of the owners that can
+// connect PIN-free right now: owners.json less the devices that have
+// self-revoked (revoked_owners.json). A self-revoke changes it as a revoke
+// does. An unreadable tombstone store counts every enrolled owner as
+// revoked — a change, so whatever compares it re-keys rather than trusts.
+func effectiveOwnersFingerprint(of *ownersFile) string {
+	if of == nil {
+		return ""
+	}
+	rev, err := loadRevoked()
+	if err != nil {
+		return "unreadable revoked_owners.json"
+	}
+	kept := &ownersFile{}
+	for _, o := range of.Owners {
+		if !rev[o.Pubkey] {
+			kept.Owners = append(kept.Owners, o)
+		}
+	}
+	return ownersFingerprint(kept)
+}
+
+// currentOwnersFingerprint is effectiveOwnersFingerprint of the store as it
+// is now ("" when there is none to read).
+func currentOwnersFingerprint() string {
+	of, err := loadOwners()
+	if err != nil {
+		return ""
+	}
+	return effectiveOwnersFingerprint(of)
+}
+
+// RekeySessions tells every session of this user that the owner set may
+// have changed (`reminal owners revoke`, a self-revoke). A session whose
+// owner set did change since it started restarts in place — same PTY,
+// same programs, same PIN — under a new session key, so a revoked device's
+// open viewer is cut off and its fresh handshake refused; one it did not
+// change (a burst of revokes already covered by its restart) does nothing.
+// Best-effort, a short cap per session; returns how many were told.
+func RekeySessions() int {
+	recs, err := session.ReadAllActive()
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, r := range recs {
+		if r.PID <= 0 {
+			continue
+		}
+		if _, err := sendControlToDeadline(r.PID, "rekey", 2*time.Second); err == nil {
+			n++
+		}
+	}
+	return n
 }
 
 // tokenBucket is a leaky-bucket limiter: burst up to max, refilling perSec.

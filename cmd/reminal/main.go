@@ -1638,7 +1638,7 @@ func runRepin(arg string) error {
 		return fmt.Errorf("%s: %w", repinLabel(a), err)
 	}
 	fmt.Printf("  %s  new PIN %s\n", repinLabel(a), pin)
-	fmt.Println("The old PIN and any link made with it no longer work. Devices that own this machine are unaffected.")
+	fmt.Println("The old PIN and any link made with it no longer work. Devices still enrolled as owners of this machine reconnect on their own.")
 	return nil
 }
 
@@ -1683,7 +1683,7 @@ func runRepinAll() error {
 	if skipped > 0 {
 		msg += fmt.Sprintf(" (skipped %d port forward(s) — re-expose those to change theirs)", skipped)
 	}
-	fmt.Println(msg + ". Old PINs and links no longer work; devices that own this machine are unaffected.")
+	fmt.Println(msg + ". Old PINs and links no longer work; devices still enrolled as owners of this machine reconnect on their own.")
 	if failed > 0 {
 		return fmt.Errorf("%d session(s) kept their old PIN", failed)
 	}

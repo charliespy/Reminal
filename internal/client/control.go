@@ -216,6 +216,23 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			return
 		}
 		_, _ = fmt.Fprintln(conn, "ok")
+	case line == "rekey":
+		// The owner set may have changed (`reminal owners revoke`, a
+		// self-revoke: RekeySessions). Every viewer shares this process's
+		// session key, so a device revoked after it handshook keeps it; a
+		// restart in place — same PTY and programs, same PIN — makes a new
+		// one, and the revoked device's fresh handshake is refused. Only if
+		// the owner set is not what this process began with: a burst of
+		// revokes already covered by one restart does not restart again.
+		if currentOwnersFingerprint() == a.ownersFP {
+			_, _ = fmt.Fprintln(conn, "ok unchanged")
+			return
+		}
+		if !a.rekeying.CompareAndSwap(false, true) {
+			_, _ = fmt.Fprintln(conn, "ok restarting")
+			return
+		}
+		fallthrough
 	case line == "restart":
 		// Hot-restart: ack the CLI first (so it doesn't see the WS
 		// vanish before getting a response), then schedule the Exec
@@ -237,6 +254,7 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 				// session could only be ended by finding its pid. Re-arm
 				// it before saying anything.
 				a.stopControlFn = a.listenControl()
+				a.rekeying.Store(false)
 				a.broadcastNotice("restart failed (" + err.Error() +
 					") — still running the previous version; try again")
 			}
