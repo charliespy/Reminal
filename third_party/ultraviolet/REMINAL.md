@@ -1,6 +1,13 @@
 # This copy of charmbracelet/ultraviolet
 
-This is `github.com/charmbracelet/ultraviolet` at v0.0.0-20260622092850-f39628c8a989 (MIT, see LICENSE). reminal uses it in place of the module (`replace` in the root go.mod) for one change.
+This is `github.com/charmbracelet/ultraviolet` at v0.0.0-20260622092850-f39628c8a989, upstream commit f39628c8a989 (MIT, see LICENSE). reminal uses it in place of the module (`replace` in the root go.mod) for one change.
+
+**Copied from** the checksum-verified module (`go mod download`), file for file, except:
+- removed `.github/` (upstream's CI, release and dependabot workflows; never run here);
+- removed `TUTORIAL.md`;
+- added this file and `buffer_reminal_test.go`.
+
+**Patched:** in `buffer.go`, `Buffer.InsertLineArea` and `Buffer.DeleteLineArea`, plus the new helpers `rotateLines` and `reverseLines`. Every other file is upstream's as it was.
 
 **The change:** `Buffer.InsertLineArea` and `Buffer.DeleteLineArea` move whole lines (their slice headers, `rotateLines`) when the area is as wide as the buffer, instead of copying every cell.
 
