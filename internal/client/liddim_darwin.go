@@ -35,6 +35,11 @@ func lidDimStatePath() string {
 	return filepath.Join(home, ".reminal", "liddim-brightness")
 }
 
+// lidDimLog carries the dimmer's lines (lid shut and open, what it dimmed and
+// restored, with the values and the time) to our stderr, which for the daemon
+// is ~/.reminal/daemon.log.
+var lidDimLog = &lineLogger{prefix: "reminal: liddim: "}
+
 type lidDimmer struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
@@ -74,6 +79,7 @@ func (l *lidDimmer) ensure() {
 		return
 	}
 	cmd := helperCommand(helper, "liddim", state)
+	cmd.Stdout = lidDimLog
 	stdin, err := cmd.StdinPipe() // lifeline: EOF tells it to restore and exit
 	if err != nil {
 		return
@@ -134,6 +140,7 @@ func restoreLeftover() {
 		return
 	}
 	cmd := helperCommand(helper, "liddim", state)
+	cmd.Stdout = lidDimLog
 	if err := cmd.Start(); err != nil {
 		return
 	}

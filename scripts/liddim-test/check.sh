@@ -113,4 +113,26 @@ rm -f $LOG; A=/tmp/liddim-test/app/reminal.app/Contents/MacOS; rm -rf /tmp/liddi
 mcp $A/reminal; grep -q " windows" $LOG && pass "f: release: bundled overlay runs" || fail "f: release: bundled overlay not run"
 rm -rf /tmp/liddim-test/app /tmp/liddim-test/pathbin
 
+echo "== g: macOS sets a low brightness itself as the lid opens (auto-brightness)"
+for low in 0.05 0.3; do
+  clean; rm -rf $F $ST; mkdir -p $F; echo 0.6 > $F/brightness; echo 1 > $F/lid; mkfifo /tmp/liddim-test/in.g 2>/dev/null
+  (REMINAL_LIDDIM_FAKE=$F $B/reminal-capture-test liddim $ST < /tmp/liddim-test/in.g > /tmp/liddim-test/g.out 2>&1 &); exec 7>/tmp/liddim-test/in.g
+  waitfor 'isf "$(cat $F/brightness)" 0' 10
+  echo $low > $F/brightness; echo 0 > $F/lid   # what macOS does on open, before our next look
+  sleep 4; isf "$(cat $F/brightness)" 0.6 && [ ! -e $ST ] && pass "g: macOS set $low on open -> 0.6" || fail "g: macOS set $low on open -> $(cat $F/brightness)"
+  exec 7>&-; rm -f /tmp/liddim-test/in.g
+done
+grep -q -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}T.* restored 0.6' /tmp/liddim-test/g.out && pass "g: timestamped line: $(grep restored /tmp/liddim-test/g.out | head -1)" || fail "g: no timestamped restore line: $(tr '\n' '|' < /tmp/liddim-test/g.out)"
+echo "== g: a brightness set higher than the saved one after opening still stands"
+clean; rm -rf $F $ST; mkdir -p $F; echo 0 > $F/brightness; echo 0 > $F/lid; echo 0.6 > $ST; echo 0.9 > $F/brightness
+(REMINAL_LIDDIM_FAKE=$F $B/reminal-capture-test liddim $ST </dev/null >/dev/null 2>&1 &); sleep 3
+isf "$(cat $F/brightness)" 0.9 && pass "g: 0.9 stands" || fail "g: 0.9 -> $(cat $F/brightness)"
+
+echo "== h: the dimmer's lines reach the daemon's log"
+clean; rm -rf $F; mkdir -p $F; echo 0.6 > $F/brightness; echo 0 > $F/lid; newhome
+(REMINAL_LIDDIM_FAKE=$F REMINAL_CAPTURE_HELPER=$B/reminal-capture-test $B/reminal-dev daemon > $HOME/daemon.log 2>&1 &)
+waitfor '[ -n "$(pgrep -f "capture-test liddim")" ]' 40; echo 1 > $F/lid; waitfor 'isf "$(cat $F/brightness)" 0' 10; echo 0 > $F/lid; waitfor 'isf "$(cat $F/brightness)" 0.6' 10; sleep 1
+grep -q "liddim: .*dimmed from 0.6" $HOME/daemon.log && grep -q "liddim: .*restored 0.6" $HOME/daemon.log && pass "h: daemon log: $(grep 'liddim:' $HOME/daemon.log | tr '\n' '|')" || fail "h: daemon log has: $(grep -c . $HOME/daemon.log) lines, liddim: $(grep 'liddim' $HOME/daemon.log | head -3 | tr '\n' '|')"
+pkill -f "reminal-dev daemon"
+
 clean; echo "fails=$fails"

@@ -123,8 +123,11 @@ Brightness rather than display sleep, because display sleep is all-or-nothing:
 it would take the virtual display down too, stop the compositor that mirroring
 reads from, and can lock the Mac. The brightness it took away is written to
 `~/.reminal/liddim-brightness` before the screen goes dark, so a killed helper
-never loses it, and on open it is put back only if the screen is still dark: a
-brightness you set in the meantime stands. Like the display helper, it treats
+never loses it. On open it is put back if the screen is below it, dark or at
+the low level macOS's auto-brightness picks after the sensor has sat in the
+dark under the lid; once the lid is open the record is gone, so a brightness
+you set afterwards stands. Every lid change and brightness change it makes is
+a line in `~/.reminal/daemon.log`. Like the display helper, it treats
 stdin EOF as an exit order, and puts the brightness back on the way out.
 
 If reminal isn't running when the lid opens (it was stopped while the lid was
