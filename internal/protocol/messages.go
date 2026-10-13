@@ -69,6 +69,21 @@ const (
 	// viewer that predates it ignores it and retries on its own timer.
 	TypePakeBusy MessageType = "pake_busy"
 
+	// TypePark and TypeUnpark are a viewer's to its relay, never forwarded: a
+	// viewer that has switched to another session keeps this one's socket
+	// warm — parked — so switching back skips the connect and handshake.
+	// While parked the relay sends it nothing of the agent's and does not
+	// count it as a viewer; unparked, it is one again. The relay answers
+	// TypeParked / TypeUnparked, or TypeParkRefused (paced, or no agent to
+	// go back to: the viewer then dials afresh). A parked socket is closed
+	// when the agent leaves or comes back, so a key it holds is never older
+	// than the agent it would resume.
+	TypePark        MessageType = "park"
+	TypeUnpark      MessageType = "unpark"
+	TypeParked      MessageType = "parked"
+	TypeUnparked    MessageType = "unparked"
+	TypeParkRefused MessageType = "park_refused"
+
 	// TypeSealed wraps a session message once both ends support it: the
 	// inner type, the sender's stream and counter, and the scrollback seq
 	// are all bound into its encryption (crypto/frames.go). Peers that
