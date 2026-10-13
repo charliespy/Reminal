@@ -187,6 +187,8 @@
       justify-content: flex-end;
       overflow: hidden;
     }
+    /* A remembered screen shown while a switch connects: not live yet. */
+    #terminal.stale { opacity: 0.55; filter: grayscale(1); }
     .xterm {
       height: auto !important;
       width: 100%;
@@ -7645,6 +7647,12 @@
     let flushScheduled = false;
     function flushPendingChunks() {
       if (pendingChunks.length === 0) return;
+      // Every path that writes the session's output comes through here.
+      if (staleScreen) {
+        staleScreen = false;
+        pendingChunks.unshift(new TextEncoder().encode('\x1b[H\x1b[2J\x1b[3J'));
+        document.getElementById('terminal').classList.remove('stale');
+      }
       let total = 0;
       for (const c of pendingChunks) total += c.byteLength;
       if (total === 0) { pendingChunks.length = 0; return; }
@@ -8501,6 +8509,40 @@
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
     }
 
+    // The last screen of each session this page has shown, put up the moment
+    // a switch back to it starts, so there is something to look at while the
+    // connection is made — dimmed, without its colours (#terminal.stale), and
+    // replaced by the live screen when the first output arrives. Text only,
+    // in this page's memory only: never stored, gone with the tab, and never
+    // more than a few sessions' worth.
+    const SCREEN_CACHE_MAX = 8;
+    const screenCache = new Map(); // session id → [row text, …]
+    let screenCachedFor = ''; // the session whose screen was taken, before anything was written over it
+    let staleScreen = false;  // a remembered screen is up, not the live one
+    function cacheScreen() {
+      if (!sessionId || !cryptoKey || lastSeq === 0 || staleScreen) return; // nothing live to remember
+      const b = term.buffer.active;
+      const rows = [];
+      for (let y = b.baseY; y < b.baseY + term.rows; y++) {
+        const line = b.getLine(y);
+        rows.push(line ? line.translateToString(true) : '');
+      }
+      screenCache.delete(sessionId);
+      screenCache.set(sessionId, rows);
+      while (screenCache.size > SCREEN_CACHE_MAX) screenCache.delete(screenCache.keys().next().value);
+      screenCachedFor = sessionId;
+    }
+    function showCachedScreen(id) {
+      const rows = screenCache.get(id);
+      if (!rows) return;
+      // Cleared first: writes queued before the reset (the "Disconnected"
+      // line) land after it.
+      term.write('\x1b[H\x1b[2J\x1b[3J\x1b[2m' + rows.slice(0, term.rows).map(r => r.slice(0, term.cols)).join('\r\n') + '\x1b[0m\x1b[H');
+      staleScreen = true;
+      document.getElementById('terminal').classList.add('stale');
+    }
+    // Live output takes it away, without a trace in the scrollback: see
+    // flushPendingChunks.
     async function startConnect() {
       const s = sessionInput.value.trim().toUpperCase();
       let p = pinInput.value.trim();
@@ -8551,9 +8593,15 @@
         // machine's windows, apps or banners are never shown for this one —
         // unless the session it is going to is on that same machine.
         const sameMachine = onSameMachine(sessionId, s);
+        if (screenCachedFor !== sessionId) cacheScreen();
+        screenCachedFor = '';
+        // A remembered screen of the session being left is not this one's.
+        staleScreen = false;
+        document.getElementById('terminal').classList.remove('stale');
         lastSeq = 0;
         sessionId = s;
         term.reset();
+        showCachedScreen(s);
         // host_info describes the session we are LEAVING. Share falls back to
         // it for the PIN (see sharePin), so keeping it here handed out an
         // invite pairing the new session's id with the old session's PIN —
@@ -9181,6 +9229,7 @@
     }
 
     function userDisconnect() {
+      cacheScreen(); // before the "Disconnected" line goes over it
       manualClose = true;
       cancelReconnect();
       cancelDial();
@@ -9341,6 +9390,7 @@
     const PREDICT_ENABLED = false;
     function predictLocalEcho(data) {
       if (!PREDICT_ENABLED) return;
+      if (staleScreen) return; // the cursor is on a remembered screen, not the live one
       const now = performance.now();
       if (now < predictBlockedUntil) return;
       if (data.length !== 1) return;
