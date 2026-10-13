@@ -1,10 +1,11 @@
 import { SessionRoom } from "./session";
 import { RendezvousRoom } from "./rendezvous";
 import { handlePush, handlePushKey, type PushEnv } from "./push";
+import { RateLimiter, type LimiterEnv } from "./limiter";
 
-export { SessionRoom, RendezvousRoom };
+export { SessionRoom, RendezvousRoom, RateLimiter };
 
-export interface Env extends PushEnv {
+export interface Env extends PushEnv, LimiterEnv {
   SESSION: DurableObjectNamespace;
   RENDEZVOUS: DurableObjectNamespace;
   ASSETS: Fetcher;

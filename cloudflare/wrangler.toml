@@ -30,7 +30,10 @@ routes = [
 [durable_objects]
 bindings = [
   { name = "SESSION", class_name = "SessionRoom" },
-  { name = "RENDEZVOUS", class_name = "RendezvousRoom" }
+  { name = "RENDEZVOUS", class_name = "RendezvousRoom" },
+  # Rate limits that count everywhere at once (src/limiter.ts): one object
+  # per caller. Without it the Worker still runs, counting per isolate.
+  { name = "LIMITER", class_name = "RateLimiter" }
 ]
 
 [[migrations]]
@@ -40,6 +43,12 @@ new_sqlite_classes = ["SessionRoom"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["RendezvousRoom"]
+
+# A new tag for the new class (existing tags are never renamed). Named v4 as
+# the same class's migration is elsewhere; tags are names, applied in order.
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["RateLimiter"]
 
 [assets]
 directory = "./public"
