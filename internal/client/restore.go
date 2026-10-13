@@ -372,14 +372,20 @@ var flagSpecFor = func() func(string) flagSpec {
 
 // resumeArgv is the command that resumes r's agent, or nil — assuming it is
 // the only one of its kind in its folder (see resumePlan).
-func resumeArgv(r session.Restore) []string {
+func resumeArgv(r session.Restore) []string { return resumeArgvFor(r, "") }
+
+// resumeArgvFor is resumeArgv for the shell it will be typed into.
+func resumeArgvFor(r session.Restore, shell string) []string {
 	rs, ok := resumers[r.Fg]
 	if !ok {
 		return nil
 	}
-	flags, ok := resumeFlags(r)
+	flags, _, ok := resumeFlagsFor(r, shellUnsafe(shell))
 	if !ok {
 		return nil
+	}
+	if !session.ValidConv(r.Conv) {
+		r.Conv = "" // only an id is typed; anything else resumes "the latest"
 	}
 	if r.Conv != "" && rs.byID != nil {
 		return rs.byID(r.Fg, flags, r.Conv)
@@ -400,12 +406,36 @@ func resumeArgv(r session.Restore) []string {
 // person picks — or, for an agent with none, it is not started and the
 // line says how to find the conversation.
 func resumePlan(r session.Restore, peers []session.Restore) (argv []string, note string) {
+	return resumePlanFor(r, peers, "")
+}
+
+// resumePlanFor is resumePlan for the shell the command is typed into: a flag
+// that shell would act on is left out, and the note says which.
+func resumePlanFor(r session.Restore, peers []session.Restore, shell string) (argv []string, note string) {
+	argv, note = resumePlanBody(r, peers, shell)
+	if argv != nil {
+		if _, dropped, _ := resumeFlagsFor(r, shellUnsafe(shell)); len(dropped) > 0 {
+			left := "left out " + strings.Join(dropped, ", ") + ": they held characters a terminal would act on"
+			if note != "" {
+				note += "; " + left
+			} else {
+				note = left
+			}
+		}
+	}
+	return argv, note
+}
+
+func resumePlanBody(r session.Restore, peers []session.Restore, shell string) (argv []string, note string) {
 	if r.Fg == "" {
 		return nil, ""
 	}
 	rs, known := resumers[r.Fg]
 	if !known {
 		return nil, r.Fg + " was running here; reminal does not know how to resume it — start it again by hand"
+	}
+	if !session.ValidConv(r.Conv) {
+		r.Conv = ""
 	}
 	if _, ok := resumeFlags(r); !ok {
 		return nil, r.Fg + " was running a one-off command here, not a conversation — nothing to resume"
@@ -417,14 +447,14 @@ func resumePlan(r session.Restore, peers []session.Restore) (argv []string, note
 		// session's own is not known, so it is picked from the list.
 		r.Conv = ""
 	}
-	argv = resumeArgv(r)
+	argv = resumeArgvFor(r, shell)
 	if argv == nil {
 		return nil, r.Fg + " was running here; reminal cannot resume it — start it again by hand"
 	}
 	if (r.Conv != "" && rs.byID != nil) || (!taken && !sharesFolder(r, peers)) {
 		return argv, ""
 	}
-	flags, _ := resumeFlags(r)
+	flags, _, _ := resumeFlagsFor(r, shellUnsafe(shell))
 	if rs.pick != nil {
 		if taken {
 			return rs.pick(r.Fg, flags), "the conversation this session last had is open in another session — pick this session's"
@@ -483,6 +513,13 @@ func sharesFolder(r session.Restore, peers []session.Restore) bool {
 // neither a flag the resume would refuse nor a prompt ever gets through.
 // Without it, only the flags known here are.
 func resumeFlags(r session.Restore) ([]string, bool) {
+	flags, _, ok := resumeFlagsFor(r, hasControl)
+	return flags, ok
+}
+
+// resumeFlagsFor is resumeFlags leaving out each flag that, or whose value,
+// unsafe refuses (shellUnsafe), and saying which it left out.
+func resumeFlagsFor(r session.Restore, unsafe func(string) bool) (flags, dropped []string, ok bool) {
 	// Where the program's own arguments start: past its interpreter and the
 	// interpreter's own options, to the LAST argument naming its file.
 	// cursor-agent runs as `cursor-agent --use-system-ca
@@ -518,7 +555,6 @@ func resumeFlags(r session.Restore) ([]string, bool) {
 		}
 		return false, false
 	}
-	var flags []string
 	sawPositional := false
 	for i := start; i < len(args); i++ {
 		a := args[i]
@@ -527,14 +563,14 @@ func resumeFlags(r session.Restore) ([]string, bool) {
 		}
 		if !strings.HasPrefix(a, "-") || a == "-" {
 			if !sawPositional && inList(rules.oneShotSub, a) {
-				return nil, false
+				return nil, nil, false
 			}
 			sawPositional = true
 			continue // a prompt, or a subcommand: not carried over
 		}
 		name, _, hasValue := strings.Cut(a, "=")
 		if inList(rules.oneShot, name) {
-			return nil, false
+			return nil, nil, false
 		}
 		takes, ok := known(name)
 		if inList(rules.drop, name) {
@@ -550,13 +586,18 @@ func resumeFlags(r session.Restore) ([]string, bool) {
 			// not a flag either, and is dropped as a positional would be.
 			continue
 		}
-		flags = append(flags, a)
+		kept := []string{a}
 		if takes && !hasValue && i+1 < len(args) {
-			flags = append(flags, args[i+1])
+			kept = append(kept, args[i+1])
 			i++
 		}
+		if unsafe(kept[0]) || (len(kept) == 2 && unsafe(kept[1])) {
+			dropped = append(dropped, noteSafe(name, 40))
+			continue
+		}
+		flags = append(flags, kept...)
 	}
-	return flags, true
+	return flags, dropped, true
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
@@ -572,11 +613,11 @@ func shellCommand(argv []string, shell string) string {
 			if shellSafe.MatchString(a) && !strings.ContainsAny(a, "@") {
 				q[i] = a
 			} else {
-				q[i] = "'" + strings.ReplaceAll(a, "'", "''") + "'"
+				q[i] = "'" + psQuotes.Replace(a) + "'"
 			}
 		}
 		return strings.Join(q, " ")
-	case strings.HasPrefix(base, "cmd"):
+	case isCmdShell(shell):
 		q := make([]string, len(argv))
 		for i, a := range argv {
 			if shellSafe.MatchString(a) && !strings.ContainsAny(a, "%") {
@@ -643,11 +684,12 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 	}
 	plan := func() (string, string) {
 		peers, _ := session.ReadRestores()
-		argv, note := resumePlan(*r, peers)
+		sh := config.Shell()
+		argv, note := resumePlanFor(*r, peers, sh)
 		if argv == nil {
 			return "", note
 		}
-		return shellCommand(argv, config.Shell()), note
+		return shellCommand(argv, sh), note
 	}
 	return st, plan, nil
 }
@@ -677,13 +719,19 @@ func (a *Agent) restoreStart() {
 			break
 		}
 	}
-	body, tail, err := PrepareInjectKeysSplit(run, true)
-	if err == nil {
-		err = a.injectKeys(body)
+	// Nothing but text is ever typed: the plan leaves out what holds a
+	// control character, and this is the last word on it.
+	var body, tail []byte
+	err := errors.New("its command held characters a terminal would act on")
+	if !hasControl(run) {
+		if body, tail, err = PrepareInjectKeysSplit(run, true); err == nil {
+			err = a.injectKeys(body)
+		}
 	}
 	if err != nil {
-		// Never silent: the person is told what would have resumed it.
-		a.record([]byte("\x1b[2mreminal could not start it again (" + err.Error() + "); to resume: " + run + "\x1b[0m\r\n"))
+		// Never silent: the person is told what would have resumed it — as
+		// text, never anything a terminal would act on.
+		a.record([]byte("\x1b[2mreminal could not start it again (" + noteSafe(err.Error(), 120) + "); to resume: " + noteSafe(run, 300) + "\x1b[0m\r\n"))
 		return
 	}
 	if tail != nil {

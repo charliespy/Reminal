@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -57,7 +56,7 @@ func runHook(args []string) error {
 		// The state is fixed; what the payload adds is which conversation the
 		// agent is in, kept so a restart can resume that one and not "the
 		// latest" (see session.Restore).
-		if conv := convFromPayload(readCappedStdin()); conv != "" && id != "" {
+		if conv := convFromPayload(readCappedStdin()); conv != "" && id != "" && convOwnSession(id) {
 			_ = session.WriteConv(id, conv)
 		}
 		state = arg
@@ -145,19 +144,27 @@ func notifyMessage(payload []byte) string {
 	return string(payload)
 }
 
-// convIDRe is what a conversation id may look like. It is typed into a shell
-// on restore, so nothing else gets through.
-var convIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$`)
-
 // convFromPayload is the conversation id in a harness's hook payload, under
 // whichever name that harness gives it, or "".
+// convOwnSession says a hook may record a conversation for session id: it
+// runs inside that session, or its enclosing session cannot be told. A
+// conversation id is what a session types when it is restored, so one
+// session's hook never names another's (REMINAL_SESSION set by hand to
+// another session's id).
+var convOwnSession = func(id string) bool { return convAllowed(session.Enclosing(), id) }
+
+// convAllowed: a hook in session enclosing may write session id's conversation.
+func convAllowed(enclosing, id string) bool {
+	return enclosing == "" || strings.EqualFold(enclosing, id)
+}
+
 func convFromPayload(b []byte) string {
 	var m map[string]any
 	if json.Unmarshal(b, &m) != nil {
 		return ""
 	}
 	for _, k := range []string{"session_id", "conversation_id", "conversationId", "thread_id", "thread-id", "chat_id"} {
-		if v, ok := m[k].(string); ok && convIDRe.MatchString(v) {
+		if v, ok := m[k].(string); ok && session.ValidConv(v) {
 			return v
 		}
 	}
