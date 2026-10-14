@@ -75,6 +75,60 @@ const race = await page.evaluate(async () => {
   ws = null; cryptoKey = null; authed = false;
   return r;
 });
+// An upload, and a paced snapshot's acknowledgement, across a switch: each
+// chunk of a file was sealed with the key current then and sent on the
+// socket current then — so a switch mid-file sent the rest of it to the next
+// session, sealed for that session, and a batch went on with its other files
+// there; an ack sealed for the session left went on the next one's socket.
+const left = await page.evaluate(async () => {
+  const keyA = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  const keyB = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  const kinds = (k) => k.sent.map(f => JSON.parse(f).type);
+  // sockA switches the viewer to sockB (and its key) once it has sent `after` frames.
+  const pair = (after) => {
+    const b = { readyState: WebSocket.OPEN, sent: [], send(f) { this.sent.push(f); } };
+    const a = { readyState: WebSocket.OPEN, sent: [], send(f) { this.sent.push(f); if (this.sent.length === after) { ws = b; cryptoKey = keyB; } } };
+    authed = true; cryptoKey = keyA; ws = a;
+    return { a, b };
+  };
+  const file = (n, size) => new File([new Uint8Array(size)], n);
+  const r = {};
+  window.prompt = () => '1h';
+  // Not left: every chunk, and every file of a batch, sent.
+  let p = pair(1000);
+  await uploadFile(file('big.bin', 3 * UPLOAD_CHUNK_BYTES + 1), 0);
+  await uploadBatch([file('one.bin', 10), file('two.bin', 10)]);
+  r.stayed = kinds(p.a).filter(t => t === 'upload').length;
+  p = pair(1);
+  await uploadFile(file('big.bin', 3 * UPLOAD_CHUNK_BYTES + 1), 0);
+  r.fileOnA = kinds(p.a).length; r.fileOnB = kinds(p.b).filter(t => t === 'upload').length;
+  p = pair(1);
+  await uploadBatch([file('one.bin', 10), file('two.bin', 10), file('three.bin', 10)]);
+  r.batchOnA = kinds(p.a).length; r.batchOnB = kinds(p.b).filter(t => t === 'upload').length;
+  p = pair(1);
+  const dt = new DataTransfer();
+  dt.items.add(new File([new Uint8Array(10)], 'a.png', { type: 'image/png' }));
+  dt.items.add(new File([new Uint8Array(10)], 'b.png', { type: 'image/png' }));
+  document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  await new Promise(res => setTimeout(res, 300));
+  r.pasteOnA = kinds(p.a).length; r.pasteOnB = kinds(p.b).filter(t => t === 'upload').length;
+  // A paced snapshot: its screen, then a part — acknowledged as its sealing
+  // is awaited, the session left meanwhile.
+  p = pair(-1);
+  await onPacedPart({ seq: 1 }, { screen: true, more: true, id: 'snapA' }, new Uint8Array([65]));
+  const ack = onPacedPart({ seq: 2 }, { id: 'snapA', n: 3, i: 0 }, new Uint8Array([66]));
+  ws = p.b; cryptoKey = keyB;
+  await ack;
+  r.ackOnB = kinds(p.b).filter(t => t === 'snapshot_ack').length;
+  ws = null; cryptoKey = null; authed = false; snapLive = null;
+  return r;
+});
+if (left.stayed !== 6) fails.push('an upload whose session was not left sent ' + left.stayed + ' of 6 chunks');
+if (left.fileOnA !== 1 || left.fileOnB) fails.push('a file whose session was left mid-upload: ' + left.fileOnB + ' chunk(s) went to the next session (' + left.fileOnA + ' on its own)');
+if (left.batchOnA !== 1 || left.batchOnB) fails.push('a batch whose session was left: ' + left.batchOnB + ' file(s) went to the next session');
+if (left.pasteOnA !== 1 || left.pasteOnB) fails.push('pasted images whose session was left: ' + left.pasteOnB + ' went to the next session');
+if (left.ackOnB) fails.push('a snapshot part acknowledged as its session was left: the ack went on the next one\'s socket');
+
 if (race.threw.length) fails.push('a frame sealed as its session was left threw: ' + race.threw[0]);
 if (race.onNext) fails.push(race.onNext + ' frame(s) sealed for the session left were sent on the next one\'s socket');
 

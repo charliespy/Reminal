@@ -6292,9 +6292,12 @@
       // How many from the first are in: the agent sends the next as these come.
       let have = 0;
       while (have < a.n && a.parts[have]) have++;
+      // Acknowledged on the socket the part came on (send()): sealed for
+      // this session, so never on the next one's after a switch.
+      const sock = ws;
       try {
         const ack = await encrypt(cryptoKey, JSON.stringify({ viewer: viewerId, snap: a.id, seq: have }));
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'snapshot_ack', data: ack }));
+        if (sock && ws === sock && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ type: 'snapshot_ack', data: ack }));
       } catch (_) {}
       if (!last) return;
       let whole;
@@ -8638,10 +8641,18 @@
     // order once all `total` chunks have arrived.
     const UPLOAD_CHUNK_BYTES = 256 * 1024;
     const UPLOAD_MAX_BYTES = 100 * 1024 * 1024; // 100 MB hard cap
-    async function uploadFile(file, ttlSeconds) {
-      if (!authed || !cryptoKey) {
+    // An upload's session, as it began: its socket and its key. A file is
+    // sent to the session it was dropped on, sealed for it — never, after a
+    // switch, the rest of it to the next one, sealed for that one.
+    function uploadLink() { return authed && cryptoKey && ws && ws.readyState === WebSocket.OPEN ? { sock: ws, key: cryptoKey } : null; }
+    function uploadLinkLive(l) { return !!l && ws === l.sock && cryptoKey === l.key && l.sock.readyState === WebSocket.OPEN; }
+    // uploadFile sends file to the session of link (the current one when
+    // none is given); false once that session has been left.
+    async function uploadFile(file, ttlSeconds, link) {
+      link = link || uploadLink();
+      if (!link) {
         alert('Not connected — connect to a session first.');
-        return;
+        return false;
       }
       if (file.size > UPLOAD_MAX_BYTES) {
         alert(file.name + ' is too large (' + humanBytes(file.size) +
@@ -8649,6 +8660,7 @@
         return;
       }
       const buf = new Uint8Array(await file.arrayBuffer());
+      if (!uploadLinkLive(link)) { viewerNote('upload of ' + file.name + ' not sent: the session it was for was left'); return false; }
       const total = Math.max(1, Math.ceil(buf.length / UPLOAD_CHUNK_BYTES));
       const uploadId =
         (self.crypto && self.crypto.randomUUID && self.crypto.randomUUID()) ||
@@ -8677,9 +8689,14 @@
             content: bytesToBase64(slice),
             ttl_seconds: ttlSeconds || 0,
           });
-          const ct = await encrypt(cryptoKey, new TextEncoder().encode(payload));
+          const ct = await encrypt(link.key, new TextEncoder().encode(payload));
+          if (!uploadLinkLive(link)) {
+            pendingUploadIDs.delete(uploadId);
+            viewerNote('upload of ' + file.name + ' stopped after ' + i + ' of ' + total + ' chunk' + (total === 1 ? '' : 's') + ': the session it was for was left');
+            return false;
+          }
           const frame = JSON.stringify({ type: 'upload', data: ct });
-          ws.send(frame);
+          link.sock.send(frame);
           // Yield to the event loop between chunks so the UI stays
           // responsive and the WS send buffer can drain.
           if (total > 1 && i < total - 1) await new Promise(r => setTimeout(r, 0));
@@ -8691,7 +8708,9 @@
         // an upload_ack racing in afterwards lands on an empty set.
         pendingUploadIDs.delete(uploadId);
         viewerNote('upload failed at send: ' + e);
+        return false;
       }
+      return true;
     }
     // Prompt once per upload batch — same TTL applies to every selected file.
     async function uploadBatch(files) {
@@ -8703,7 +8722,11 @@
       );
       if (ttlStr === null) return; // user cancelled
       const ttl = parseTTL(ttlStr);
-      for (const f of files) await uploadFile(f, ttl);
+      // Every file to the session they were dropped on: the batch stops
+      // once it has been left.
+      const link = uploadLink();
+      if (!link) { alert('Not connected — connect to a session first.'); return; }
+      for (const f of files) if (!(await uploadFile(f, ttl, link))) return;
     }
     const uploadInput = document.getElementById('upload-input');
     document.getElementById('upload-btn').addEventListener('click', () => uploadInput.click());
@@ -8741,6 +8764,8 @@
       if (imageFiles.length === 0) return; // not an image paste
       e.preventDefault();
       const DEFAULT_PASTE_TTL = 3600; // 1h — phone-pasted screenshots are mostly ephemeral
+      const link = uploadLink(); // every image to the session it was pasted into
+      if (!link) return;
       for (const f of imageFiles) {
         // Phone clipboard images often come in as "image.png" with no
         // useful name. Stamp a timestamp so concurrent pastes don't collide.
@@ -8748,7 +8773,7 @@
           ? f.name
           : 'paste-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
         const renamed = new File([f], stamped, { type: f.type });
-        await uploadFile(renamed, DEFAULT_PASTE_TTL);
+        if (!(await uploadFile(renamed, DEFAULT_PASTE_TTL, link))) return;
       }
       viewerNote('pasted ' + imageFiles.length + ' image' +
         (imageFiles.length === 1 ? '' : 's') + ' (auto-delete in 1h)');
