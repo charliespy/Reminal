@@ -1,3 +1,4 @@
+import { closeBack } from "./closeback";
 import type { Attachment, TunnelMeta } from "./types";
 import { ALARM_ARMS, armAlarm, type AlarmArms } from "./alarm";
 
@@ -372,7 +373,17 @@ export class SessionRoom {
     // tunnel sockets don't pass through opaque messages.
   }
 
+  // The room's own bookkeeping for a socket that went, then the close
+  // answered (closeBack) — for every role, a rejected socket's too.
   async webSocketClose(ws: WebSocket, code?: number, reason?: string) {
+    try {
+      await this.onSocketClose(ws, code, reason);
+    } finally {
+      closeBack(ws, code, reason);
+    }
+  }
+
+  private async onSocketClose(ws: WebSocket, code?: number, reason?: string) {
     const attachment = ws.deserializeAttachment() as Attachment;
     if (attachment.rejected) return;
 

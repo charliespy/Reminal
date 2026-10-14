@@ -62,7 +62,11 @@ const live = (p) => p.waitForFunction(() => inputLive(), null, { timeout: 60000 
   await p.waitForFunction(() => !inputLive(), null, { timeout: 10000 });
   await live(p);
   const back = Date.now() - t0, first = ctl.dials[n] - t0;
-  out.push(`2a dropped: dialled again ${first} ms after, live again in ${back} ms   ${verdict(first < 500)}`);
+  // "At once" is within the close's own round trip, never the 1 s backoff
+  // (nor a peer that never answered the close: ~10 s): under 1 s on a link
+  // where a close takes ~0.3 s (the Go relay) or ~0.6 s (wrangler dev's two
+  // hops), here.
+  out.push(`2a dropped: dialled again ${first} ms after, live again in ${back} ms   ${verdict(first < 1000)}`);
   // Up again: a drop whose at-once redial is refused, then the backoff.
   await p.waitForTimeout(1000);
   n = ctl.dials.length; t0 = Date.now();
@@ -70,7 +74,7 @@ const live = (p) => p.waitForFunction(() => inputLive(), null, { timeout: 60000 
   await p.evaluate(() => ws.close());
   await live(p);
   const d1 = ctl.dials[n] - t0, d2 = ctl.dials[n + 1] - ctl.dials[n];
-  out.push(`2b the at-once redial refused: it dialled ${d1} ms after the drop, again ${d2} ms later   ${verdict(d1 < 500 && d2 >= 900)}`);
+  out.push(`2b the at-once redial refused: it dialled ${d1} ms after the drop, again ${d2} ms later   ${verdict(d1 < 1000 && d2 >= 900)}`);
   await ctx.close();
 }
 
