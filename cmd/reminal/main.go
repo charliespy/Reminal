@@ -813,12 +813,14 @@ func main() {
 				os.Exit(1)
 			}
 			opts.Resume, opts.RestorePlan = st, plan
+			client.StartMark("load") // its restore record and scrollback read
 		}
 		agent, err := client.NewAgentWith(version, opts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		client.StartMark("agent") // made: its keys, its socket, its shell to come
 		// Keep the Host panel's "a newer version is available" answer current.
 		// Quiet and non-applying — see updater.RefreshAvailable. Without it a
 		// machine that only ever runs background sessions never populates the

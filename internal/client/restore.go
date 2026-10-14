@@ -822,6 +822,10 @@ func RestoreSession(r session.Restore) (*SpawnedSession, error) {
 	if err := json.Unmarshal([]byte(line), sp); err != nil {
 		return nil, fmt.Errorf("parse handshake: %w", err)
 	}
+	if len(sp.Phases) > 0 {
+		fmt.Printf("reminal: restored %s: load %d ms, agent %d ms, replay %d ms, register %d ms\n",
+			sp.ID, sp.Phases["load"], sp.Phases["agent"], sp.Phases["replay"], sp.Phases["register"])
+	}
 	return sp, nil
 }
 
