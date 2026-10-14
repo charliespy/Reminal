@@ -222,11 +222,13 @@ export class SessionRoom {
     this.state.acceptWebSocket(server);
 
     // The expiry alarm is cancelled once this connection authenticates
-    // (handleAuth), not here: a connection that never does must not keep an
-    // empty room alive. A room that has nothing authenticated yet gets its
-    // expiry armed now, so a socket that never authenticates cannot hold a
-    // brand-new room open either.
-    if ((role === "agent" || role === "tunnel") && !this.authedAgent() && !this.authedTunnel()) {
+    // (handleAuth), not here: a connection that never does must not keep a
+    // used room alive, so a used room with nothing authenticated in it has
+    // its expiry armed now. A room never used is left as it is: it holds
+    // nothing to clear, so nothing is written for it (any id can be named);
+    // a socket there that never authenticates holds nothing either, and is
+    // closed when it says anything else or an agent claims the room.
+    if ((role === "agent" || role === "tunnel") && !this.authedAgent() && !this.authedTunnel() && (await this.used())) {
       await this.armExpiry();
     }
     return new Response(null, { status: 101, webSocket: client });
@@ -368,7 +370,7 @@ export class SessionRoom {
       // that has, leaving changes nothing for the viewers. If none is left at
       // all, the room's expiry starts (or keeps) counting.
       if (!attachment.authed || this.authedAgent(ws)) {
-        if (!this.authedAgent(ws) && !this.authedTunnel()) await this.armExpiry();
+        if (!this.authedAgent(ws) && !this.authedTunnel() && (await this.used())) await this.armExpiry();
         return;
       }
       for (const v of this.getSockets("viewer")) {
@@ -1449,6 +1451,15 @@ export class SessionRoom {
       await this.state.storage.put("hsSalt", salt);
     }
     return salt;
+  }
+
+  // used says whether this room has held an authenticated agent or tunnel:
+  // the first keeps its credential (token or pinHash), and every one keeps
+  // who the room belongs to (ownerHash) until the room is cleared for good.
+  // A room with none of them has nothing to clear.
+  private async used(): Promise<boolean> {
+    const kept = await this.state.storage.get(["ownerHash", "token", "pinHash"]);
+    return kept.size > 0;
   }
 
   // armExpiry sets the room's expiry unless one at least as near is set. A
