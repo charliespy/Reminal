@@ -7,7 +7,7 @@ This is `github.com/charmbracelet/ultraviolet` at v0.0.0-20260622092850-f39628c8
 - removed `TUTORIAL.md`;
 - added this file and `buffer_reminal_test.go`.
 
-**Patched:** in `buffer.go`, `Buffer.InsertLineArea` and `Buffer.DeleteLineArea`, plus the new helpers `rotateLines` and `reverseLines`. Every other file is upstream's as it was.
+**Patched:** in `buffer.go`, `Buffer.InsertLineArea` and `Buffer.DeleteLineArea`, plus the new helpers `rotateLines` and `reverseLines`. And one upstream test made deterministic: `poll_default_test.go`'s `TestReader` cancelled its reader only after starting a read on a pipe that already held data, so the read sometimes won (about 1 run in 300, seen in CI); it now cancels first. Every other file is upstream's as it was.
 
 **The change:** `Buffer.InsertLineArea` and `Buffer.DeleteLineArea` move whole lines (their slice headers, `rotateLines`) when the area is as wide as the buffer, instead of copying every cell.
 
