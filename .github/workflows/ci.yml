@@ -43,6 +43,12 @@ jobs:
       # are the kind that surface as a frozen picture rather than a crash.
       - name: Test with the race detector
         run: go test -race ./...
+      # third_party/ultraviolet is a module of its own (the root go.mod's
+      # replace points at it), so ./... above leaves it out: its tests,
+      # with reminal's line-move checks, run here.
+      - name: Test the ultraviolet copy
+        working-directory: third_party/ultraviolet
+        run: go vet ./... && go test -race ./...
 
   # Releases build one platform per job, so a break on a platform this machine
   # is not gets found at tag time, when the fix costs a re-tag. Compile them all
