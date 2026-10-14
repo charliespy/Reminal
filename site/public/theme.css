@@ -258,6 +258,17 @@ form.signup button:disabled{opacity:.5;cursor:default}
 .formmsg.err{color:#d93036}
 @media (max-width:520px){form.signup{flex-direction:column}form.signup input,form.signup button{flex:none}}
 
+/* guide lists: the /guides/ hub, "More guides" under each guide, /agents */
+.more-guides{list-style:none;margin:16px 0 0;padding:0;max-width:720px;border-top:1px solid var(--line)}
+.more-guides li{padding:14px 0;border-bottom:1px solid var(--line)}
+.more-guides a{font-weight:600;color:var(--ink);text-decoration:none;font-size:17px;letter-spacing:-.01em}
+.more-guides a:hover{text-decoration:underline;text-underline-offset:4px}
+.more-guides span{display:block;margin-top:4px;color:var(--dim);font-size:15px;line-height:1.55}
+body.doc ul.more-guides{padding-left:0}
+body.doc .more-guides li{margin:0}
+.more-guides.big li{padding:20px 0}
+.more-guides.big a{font-size:21px;letter-spacing:-.02em}
+
 /* a text caret's blink (hero terminal, storyline scenes) */
 @keyframes blink{50%{opacity:0}}
 
