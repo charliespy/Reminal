@@ -6,7 +6,6 @@ package client
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -19,11 +18,7 @@ func TestTerminalLinksAreHTTPOnly(t *testing.T) {
 	if err != nil {
 		t.Skip("node not installed")
 	}
-	src, err := os.ReadFile("web/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(src)
+	s := viewerText(t, "web")
 	start := strings.Index(s, "const reminalLinks = (function () {")
 	if start < 0 {
 		t.Fatal("reminalLinks is no longer where this test looks for it — fix the test, do not delete it")

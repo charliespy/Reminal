@@ -44,3 +44,29 @@ func TestCSPNamesEveryCDNScriptThePageLoads(t *testing.T) {
 		t.Fatal("the CSP allows a whole CDN")
 	}
 }
+
+// viewerText is the viewer as a browser runs it: the page in dir, then each
+// script it loads from its own assets/, in the page's order. What the static
+// checks look for in the page's code is in those scripts now, not the page.
+func viewerText(t *testing.T, dir string) string {
+	t.Helper()
+	page, err := os.ReadFile(dir + "/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	b.Write(page)
+	srcs := regexp.MustCompile(`<script src="/(assets/[^"/]+\.js)"`).FindAllStringSubmatch(string(page), -1)
+	if len(srcs) == 0 {
+		t.Fatalf("%s/index.html loads no script of its own from assets/", dir)
+	}
+	for _, m := range srcs {
+		js, err := os.ReadFile(dir + "/" + m[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.WriteString("\n")
+		b.Write(js)
+	}
+	return b.String()
+}

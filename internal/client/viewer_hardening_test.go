@@ -29,7 +29,7 @@ func readHosted(t *testing.T, name string) []byte {
 // else must be exactly the file that was reviewed. A tag without an integrity
 // hash runs whatever that host serves on the day.
 func TestEveryExternalScriptAndStylesheetIsPinned(t *testing.T) {
-	page := string(readHosted(t, "index.html"))
+	page := viewerText(t, hostedPublic)
 	tags := regexp.MustCompile(`<(script|link)\b[^>]*\b(?:src|href)="https://[^"]+"[^>]*>`).FindAllString(page, -1)
 	if len(tags) == 0 {
 		t.Fatal("found no external tags at all — the pattern has stopped matching the page")
@@ -58,7 +58,7 @@ func TestEveryExternalScriptAndStylesheetIsPinned(t *testing.T) {
 // actually hashes to, in both copies — otherwise the browser refuses to load
 // it and nobody can connect with a PIN.
 func TestVendoredRistrettoMatchesItsPinnedHash(t *testing.T) {
-	page := string(readHosted(t, "index.html"))
+	page := viewerText(t, hostedPublic)
 	m := regexp.MustCompile(`RISTRETTO_SRI = 'sha384-([^']+)'`).FindStringSubmatch(page)
 	if m == nil {
 		t.Fatal("RISTRETTO_SRI not found in the page")
@@ -93,7 +93,7 @@ func TestViewerHeaders(t *testing.T) {
 			t.Errorf("cloudflare/public/_headers is missing %q", want)
 		}
 	}
-	page := string(readHosted(t, "index.html"))
+	page := viewerText(t, hostedPublic)
 	for _, m := range regexp.MustCompile(`<script\b[^>]*\bsrc="(https://[^/"]+)`).FindAllStringSubmatch(page, -1) {
 		if !strings.Contains(viewerCSP, m[1]) {
 			t.Errorf("the page loads a script from %s, which the policy does not allow", m[1])

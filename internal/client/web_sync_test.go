@@ -50,11 +50,7 @@ func checkWebCopyInSync(t *testing.T, name string) {
 // the dropdown listener must run before a pane fences clicks, and a two-finger
 // swipe must preserve both local pan and edge-chained remote scrolling.
 func TestPaneGestureContracts(t *testing.T) {
-	b, err := os.ReadFile("web/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(b)
+	s := viewerText(t, "web")
 	for _, required := range []string{
 		"runs in capture phase so pane click isolation cannot hide an outside tap",
 		"}, true);\n    // While the Host dropdown is open",
