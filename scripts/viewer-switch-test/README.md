@@ -38,3 +38,21 @@ switch back dials afresh and gets no key.
 the relay's and the agents' load can be sampled in each. Against the Worker,
 count the Durable Object's websocket events with a `console.log` in
 `webSocketMessage` in a scratch copy (never in the tree).
+
+## Switch size
+
+`switch-size.js joins.txt <phone|tablet|desktop>` (two sessions, `SHELL` as
+above, 75 ms of delay): another viewer, wide and low (1000×380), leaves the
+second session's PTY short with `switch-size-tui.sh` running in it (copied
+to `/p`, or named by `TUI_SH`). That's a full-screen program in miniature,
+drawing `BOT-<rows>` on its last row and again on every SIGWINCH. The page,
+on a phone (412×915), a tall tablet (757×840, about 1968×2184 device pixels)
+or a desktop, then switches to it fresh, back, and to it warm. On every
+switch the session switched to is sent this screen's size (`sent`), and the
+grid is never shorter than the box (`gridShortFrames` 0). On a warm switch,
+the first frame that shows the program already has it on the grid's last
+row. On a fresh one, the screen is asked for with the handshake, before
+there's a key to send the size under, so its first frame may still be at
+the old size. It's on the last row once the size lands (`fullAtMs`). Every
+`ok` is true. Run it against the Go relay and against `wrangler dev` (the
+sessions' `REMINAL_RELAY`/`REMINAL_WEB` pointed at it).
