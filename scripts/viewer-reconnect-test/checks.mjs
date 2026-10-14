@@ -137,7 +137,7 @@ if (TS) {
   await A.p.goto(`${BASE}/?s=${TS}#p=${TPIN}`, { waitUntil: 'domcontentloaded' });
   await live(A.p);
   await A.p.waitForTimeout(1000);
-  await A.p.evaluate(() => { window.__notes = []; new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => __notes.push(n.textContent)))).observe(document.getElementById('viewer-notes'), { childList: true }); });
+  await A.p.evaluate(() => { window.__notes = []; const box = document.getElementById('viewer-notes'); if (box) new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => __notes.push(n.textContent)))).observe(box, { childList: true }); });
   await A.p.keyboard.press('Enter');
   await A.p.waitForTimeout(1500);
   await A.p.evaluate(() => ws.close());
