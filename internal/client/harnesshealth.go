@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"reminal/internal/session"
 )
 
 // Whether the agent in this session can work at all. A harness whose login
@@ -37,18 +39,36 @@ const harnessLoggedOut = "logged-out"
 // /login looped" does not match).
 var harnessLoginNotice = regexp.MustCompile(`(loginexpired|notloggedin|invalidapikey|oauthtoken(has)?expired)[·:.,\-]*(please)?run/login`)
 
-// harnessLoginScreen is the sign-in screen other CLIs start on when they
+// harnessLoginScreens are the sign-in screens other CLIs start on when they
 // have no login — a menu of ways to sign in, not an error. A message typed
 // into one picks a menu item or answers its question: Amp's "Would you
 // like to log in? [(y)es, (n)o]" took the first letter of a welcome as a
-// no, and the login was gone. Each is the screen's own heading, specific
-// enough not to turn up in an agent's prose.
-var harnessLoginScreen = regexp.MustCompile(`youarecurrentlynotsignedin|` + // Antigravity CLI
-	`howwouldyouliketoauthenticate|noauthenticationmethodselected|` + // Gemini CLI
-	`wouldyouliketologintoamp|noapikeyfound\.startingloginflow|` + // Amp
-	`signinwithchatgpt|provideyourownapikey|incorrectapikeyprovided|` + // Codex
-	`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|` + // Qwen Code
-	`connectwithanexistingmodelstudioapikey`)
+// no, and the login was gone. Each is the screen's own heading, and counts
+// only when its own CLI is the program here: a Claude Code session whose tool
+// printed Codex's sign-in menu (a check of Codex's login, 2026-10-14) is not
+// logged out, and was read as one for as long as that output was on screen.
+var harnessLoginScreens = map[string]*regexp.Regexp{
+	"agy":    regexp.MustCompile(`youarecurrentlynotsignedin`),
+	"gemini": regexp.MustCompile(`howwouldyouliketoauthenticate|noauthenticationmethodselected`),
+	"amp":    regexp.MustCompile(`wouldyouliketologintoamp|noapikeyfound\.startingloginflow`),
+	"codex":  regexp.MustCompile(`signinwithchatgpt|provideyourownapikey|incorrectapikeyprovided`),
+	"qwen":   regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey`),
+}
+
+// harnessLoginScreenIn reports whether a row is the sign-in screen of prog,
+// the program here; of any of them when it is not known.
+func harnessLoginScreenIn(flat, prog string) bool {
+	if prog == "" {
+		for _, re := range harnessLoginScreens {
+			if re.MatchString(flat) {
+				return true
+			}
+		}
+		return false
+	}
+	re := harnessLoginScreens[prog]
+	return re != nil && re.MatchString(flat)
+}
 
 // harnessLoginLines are other CLIs' notices: they count only on a short row
 // that begins with them — a status line, not a sentence in an answer.
@@ -103,8 +123,10 @@ func harnessTail(render string, n int) string {
 }
 
 // harnessProblemIn reports whether the bottom of a screen says the agent is
-// logged out.
-func harnessProblemIn(tail string) bool {
+// logged out. prog is the program running here, as the attention probe found
+// it ("" when it is not known): only its own sign-in screen, and Claude
+// Code's notice only from Claude Code, are its own.
+func harnessProblemIn(tail, prog string) bool {
 	var rows []string
 	for _, row := range strings.Split(tail, "\n") {
 		if flat := strings.ToLower(strings.Join(strings.Fields(row), "")); flat != "" {
@@ -113,7 +135,7 @@ func harnessProblemIn(tail string) bool {
 	}
 	for i, flat := range rows {
 		bottom := i >= len(rows)-harnessLineRows
-		if harnessLoginScreen.MatchString(flat) || harnessNoticeRow(flat, bottom) {
+		if harnessLoginScreenIn(flat, prog) || ((prog == "" || prog == "claude") && harnessNoticeRow(flat, bottom)) {
 			return true
 		}
 		if !bottom {
@@ -150,15 +172,35 @@ func harnessNoticeRow(flat string, bottom bool) bool {
 	return bottom && loc[1] == len(core) // the end of the status line
 }
 
-// noteHarnessHealth is called with each attention tick's screen.
-func (a *Agent) noteHarnessHealth(render string) {
+// harnessAtWork reports whether the harness's own hook shows a turn under way
+// for longer than a logged-out one lasts: one turned away ends at once ("Login
+// expired" and done), so a turn still going after harnessTurnProof, with its
+// screen still moving (a spinner, output), is an agent that can work —
+// whatever the screen's text says of logins.
+func harnessAtWork(hs *session.HookState, now time.Time, settledMs int64) bool {
+	if hs == nil || hs.State != "working" {
+		return false
+	}
+	age := now.Sub(hs.TS)
+	return age >= harnessTurnProof && age < session.HookStateTTL && settledMs < attnSettleMs
+}
+
+// harnessTurnProof is how long a turn must have been going to show a login.
+const harnessTurnProof = 10 * time.Second
+
+// noteHarnessHealth is called with each attention tick's screen, the program
+// running here ("" when not known), and whether its hook shows it at work.
+func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 	// The render carries its styling — "\x1b[1mLogin\x1b[m \x1b[1mexpired" —
 	// which would sit between the words; the text is what is read.
-	bad := harnessProblemIn(harnessTail(stripANSI(render), harnessRows))
+	bad := !atWork && harnessProblemIn(harnessTail(stripANSI(render), harnessRows), prog)
 	a.metaMu.Lock()
 	h := &a.harness
 	changed := false
-	if bad {
+	if atWork && h.down {
+		// Seen at work: logged in, now.
+		h.down, h.seen, h.gone, changed = false, 0, 0, true
+	} else if bad {
 		h.gone = 0
 		if h.seen++; !h.down && h.seen >= harnessDownAfter {
 			h.down, h.since, changed = true, time.Now(), true
