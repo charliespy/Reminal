@@ -51,6 +51,7 @@ const REDIRECTS = new Map([
 // into one.
 const PAGES = new Set([
   "/agents",
+  "/guides",
   "/privacy",
   "/terms",
   "/guides/macbook-lid-closed",
