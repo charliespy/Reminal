@@ -175,6 +175,11 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 		name := strings.TrimSpace(strings.TrimPrefix(line, "rename "))
 		a.setName(name)
 		_, _ = fmt.Fprintln(conn, "ok")
+	case line == "attn":
+		// `reminal hook` wrote this session's state: read it now, not when
+		// the screen next moves.
+		a.kickAttention()
+		_, _ = fmt.Fprintln(conn, "ok")
 	case line == "note-acts":
 		// Drained by `reminal mcp` so viewer-side dismissals reach it.
 		_, _ = fmt.Fprintln(conn, "ok", a.recentActs())

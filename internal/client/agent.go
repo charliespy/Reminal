@@ -420,6 +420,10 @@ type Agent struct {
 	// attnStop ends the attention detector (see startAttention).
 	attnMu   sync.Mutex
 	attnStop chan struct{}
+	attnDone chan struct{} // closed when the detector has returned (stopAttention waits on it)
+	// attnKick wakes the detector (kickAttention), made on first use.
+	attnKick     chan struct{}
+	attnKickOnce sync.Once
 	// stopControlFn is the cancel function returned by listenControl().
 	// Hot-restart calls it explicitly so the new image can re-bind the
 	// same control socket (PID is preserved across Exec, so the path
@@ -1469,6 +1473,7 @@ func (a *Agent) markActivity(now time.Time) {
 	a.lastActivity = now
 	a.metaMu.Unlock()
 	a.metaDirty.Store(true)
+	a.kickAttention()
 }
 
 // noteInput records that a person typed — if it really was a person. Both
@@ -2348,6 +2353,7 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	if a.screen == nil || cols == 0 || rows == 0 {
 		return
 	}
+	defer a.kickAttention() // after the screen lock is let go
 	a.screenMu.Lock()
 	// Arm before the emulator changes size so a racing PTY read cannot
 	// apply the shim to the pre-anchor screen.

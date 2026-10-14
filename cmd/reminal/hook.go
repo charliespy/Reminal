@@ -72,8 +72,21 @@ func runHook(args []string) error {
 	if id == "" {
 		return nil
 	}
-	return session.WriteHookState(id, state)
+	if err := session.WriteHookState(id, state); err != nil {
+		return err
+	}
+	// The session's agent reads the state when told to, so a turn that ends
+	// on a still screen shows as ended at once. An agent too old to know the
+	// verb, or gone, reads it the next time its screen moves.
+	if rec, err := session.ReadActiveByID(id); err == nil && rec.PID > 0 {
+		_, _ = sendControl(rec.PID, "attn", hookNudgeWait)
+	}
+	return nil
 }
+
+// hookNudgeWait caps telling the agent: a local socket answers at once, and a
+// hung agent must not hold up the harness that fired the hook.
+const hookNudgeWait = 500 * time.Millisecond
 
 // stdinWait bounds how long we wait for the harness to finish writing the
 // event payload. Generous for a local pipe, but finite: a hook that never
