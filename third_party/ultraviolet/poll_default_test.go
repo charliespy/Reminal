@@ -31,16 +31,19 @@ func TestReader(t *testing.T) {
 		t.Errorf("expected no error, but got %s", err)
 	}
 
+	// Cancelled before the read starts (reminal: upstream started the read
+	// first and cancelled after, racing it — with "hello" already in the
+	// pipe, a read that ran first returned a byte, about 1 run in 300; see
+	// REMINAL.md).
+	if !pollReader.Cancel() {
+		t.Errorf("expected cancellation to be success")
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		p := make([]byte, 1)
 		n, err = pollReader.Read(p)
 	}()
-
-	if !pollReader.Cancel() {
-		t.Errorf("expected cancellation to be success")
-	}
 
 	select {
 	case <-done:
