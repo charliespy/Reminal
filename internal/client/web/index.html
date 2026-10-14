@@ -8682,6 +8682,17 @@
         // it and can't MITM the handshake. The relay auths a viewer on the
         // session being live; a wrong PIN fails the EKE unwrap ("PIN mismatch").
         ws.send(JSON.stringify({ type: 'auth' }));
+        // The handshake goes right behind auth instead of waiting for auth_ok:
+        // a round trip less on every connect and switch. Both relays take a
+        // socket's frames in order — the Go relay reads them in turn, the
+        // Worker's Durable Object holds the next frame while auth's storage
+        // calls run — so it always reaches the agent authed. If the agent is
+        // away the relay drops it, and agent_online sends another, as before.
+        startHandshake().catch((e) => {
+          setStatus('Handshake failed: ' + e.message, 'error');
+          fatal = true;
+          try { ws.close(); } catch (_) {}
+        });
         // Heartbeat. Cloudflare Workers keeps the WS alive on its end,
         // but mobile carriers / NAT timeouts / VPN tunnels can silently
         // drop an idle socket without surfacing close to either side
@@ -8778,11 +8789,10 @@
           rememberSession(sessionId, pinValue);
           refreshTabTitle();
           acquireWakeLock();
-          // Kick off the PIN handshake (CPace). If the agent is offline right
-          // now the relay drops our pake_init; the next agent_online event
-          // re-sends it (see below).
+          // The handshake left with auth (ws.onopen). Only a socket that has
+          // none yet starts one here.
           try {
-            await startHandshake();
+            if (handshakeSock !== ws) await startHandshake();
           } catch (e) {
             setStatus('Handshake failed: ' + e.message, 'error');
             fatal = true;
