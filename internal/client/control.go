@@ -228,8 +228,10 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 		// With a new PIN, as repin: a device that owned this machine could
 		// have learned the PIN as it was (an owner's Share menu shows it),
 		// and a key change alone would let it back in with that. Sent only
-		// on a revoke, so any change since this process began is one.
-		if currentOwnersFingerprint() == a.ownersFP {
+		// on a revoke, so any change to the owner stores since this process
+		// began is one — even a device added and revoked again since, which
+		// leaves the set as it was but had its chance to connect.
+		if !ownersChangedSince(a.ownersAt) {
 			_, _ = fmt.Fprintln(conn, "ok unchanged")
 			return
 		}

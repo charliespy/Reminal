@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"net"
 	"testing"
+	"time"
 )
 
 // A revoked device is signed out of open sessions: a session restarts under
@@ -38,22 +39,53 @@ func newOwner(t *testing.T) ed25519.PublicKey {
 func TestOwnersFingerprintSeesEveryWayOut(t *testing.T) {
 	rekeyTestHome(t)
 	a, b := newOwner(t), newOwner(t)
-	fp := currentOwnersFingerprint()
-	if fp == "" || currentOwnersFingerprint() != fp {
+	fp := func() string { of, _ := loadOwners(); return effectiveOwnersFingerprint(of) }
+	before := fp()
+	if before == "" || fp() != before {
 		t.Fatal("no stable fingerprint of the owner set")
 	}
 	if err := RevokeSelf(a); err != nil {
 		t.Fatal(err)
 	}
-	afterSelf := currentOwnersFingerprint()
-	if afterSelf == fp {
-		t.Fatal("a self-revoke left the owner set's fingerprint as it was: open sessions would keep the device")
+	afterSelf := fp()
+	if afterSelf == before {
+		t.Fatal("a self-revoke left the owner set's fingerprint as it was: the machine channel would keep the device")
 	}
 	if _, _, err := RemoveOwner(ownerID(b)); err != nil {
 		t.Fatal(err)
 	}
-	if currentOwnersFingerprint() == afterSelf {
+	if fp() == afterSelf {
 		t.Fatal("a revoke left the owner set's fingerprint as it was")
+	}
+}
+
+// A device added after a session began, and revoked again, leaves the owner
+// set as it was — but had its chance to connect: the session must still
+// rekey. And a session begun after the revoke has nothing to do.
+func TestOwnersChangedSinceSeesAnAddThenARevoke(t *testing.T) {
+	rekeyTestHome(t)
+	newOwner(t)
+	began := time.Now()
+	if ownersChangedSince(began) {
+		t.Fatal("changed with nothing written since")
+	}
+	time.Sleep(20 * time.Millisecond) // mtime must move past began on any filesystem's clock
+	d := newOwner(t)
+	if _, _, err := RemoveOwner(ownerID(d)); err != nil {
+		t.Fatal(err)
+	}
+	if !ownersChangedSince(began) {
+		t.Fatal("an owner added and revoked since the session began went unnoticed")
+	}
+	if ownersChangedSince(time.Now()) {
+		t.Fatal("a session begun after the revoke would restart again")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := RevokeSelf(d); err != nil {
+		t.Fatal(err)
+	}
+	if !ownersChangedSince(began) {
+		t.Fatal("a self-revoke since went unnoticed")
 	}
 }
 
@@ -72,7 +104,8 @@ func rekeyReply(t *testing.T, a *Agent) string {
 func TestRekeyWithTheSameOwnersDoesNotRestart(t *testing.T) {
 	rekeyTestHome(t)
 	newOwner(t)
-	a := &Agent{ownersFP: currentOwnersFingerprint()}
+	time.Sleep(20 * time.Millisecond)
+	a := &Agent{ownersAt: time.Now()}
 	if got := rekeyReply(t, a); got != "ok unchanged\n" {
 		t.Fatalf("rekey with the owner set unchanged: %q, want no restart", got)
 	}
@@ -84,7 +117,7 @@ func TestRekeyWithTheSameOwnersDoesNotRestart(t *testing.T) {
 func TestRekeyRestartsOnceWhileOneIsUnderWay(t *testing.T) {
 	rekeyTestHome(t)
 	newOwner(t)
-	a := &Agent{ownersFP: "the owner set this process began with"}
+	a := &Agent{}          // began before every write: a change since
 	a.rekeying.Store(true) // one under way: the next waits for the new process
 	if got := rekeyReply(t, a); got != "ok restarting\n" {
 		t.Fatalf("a second rekey during a restart: %q", got)

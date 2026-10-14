@@ -96,10 +96,10 @@ type Agent struct {
 	version     string // running binary's version, shown in banner + exit summary
 	box         *crypto.Box
 	sessionKey  []byte // 32-byte AES key wrapped per-viewer via EKE; see crypto/kex.go
-	// ownersFP is the owner set (currentOwnersFingerprint) as this process
-	// found it when it began, under the session key it made then: what a
-	// "rekey" compares against.
-	ownersFP string
+	// ownersAt is when this process began, under the session key (and PIN)
+	// it has: an owner store written since (ownersChangedSince) is a device
+	// added or revoked since — what a "rekey" asks about.
+	ownersAt time.Time
 	rekeying atomic.Bool // a rekey's restart under way: more rekeys wait for the next process
 	// machine is set for the machine-mode agent (AgentOptions.Machine). It has
 	// no PTY: everything terminal-shaped is refused at the reader, and the
@@ -632,7 +632,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			version:        version,
 			box:            box,
 			sessionKey:     sessionKey,
-			ownersFP:       currentOwnersFingerprint(),
+			ownersAt:       time.Now(),
 			buf:            newScrollback(scrollbackBytes),
 			hostEscape:     make(chan struct{}),
 			pendingUploads: make(map[string]*pendingUpload),
@@ -692,7 +692,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 		version:        version,
 		box:            box,
 		sessionKey:     sessionKey,
-		ownersFP:       currentOwnersFingerprint(),
+		ownersAt:       time.Now(),
 		buf:            newScrollback(scrollbackBytes),
 		hostEscape:     make(chan struct{}),
 		pendingUploads: make(map[string]*pendingUpload),

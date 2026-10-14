@@ -180,22 +180,28 @@ func effectiveOwnersFingerprint(of *ownersFile) string {
 	return ownersFingerprint(kept)
 }
 
-// currentOwnersFingerprint is effectiveOwnersFingerprint of the store as it
-// is now ("" when there is none to read).
-func currentOwnersFingerprint() string {
-	of, err := loadOwners()
-	if err != nil {
-		return ""
+// ownersChangedSince reports whether either owner store — owners.json or
+// the self-revoke tombstones — was written after t.
+func ownersChangedSince(t time.Time) bool {
+	for _, path := range []func() (string, error){ownersPath, revokedPath} {
+		p, err := path()
+		if err != nil {
+			continue
+		}
+		if fi, err := os.Stat(p); err == nil && fi.ModTime().After(t) {
+			return true
+		}
 	}
-	return effectiveOwnersFingerprint(of)
+	return false
 }
 
 // RekeySessions tells every session of this user that the owner set may
 // have changed (`reminal owners revoke`, a self-revoke). A session whose
-// owner set did change since it started restarts in place — same PTY,
-// same programs, same PIN — under a new session key, so a revoked device's
-// open viewer is cut off and its fresh handshake refused; one it did not
-// change (a burst of revokes already covered by its restart) does nothing.
+// owner stores were written since it started restarts in place — same PTY,
+// same programs — under a new session key and a new PIN, so a revoked
+// device's open viewer is cut off and it can come back in neither as an
+// owner nor with a PIN it learned; one begun after (a burst of revokes
+// already covered by its restart) does nothing.
 // Best-effort, a short cap per session; returns the sessions that restart,
 // each with a new PIN, as they were before (their old PIN, to tell the new
 // one from).
