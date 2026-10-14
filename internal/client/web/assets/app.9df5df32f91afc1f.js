@@ -3795,6 +3795,14 @@
     // queryDirectory reaches a machine's directory channel and either lists its
     // sessions (default) or spawns a new one (opts.spawn). Resolves with the
     // decrypted DirResponse {hostname, sessions} or, when spawning, {id, pin}.
+    // dirReqId is a directory request's id, which its reply carries back:
+    // every owner on a machine's channel hears every reply, and a request
+    // takes only the one carrying its own. 8 random bytes as hex, never
+    // empty or short, as Math.random's base-36 tail could be: an empty id
+    // took another owner's reply for its own.
+    function dirReqId() {
+      return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
+    }
     async function queryDirectory(machinePubU8, opts) {
       opts = opts || {};
       const dk = await loadDeviceKeyPair();
@@ -3862,17 +3870,17 @@
               box = await crypto.subtle.importKey('raw', skRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
               ch.key = box;
               if (opts.spawn) {
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 const enc = await encrypt(box, JSON.stringify({ name: opts.spawnName || '', cwd: opts.spawnCwd || '', req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'new_session', data: enc }));
                 state = 'spawn';
               } else if (opts.rename) {
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 const enc = await encrypt(box, JSON.stringify({ id: opts.rename.id, name: opts.rename.name, req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_rename', data: enc }));
                 state = 'rename';
               } else if (opts.revokeSelf) {
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 // Prove this is a SELF-revoke: sign (machineKey, deviceKey) with our
                 // device key. Matches Go's RevokeSelfTranscript (sessionID = "").
                 const tr = await ownerTranscript('reminal-revoke-self-v1', '', [machinePubU8, dk.pubRaw]);
@@ -3881,7 +3889,7 @@
                 sock.send(JSON.stringify({ type: 'dir_revoke_self', data: enc }));
                 state = 'revoke';
               } else if (opts.kill) {
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 const enc = await encrypt(box, JSON.stringify({ id: opts.kill, req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_kill', data: enc }));
                 state = 'kill';
@@ -3892,7 +3900,7 @@
                 const p = opts.push;
                 const proof = await signOwnerAction('push:' + p.op + ':' + p.sub.endpoint, dirID);
                 if (!proof) return done(new Error('this device has no owner key'));
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 const enc = await encrypt(box, JSON.stringify({ push: { op: p.op, sub: p.sub, rules: p.rules || undefined, proof, req_id: att.reqId } }));
                 sock.send(JSON.stringify({ type: 'dir_query', data: enc }));
                 state = 'query';
@@ -3900,7 +3908,7 @@
                 // An open lookup rides dir_query with a payload; the host answers
                 // the same dir_resp with open_url/open_pin for that one port. Asked
                 // per click, so the PIN never lands in the cached session list.
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 const enc = await encrypt(box, JSON.stringify({ open_id: opts.open, req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_query', data: enc }));
                 state = 'query';
@@ -5614,7 +5622,12 @@
     }
 
     async function send(msg) {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      // The socket it was asked on: sealing is awaited, and the session may
+      // be left meanwhile — its socket closed (null), or the next one's open.
+      // A frame sealed for this session goes on this session's socket or not
+      // at all.
+      const sock = ws;
+      if (!sock || sock.readyState !== WebSocket.OPEN) return;
       if (msg.type === 'data' || msg.type === 'resize') {
         // Drop rather than leak plaintext: cryptoKey is only null
         // during the brief window between auth_ok and pake_resp, when
@@ -5629,8 +5642,9 @@
           const payload = JSON.stringify({ cols: msg.cols, rows: msg.rows, viewer: viewerId, ...(msg.away ? { away: true } : {}) });
           msg = { type: 'resize', data: await encrypt(cryptoKey, payload) };
         }
+        if (ws !== sock || sock.readyState !== WebSocket.OPEN) return;
       }
-      ws.send(JSON.stringify(msg));
+      sock.send(JSON.stringify(msg));
     }
 
     // iOS (incl. iPadOS, which reports as "MacIntel" + touch) is the only
@@ -6278,9 +6292,12 @@
       // How many from the first are in: the agent sends the next as these come.
       let have = 0;
       while (have < a.n && a.parts[have]) have++;
+      // Acknowledged on the socket the part came on (send()): sealed for
+      // this session, so never on the next one's after a switch.
+      const sock = ws;
       try {
         const ack = await encrypt(cryptoKey, JSON.stringify({ viewer: viewerId, snap: a.id, seq: have }));
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'snapshot_ack', data: ack }));
+        if (sock && ws === sock && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ type: 'snapshot_ack', data: ack }));
       } catch (_) {}
       if (!last) return;
       let whole;
@@ -8624,10 +8641,20 @@
     // order once all `total` chunks have arrived.
     const UPLOAD_CHUNK_BYTES = 256 * 1024;
     const UPLOAD_MAX_BYTES = 100 * 1024 * 1024; // 100 MB hard cap
-    async function uploadFile(file, ttlSeconds) {
-      if (!authed || !cryptoKey) {
+    // An upload's session, as it began: its socket and its key. A file is
+    // sent to the session it was dropped on, sealed for it — never, after a
+    // switch, the rest of it to the next one, sealed for that one.
+    function uploadLink() { return authed && cryptoKey && ws && ws.readyState === WebSocket.OPEN ? { sock: ws, key: cryptoKey } : null; }
+    function uploadLinkLive(l) { return !!l && ws === l.sock && cryptoKey === l.key && l.sock.readyState === WebSocket.OPEN; }
+    // uploadFile sends file to the session of link (the current one when
+    // none is given). false: none sent, nor will any more be — that session
+    // left, not connected, or a send failed; a batch stops there. A file
+    // refused for itself (too large) is said, and the rest go on.
+    async function uploadFile(file, ttlSeconds, link) {
+      link = link || uploadLink();
+      if (!link) {
         alert('Not connected — connect to a session first.');
-        return;
+        return false;
       }
       if (file.size > UPLOAD_MAX_BYTES) {
         alert(file.name + ' is too large (' + humanBytes(file.size) +
@@ -8635,6 +8662,7 @@
         return;
       }
       const buf = new Uint8Array(await file.arrayBuffer());
+      if (!uploadLinkLive(link)) { viewerNote('upload of ' + file.name + ' not sent: the session it was for was left'); return false; }
       const total = Math.max(1, Math.ceil(buf.length / UPLOAD_CHUNK_BYTES));
       const uploadId =
         (self.crypto && self.crypto.randomUUID && self.crypto.randomUUID()) ||
@@ -8663,9 +8691,14 @@
             content: bytesToBase64(slice),
             ttl_seconds: ttlSeconds || 0,
           });
-          const ct = await encrypt(cryptoKey, new TextEncoder().encode(payload));
+          const ct = await encrypt(link.key, new TextEncoder().encode(payload));
+          if (!uploadLinkLive(link)) {
+            pendingUploadIDs.delete(uploadId);
+            viewerNote('upload of ' + file.name + ' stopped after ' + i + ' of ' + total + ' chunk' + (total === 1 ? '' : 's') + ': the session it was for was left');
+            return false;
+          }
           const frame = JSON.stringify({ type: 'upload', data: ct });
-          ws.send(frame);
+          link.sock.send(frame);
           // Yield to the event loop between chunks so the UI stays
           // responsive and the WS send buffer can drain.
           if (total > 1 && i < total - 1) await new Promise(r => setTimeout(r, 0));
@@ -8677,7 +8710,9 @@
         // an upload_ack racing in afterwards lands on an empty set.
         pendingUploadIDs.delete(uploadId);
         viewerNote('upload failed at send: ' + e);
+        return false;
       }
+      return true;
     }
     // Prompt once per upload batch — same TTL applies to every selected file.
     async function uploadBatch(files) {
@@ -8689,7 +8724,11 @@
       );
       if (ttlStr === null) return; // user cancelled
       const ttl = parseTTL(ttlStr);
-      for (const f of files) await uploadFile(f, ttl);
+      // Every file to the session they were dropped on: the batch stops
+      // once it has been left.
+      const link = uploadLink();
+      if (!link) { alert('Not connected — connect to a session first.'); return; }
+      for (const f of files) if ((await uploadFile(f, ttl, link)) === false) return;
     }
     const uploadInput = document.getElementById('upload-input');
     document.getElementById('upload-btn').addEventListener('click', () => uploadInput.click());
@@ -8727,6 +8766,8 @@
       if (imageFiles.length === 0) return; // not an image paste
       e.preventDefault();
       const DEFAULT_PASTE_TTL = 3600; // 1h — phone-pasted screenshots are mostly ephemeral
+      const link = uploadLink(); // every image to the session it was pasted into
+      if (!link) { viewerNote('pasted image not uploaded: not connected to the session'); return; }
       for (const f of imageFiles) {
         // Phone clipboard images often come in as "image.png" with no
         // useful name. Stamp a timestamp so concurrent pastes don't collide.
@@ -8734,7 +8775,7 @@
           ? f.name
           : 'paste-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
         const renamed = new File([f], stamped, { type: f.type });
-        await uploadFile(renamed, DEFAULT_PASTE_TTL);
+        if ((await uploadFile(renamed, DEFAULT_PASTE_TTL, link)) === false) return;
       }
       viewerNote('pasted ' + imageFiles.length + ' image' +
         (imageFiles.length === 1 ? '' : 's') + ' (auto-delete in 1h)');
@@ -9955,10 +9996,12 @@
           try { rtcInput.send(JSON.stringify(obj)); return; } catch (_) {}
         }
       }
-      if (!ws || ws.readyState !== WebSocket.OPEN || !cryptoKey) return;
+      const sock = ws; // as send(): this session's socket, or nothing
+      if (!sock || sock.readyState !== WebSocket.OPEN || !cryptoKey) return;
       const frame = { type };
       if (obj !== undefined) frame.data = await encrypt(cryptoKey, JSON.stringify(obj));
-      ws.send(JSON.stringify(frame));
+      if (ws !== sock || sock.readyState !== WebSocket.OPEN) return;
+      sock.send(JSON.stringify(frame));
     }
 
     // forgetHostState: the session shown is about to change. Its windows'
