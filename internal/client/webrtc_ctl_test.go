@@ -81,7 +81,7 @@ func TestViewerMsgIgnoresJunk(t *testing.T) {
 // — the viewer routes by label, so a mislabelled pair would bind the frame
 // handler to the control channel.
 func TestV2ChannelsNegotiate(t *testing.T) {
-	offerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	offerer, err := rtcAPI.NewPeerConnection(webrtc.Configuration{}) // the agent's side
 	if err != nil {
 		t.Skipf("no peer connection in this environment: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestV2ChannelsNegotiate(t *testing.T) {
 // precisely the symptom the split channel was added to cure.
 func TestHeartbeatFallsBackWhenCtlIsNotOpen(t *testing.T) {
 	// Two connected peers give us real channels in real states.
-	offerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	offerer, err := rtcAPI.NewPeerConnection(webrtc.Configuration{}) // the agent's side
 	if err != nil {
 		t.Skipf("no peer connection here: %v", err)
 	}

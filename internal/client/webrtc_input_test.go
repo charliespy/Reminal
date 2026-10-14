@@ -19,7 +19,7 @@ import (
 // window_input over it, and we prove the event reaches the shared injection path
 // (onRTCInput → applyInputPayload → noteWindowFlush) with no relay in the middle.
 func TestInputChannelDeliversToInjection(t *testing.T) {
-	offerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	offerer, err := rtcAPI.NewPeerConnection(webrtc.Configuration{}) // the agent's side
 	if err != nil {
 		t.Skipf("no peer connection in this environment: %v", err)
 	}
