@@ -803,6 +803,13 @@ func Seal(kind, id string, plaintext []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return SealIn(dir, kind, id, plaintext)
+}
+
+// SealIn is Seal under the key of the at-rest directory dir (a .reminal), not
+// the one HOME names now: for a file that lives in dir, which must open with
+// dir's key wherever HOME points when it is next read.
+func SealIn(dir, kind, id string, plaintext []byte) ([]byte, error) {
 	keyMu.Lock()
 	if unavailableForTest {
 		keyMu.Unlock()
@@ -826,6 +833,16 @@ func Open(kind, id string, blob []byte) ([]byte, error) {
 	dir, err := Dir()
 	if err != nil {
 		return nil, err
+	}
+	return OpenIn(dir, kind, id, blob)
+}
+
+// OpenIn is Open with the key of the at-rest directory dir (a .reminal), not
+// the one HOME names now: a file that lives in dir was sealed with dir's key
+// (SealIn), and read with another it would look gone.
+func OpenIn(dir, kind, id string, blob []byte) ([]byte, error) {
+	if !IsSealed(blob) {
+		return nil, ErrNotSealed
 	}
 	var bid [idLen]byte
 	copy(bid[:], blob[len(magic)+2:len(magic)+2+idLen])
