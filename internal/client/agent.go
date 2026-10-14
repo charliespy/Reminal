@@ -3138,15 +3138,6 @@ func (a *Agent) serveConn(conn *websocket.Conn, shellExit <-chan struct{}, local
 		}
 	}()
 	defer conn.Close()
-	// Its screen made first: a restored session's replay runs behind its
-	// registration (Run), and a viewer is never answered from half of it.
-	if a.replayDone != nil {
-		select {
-		case <-a.replayDone:
-		case <-shellExit:
-			return nil
-		}
-	}
 	conn.SetReadLimit(maxRelayMessageBytes) // untrusted peer — bound frame size
 
 	cursorCh := make(chan uint64, 4)
@@ -3165,6 +3156,12 @@ func (a *Agent) serveConn(conn *websocket.Conn, shellExit <-chan struct{}, local
 	}()
 	senderDone := make(chan error, 1)
 	go func() {
+		// Its screen made first: a restored session's replay runs behind its
+		// registration (Run), and a viewer is never sent anything from half of
+		// it (nor from the ring before it is restored).
+		if !a.waitReplayed(stop) {
+			return
+		}
 		senderDone <- guardPanic("agent send loop", func() error { return a.runSender(conn, cursorCh, stop, local) })
 	}()
 
@@ -3228,6 +3225,26 @@ func (a *Agent) authenticate(conn *websocket.Conn) error {
 	return nil
 }
 
+// handshakeMsg is what a viewer sends to get the session's key: answered
+// whatever the screen is doing.
+func handshakeMsg(t protocol.MessageType) bool {
+	return t == protocol.TypePakeInit || t == protocol.TypeOwnerInit || t == protocol.TypeKexInit
+}
+
+// waitReplayed waits for a restored session's scrollback replay (Run) to be
+// done; false if stop came first.
+func (a *Agent) waitReplayed(stop <-chan struct{}) bool {
+	if a.replayDone == nil {
+		return true
+	}
+	select {
+	case <-a.replayDone:
+		return true
+	case <-stop:
+		return false
+	}
+}
+
 // runReader processes messages from the relay: viewer input, resize, resume
 // requests, and connection notifications.
 func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
@@ -3249,6 +3266,13 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 		msg, ok, legacyNow := a.admit(msg)
 		if !ok {
 			continue
+		}
+		// A restored session's replay still under way: a handshake is answered
+		// now — it needs no screen, and a viewer waiting seconds for its key
+		// gives up (an owner told it is not one) — and what needs the screen,
+		// or comes after it, waits for the replay, in the order it came.
+		if !handshakeMsg(msg.Type) && !a.waitReplayed(nil) {
+			return nil
 		}
 		if legacyNow {
 			// A viewer that predates sealed frames: from here everything is
