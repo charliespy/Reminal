@@ -21,7 +21,7 @@ WRANGLER_SEND_METRICS=false npx wrangler dev --local --ip 127.0.0.1 --port 8787 
 for i in $(seq 1 90); do curl -s -m 2 -o /dev/null http://127.0.0.1:8787/ && break; sleep 1; done
 export HOME=/root/h REMINAL_RELAY=ws://127.0.0.1:8787/ws REMINAL_WEB=http://127.0.0.1:8787
 mkdir -p $HOME && cd $HOME
-/b/reminal new alpha >/dev/null 2>&1; SHELL=/t/tui.sh /b/reminal new tui >/dev/null 2>&1; sleep 2
+/b/reminal new alpha >/dev/null 2>&1; SHELL=/t/tui.sh REMINAL=/b/reminal /b/reminal new tui >/dev/null 2>&1; sleep 2
 S=$(/b/reminal info alpha | awk '/Session:/{print $2}'); PIN=$(/b/reminal info alpha | awk '/PIN:/{print $2}')
 TS=$(/b/reminal info tui | awk '/Session:/{print $2}'); TPIN=$(/b/reminal info tui | awk '/PIN:/{print $2}')
 echo "session: $S   link: $DELAY each way, $RATE   relay: the Worker (wrangler dev)"

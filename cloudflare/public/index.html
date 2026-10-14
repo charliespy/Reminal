@@ -214,7 +214,7 @@
        the screen a full-screen program draws by relative moves under it, and
        its next redraws landed a row off (viewerNote). */
     #viewer-notes { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: calc(100% - 32px); pointer-events: none; z-index: 5; }
-    .viewer-note { background: rgba(22, 27, 34, 0.94); border: 1px solid #30363d; color: #c9d1d9; font-size: 12.5px; line-height: 1.35; padding: 6px 12px; border-radius: 6px; text-align: center; transition: opacity .4s; }
+    .viewer-note { background: rgba(22, 27, 34, 0.94); border: 1px solid #30363d; color: #c9d1d9; font-size: 12.5px; line-height: 1.35; padding: 6px 12px; border-radius: 6px; text-align: center; overflow-wrap: anywhere; transition: opacity .4s; }
     .viewer-note.gone { opacity: 0; }
     #overlay span { background: #161b22; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; }
 
@@ -9359,7 +9359,7 @@
             const payload = JSON.parse(new TextDecoder().decode(bytes));
             handleDownloadChunk(payload);
           } catch (e) {
-            viewerNote('download failed: ' + e + '');
+            viewerNote('download failed: ' + e);
           }
           break;
         }
@@ -9641,7 +9641,7 @@
       resetPredictionsHard();
       if (helloShown && connectedAt && !switching) {
         const dur = Math.max(1, Math.round((Date.now() - connectedAt) / 1000));
-        viewerNote('Disconnected from ' + sessionId + ' after ' + humanDuration(dur) + ' · sent ' + humanBytes(bytesSent) + ' · received ' + humanBytes(bytesReceived) + '');
+        viewerNote('Disconnected from ' + sessionId + ' after ' + humanDuration(dur) + ' · sent ' + humanBytes(bytesSent) + ' · received ' + humanBytes(bytesReceived));
       }
       setStatus('Disconnected');
       hideOverlay();
@@ -10038,7 +10038,7 @@
       const items = heldInput, late = Date.now() - heldSince > INPUT_HOLD_MS, over = heldOverflow;
       dropHeldInput();
       if (late || over) {
-        viewerNote('' + (late ? 'What you typed while not connected was not sent.' : 'Some of what you typed while not connected was too much to hold and was not sent.') + '');
+        viewerNote((late ? 'What you typed while not connected was not sent.' : 'Some of what you typed while not connected was too much to hold and was not sent.'));
         if (late) return;
       }
       dbg('live: sending ' + items.length + ' held keystroke(s)');
@@ -10234,6 +10234,7 @@
       // Always an in-page signal too, for those without browser notification
       // permission: over the terminal, never in it (viewerNote: written into
       // the terminal it moved the screen under a program drawing there).
+      term.write('\x07'); // the bell: moves nothing on the screen
       viewerNote('reminal notify: ' + text, 8000);
       if (!('Notification' in window)) return;
       const sessionLabel = sessionId || 'reminal';
@@ -10362,7 +10363,7 @@
       }
       const idx = payload.index;
       if (typeof idx !== 'number' || idx < 0 || idx >= total) {
-        viewerNote('download failed: bad chunk index ' + idx + '/' + total + '');
+        viewerNote('download failed: bad chunk index ' + idx + '/' + total);
         return;
       }
       const id = payload.download_id;
@@ -10713,7 +10714,7 @@
         await navigator.clipboard.writeText(sel);
         viewerNote('copied ' + sel.length + ' chars');
       } catch (e) {
-        viewerNote('copy failed: ' + e + '');
+        viewerNote('copy failed: ' + e);
       }
     });
     // Paste routes to the focused window when the window keyboard is up,
@@ -10730,7 +10731,7 @@
         const text = await navigator.clipboard.readText();
         if (text) toWindow = typeToTarget(text);
       } catch (e) {
-        viewerNote('paste failed: ' + e + '');
+        viewerNote('paste failed: ' + e);
       }
       (toWindow ? wkey : term).focus();
     };
@@ -10851,7 +10852,7 @@
         // for that whole window. The auto-paste won't fire anyway —
         // an upload_ack racing in afterwards lands on an empty set.
         pendingUploadIDs.delete(uploadId);
-        viewerNote('upload failed at send: ' + e + '');
+        viewerNote('upload failed at send: ' + e);
       }
     }
     // Prompt once per upload batch — same TTL applies to every selected file.

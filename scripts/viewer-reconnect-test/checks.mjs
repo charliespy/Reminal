@@ -137,6 +137,7 @@ if (TS) {
   await A.p.goto(`${BASE}/?s=${TS}#p=${TPIN}`, { waitUntil: 'domcontentloaded' });
   await live(A.p);
   await A.p.waitForTimeout(1000);
+  await A.p.evaluate(() => { window.__notes = []; new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => __notes.push(n.textContent)))).observe(document.getElementById('viewer-notes'), { childList: true }); });
   await A.p.keyboard.press('Enter');
   await A.p.waitForTimeout(1500);
   await A.p.evaluate(() => ws.close());
@@ -145,6 +146,7 @@ if (TS) {
   await A.p.waitForFunction(() => { const b = term.buffer.active; for (let i = 0; i < b.length; i++) if ((b.getLine(i)?.translateToString(true) || '').includes('TUI-DONE')) return true; return false; }, null, { timeout: 30000 });
   await A.p.waitForTimeout(1000);
   const a = await screenRows(A.p);
+  const notified = (await A.p.evaluate(() => __notes)).some(t => t.includes('tui tick 55'));
   const B = await page();
   await B.p.goto(`${BASE}/?s=${TS}#p=${TPIN}`, { waitUntil: 'domcontentloaded' });
   await live(B.p);
@@ -153,8 +155,9 @@ if (TS) {
   const trim = (r) => { const x = r.map(l => l.trimEnd()); while (x.length && !x[x.length - 1]) x.pop(); return x; };
   const ta = trim(a), tb = trim(bb);
   const same = ta.length === tb.length && ta.every((l, i) => l === tb[i]);
+  const ok6 = same && notified;
   const diff = same ? '' : ' first difference: ' + JSON.stringify(ta.find((l, i) => l !== tb[i]) ?? '(rows ' + ta.length + ' vs ' + tb.length + ')') + ' vs ' + JSON.stringify(tb[ta.findIndex((l, i) => l !== tb[i])] ?? '');
-  out.push(`6  a redraw-heavy program, its socket dropped mid-redraw: the reconnected page's screen ${same ? 'is' : 'is NOT'} the agent's, cell for cell (${ta.length} rows)${diff}   ${verdict(same)}`);
+  out.push(`6  a redraw-heavy program, its socket dropped mid-redraw: the reconnected page's screen ${same ? 'is' : 'is NOT'} the agent's, cell for cell (${ta.length} rows)${diff}; its notification mid-redraw ${notified ? 'shown over the terminal' : 'NOT shown over the terminal'}   ${verdict(ok6)}`);
   await A.ctx.close(); await B.ctx.close();
 }
 

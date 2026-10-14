@@ -5,7 +5,8 @@
 # A program that draws as an agent's interface does: a block of rows drawn
 # once, then each tick only the cells that changed, reached by relative
 # moves from where it left the cursor (below the block), never by
-# addressing a row. Started by Enter; 60 ticks, then still.
+# addressing a row. Started by Enter; 60 ticks, then still. At tick 55 it
+# sends a notification (a hook's `reminal notify`), as an agent does mid-draw.
 printf '\033[?25l'
 for l in 1 2 3 4 5 6; do echo "row $l: ______________________________"; done
 read _
@@ -17,6 +18,7 @@ while [ $i -lt 60 ]; do
   printf '\033[6A'
   for l in 1 2 3 4 5 6; do printf '\r\033[%dC%s\033[1B' $((8 + c)) "$ch"; done
   printf '\r'
+  [ $i -eq 55 ] && "${REMINAL:-reminal}" notify "tui tick 55" >/dev/null 2>&1 &
   sleep 0.08
 done
 printf '\033[2K\rTUI-DONE\n'
