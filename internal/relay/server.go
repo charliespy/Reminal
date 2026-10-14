@@ -596,16 +596,17 @@ func (s *Server) detach(sessionID string, role protocol.Role, conn *websocket.Co
 		sid := sessionID
 		r.cleanup = time.AfterFunc(s.orphanTTL(), func() { s.expireRoom(sid) })
 	case protocol.RoleViewer:
-		wasParked := false
+		counted := false
 		for i, v := range r.viewers {
 			if v.conn == conn {
-				wasParked = v.parked
+				counted = !v.parked
 				r.viewers = append(r.viewers[:i], r.viewers[i+1:]...)
 				break
 			}
 		}
-		// A parked socket was no viewer to the agent: its going changes nothing there.
-		if !wasParked && r.agent != nil && r.agent.authed {
+		// A parked socket was no viewer to the agent — nor one the room has
+		// already dropped (dropParkedLocked): its going changes nothing there.
+		if counted && r.agent != nil && r.agent.authed {
 			s.writeTo(r.agent, protocol.Message{
 				Type:  protocol.TypeClosed,
 				Error: "viewer disconnected",
