@@ -218,10 +218,6 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		a.screenMu.Unlock()
 
 		now := time.Now()
-		// Whether the agent here can work at all — its login. Read from the
-		// same screen, before the attention state, because a logged-out agent
-		// takes a message, ends its turn and looks done.
-		a.noteHarnessHealth(render)
 		tail := attentionProbeTail(render, attnTailRows)
 		if tail != lastTail {
 			lastTail = tail
@@ -306,6 +302,11 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 			shells, agents = max(shells, bg.Shells), bg.Agents
 		}
 		a.noteShells(shells, agents)
+		// Whether the agent here can work at all — its login. Read from the
+		// same screen, before the attention state, because a logged-out agent
+		// takes a message, ends its turn and looks done; by the program that
+		// runs here, and its own hook, never by any login text on the screen.
+		a.noteHarnessHealth(render, prog, harnessAtWork(hs, now, settledMs))
 		state, source := resolveAttn(screenState, hs, last, fgAt, idleMs,
 			attnLooksLikePrompt(bottom), attnLooksBusy(bottom), hookTurns[prog])
 		if a.harnessDown() {

@@ -4,9 +4,13 @@
 package client
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/vt"
+
+	"reminal/internal/session"
 )
 
 // The bottom of Claude Code's screen after a message reached it logged out,
@@ -45,28 +49,28 @@ const loggedOutScreenGlued = `●Loginexpired·Pleaserun/login
 ✔Updateinstalled·Restarttoupdate`
 
 func TestHarnessLoggedOutIsSeenWithoutSpaces(t *testing.T) {
-	if !harnessProblemIn(attentionProbeTail(loggedOutScreenGlued, harnessRows)) {
+	if !harnessProblemIn(attentionProbeTail(loggedOutScreenGlued, harnessRows), "claude") {
 		t.Fatal("a logged-out Claude Code screen, as rendered, was not recognised")
 	}
 	footer := "────\n❯\n────\n⏵⏵automodeon (shift+tabtocycle)·←foragentsNotloggedin·Run/login"
-	if !harnessProblemIn(footer) {
+	if !harnessProblemIn(footer, "claude") {
 		t.Fatal("the status line alone, as rendered, was not recognised")
 	}
 	gluedProse := "●Thebugwasthatauserwhohadjustsignedupwasnotloggedinonthefirstpageload,andthe\n redirectto/loginlooped.Fixedinauth/session.go."
-	if harnessProblemIn(gluedProse) {
+	if harnessProblemIn(gluedProse, "claude") {
 		t.Fatal("an agent's prose about logins, run together, was read as a lapsed login")
 	}
 }
 
 func TestHarnessLoggedOutIsSeenAndProseIsNot(t *testing.T) {
-	if !harnessProblemIn(attentionProbeTail(loggedOutScreen, harnessRows)) {
+	if !harnessProblemIn(attentionProbeTail(loggedOutScreen, harnessRows), "claude") {
 		t.Fatal("a logged-out Claude Code screen was not recognised")
 	}
 	footerOnly := "────\n❯\n────\n  ⏵⏵ auto mode on (shift+tab to cycle)          Not logged in · Run /login"
-	if !harnessProblemIn(footerOnly) {
+	if !harnessProblemIn(footerOnly, "claude") {
 		t.Fatal("the status line's \"Not logged in\" alone was not recognised")
 	}
-	if harnessProblemIn(attentionProbeTail(proseScreen, harnessRows)) {
+	if harnessProblemIn(attentionProbeTail(proseScreen, harnessRows), "claude") {
 		t.Fatal("an agent's own words about logins were read as its login lapsing")
 	}
 }
@@ -74,21 +78,21 @@ func TestHarnessLoggedOutIsSeenAndProseIsNot(t *testing.T) {
 // Seen twice in a row it counts; it must be gone for a while to clear.
 func TestHarnessHealthDebounces(t *testing.T) {
 	a := &Agent{}
-	a.noteHarnessHealth(loggedOutScreen)
+	a.noteHarnessHealth(loggedOutScreen, "claude", false)
 	if a.harnessDown() {
 		t.Fatal("down after one glimpse")
 	}
-	a.noteHarnessHealth(loggedOutScreen)
+	a.noteHarnessHealth(loggedOutScreen, "claude", false)
 	if !a.harnessDown() {
 		t.Fatal("not down after two")
 	}
 	for i := 0; i < harnessUpAfter-1; i++ {
-		a.noteHarnessHealth(proseScreen)
+		a.noteHarnessHealth(proseScreen, "claude", false)
 	}
 	if !a.harnessDown() {
 		t.Fatal("cleared too soon")
 	}
-	a.noteHarnessHealth(proseScreen)
+	a.noteHarnessHealth(proseScreen, "claude", false)
 	if a.harnessDown() {
 		t.Fatal("did not clear once the login came back")
 	}
@@ -102,8 +106,8 @@ func TestHarnessLoggedOutThroughTheEmulator(t *testing.T) {
 	_, _ = e.Write([]byte("\x1b[38;5;174m\u25cf\x1b[39m \x1b[1mLogin\x1b[1Cexpired\x1b[0m\x1b[1C\u00b7\x1b[1CPlease\x1b[1Crun\x1b[1C/login\r\n\r\n"))
 	_, _ = e.Write([]byte("\x1b[2m\u23f5\u23f5 auto mode on\x1b[0m\x1b[30C\x1b[31mNot\x1b[1Clogged\x1b[1Cin\x1b[1C\u00b7\x1b[1CRun\x1b[1C/login\x1b[0m"))
 	a := &Agent{}
-	a.noteHarnessHealth(e.Render())
-	a.noteHarnessHealth(e.Render())
+	a.noteHarnessHealth(e.Render(), "claude", false)
+	a.noteHarnessHealth(e.Render(), "claude", false)
 	if !a.harnessDown() {
 		t.Fatalf("not seen through the emulator; render was %q", e.Render())
 	}
@@ -146,7 +150,7 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 			"  └──────────────────────────────────────────────────────────────────────────┘",
 	}
 	for name, s := range screens {
-		if !harnessProblemIn(harnessTail(s, harnessRows)) {
+		if prog, _, _ := strings.Cut(name, ","); !harnessProblemIn(harnessTail(s, harnessRows), prog) {
 			t.Errorf("%s's sign-in screen was not seen as logged out", name)
 		}
 	}
@@ -155,7 +159,7 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		" Type your message or @path/to/file",
 		"I added a sign-in page; the user signs in with Google.",
 	} {
-		if harnessProblemIn(ok) {
+		if harnessProblemIn(ok, "") {
 			t.Errorf("read as logged out: %q", ok)
 		}
 	}
@@ -178,13 +182,13 @@ func TestAQuotedLoginNoticeIsNotTheAgents(t *testing.T) {
 ──────────────────────────────────────────────────────────────────────────────────────────────────────
   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
                                                               ✔ Update installed · Restart to update`
-	if harnessProblemIn(attentionProbeTail(lead, harnessRows)) {
+	if harnessProblemIn(attentionProbeTail(lead, harnessRows), "claude") {
 		t.Fatal("a lead quoting its report's login notice was read as the lead logged out")
 	}
 	// A quote that wraps so the notice begins a row is still a quote.
 	wrapped := "● This confirms it: frontend2's session shows\n  \"Login expired · Please run /login\" — it needs a person.\n" +
 		"────────────────\n❯\n────────────────\n  ⏵⏵ auto mode on (shift+tab to cycle)"
-	if harnessProblemIn(attentionProbeTail(wrapped, harnessRows)) {
+	if harnessProblemIn(attentionProbeTail(wrapped, harnessRows), "claude") {
 		t.Fatal("a wrapped quote of the notice was read as the agent logged out")
 	}
 
@@ -196,14 +200,14 @@ func TestAQuotedLoginNoticeIsNotTheAgents(t *testing.T) {
   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
                                                                           Not logged in · Run /login
                                                               ✔ Update installed · Restart to update`
-	if !harnessProblemIn(attentionProbeTail(report, harnessRows)) {
+	if !harnessProblemIn(attentionProbeTail(report, harnessRows), "claude") {
 		t.Fatal("the report that really is logged out was not seen as one")
 	}
 	// Either place alone is enough: the conversation line, or the status line.
-	if !harnessProblemIn("● Login expired · Please run /login\n❯") {
+	if !harnessProblemIn("● Login expired · Please run /login\n❯", "claude") {
 		t.Fatal("Claude Code's own notice on a line of its own was missed")
 	}
-	if !harnessProblemIn("❯\n  ⏵⏵ bypass permissions on (shift+tab to cycle)          Not logged in · Run /login") {
+	if !harnessProblemIn("❯\n  ⏵⏵ bypass permissions on (shift+tab to cycle)          Not logged in · Run /login", "claude") {
 		t.Fatal("the status line's notice was missed")
 	}
 }
@@ -223,7 +227,7 @@ func TestAToolsLoginMessageIsNotTheAgents(t *testing.T) {
 ❯
 ────────────────────────────────────────────────────
   ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents`
-	if harnessProblemIn(attentionProbeTail(working, harnessRows)) {
+	if harnessProblemIn(attentionProbeTail(working, harnessRows), "claude") {
 		t.Fatal("a tool's output about another service's login was read as the agent logged out")
 	}
 	// A CLI saying it of itself, on its own bottom rows, still counts.
@@ -231,8 +235,95 @@ func TestAToolsLoginMessageIsNotTheAgents(t *testing.T) {
 		"some output\nmore output\n> \n Waiting for auth… (esc to cancel)",
 		"answer\n\nPlease log in to continue\n> ",
 	} {
-		if !harnessProblemIn(attentionProbeTail(own, harnessRows)) {
+		if !harnessProblemIn(attentionProbeTail(own, harnessRows), "claude") {
 			t.Fatalf("a CLI's own login notice was missed:\n%s", own)
 		}
+	}
+}
+
+// A Claude Code session's screen as it was when it was read three times as
+// logged out (2026-10-14): at work, its tool having printed Codex's sign-in
+// menu (a check of Codex's login). Codex's sign-in screen is Codex's; this is
+// Claude Code, logged in. (Only its paths are changed.)
+const anotherAgentsSignInScreen = `  ⎿  Shell cwd was reset to /home/dev/app
+
+⏺ Bash(cd /home/dev/app/scripts/logins-probe && cat > run.sh
+      <<'EOF'
+      #!/bin/sh…)
+  ⎿  SigninwithChatGPT
+        sent:
+     == codex exec, OPENAI_API_KEY
+        sent:
+     +18 lines (5m 34s · timeout 10m)
+     (ctrl+b to run in background)
+
+✻ Mustering… (38m 52s · ↓ 34.0k tokens)
+  ⎿  Tip: Use /clear to start fresh when switching topics and free up context
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← 2 agents`
+
+func TestAnotherAgentsSignInScreenIsNotThisAgents(t *testing.T) {
+	if harnessProblemIn(harnessTail(anotherAgentsSignInScreen, harnessRows), "claude") {
+		t.Fatal("Codex's sign-in menu, printed by a tool, read as Claude Code logged out")
+	}
+	a := &Agent{}
+	for i := 0; i < 5; i++ {
+		a.noteHarnessHealth(anotherAgentsSignInScreen, "claude", false)
+	}
+	if a.harnessDown() {
+		t.Fatal("the session was marked logged out")
+	}
+	// Codex's own sign-in screen, with Codex running, still is.
+	codex := "  Sign in with ChatGPT to use Codex as part of your paid plan\n  › 1. Sign in with ChatGPT\n    2. Provide your own API key"
+	if !harnessProblemIn(harnessTail(codex, harnessRows), "codex") {
+		t.Fatal("Codex's own sign-in screen was missed")
+	}
+	// A program the probe does not name as an agent ("node": an agent run
+	// from a path it does not know) is not known: every sign-in screen counts.
+	gemini := "│   How would you like to authenticate for this project?   │\n│   ● 1. Sign in with Google   │"
+	if !harnessProblemIn(harnessTail(gemini, harnessRows), "node") {
+		t.Fatal("Gemini's sign-in screen under \"node\" was missed")
+	}
+	// And Claude Code's notice is Claude Code's alone: a Codex session's tool
+	// printing it is not Codex logged out.
+	if harnessProblemIn(harnessTail(loggedOutScreen, harnessRows), "codex") {
+		t.Fatal("Claude Code's notice read as Codex logged out")
+	}
+}
+
+// A turn its hook says has been going for a while, its screen still moving,
+// is an agent that can work: what the screen says of logins does not make it
+// logged out, and a session marked so is cleared at once.
+func TestASessionSeenAtWorkIsNotLoggedOut(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		hs      *session.HookState
+		settled int64
+		want    bool
+		what    string
+	}{
+		{&session.HookState{State: "working", TS: now.Add(-38 * time.Minute)}, 300, false, "past the hook's TTL"},
+		{&session.HookState{State: "working", TS: now.Add(-5 * time.Minute)}, 300, true, "a long turn, its spinner moving"},
+		{&session.HookState{State: "working", TS: now.Add(-2 * time.Second)}, 300, false, "a turn just begun (a logged-out one ends at once)"},
+		{&session.HookState{State: "working", TS: now.Add(-5 * time.Minute)}, 5000, false, "a still screen"},
+		{&session.HookState{State: "done", TS: now.Add(-5 * time.Minute)}, 300, false, "a finished turn"},
+		{nil, 300, false, "no hook"},
+	} {
+		if got := harnessAtWork(c.hs, now, c.settled); got != c.want {
+			t.Errorf("%s: at work %v, want %v", c.what, got, c.want)
+		}
+	}
+	a := &Agent{}
+	a.noteHarnessHealth(loggedOutScreen, "claude", false)
+	a.noteHarnessHealth(loggedOutScreen, "claude", false)
+	if !a.harnessDown() {
+		t.Fatal("not down")
+	}
+	a.noteHarnessHealth(loggedOutScreen, "claude", true)
+	if a.harnessDown() {
+		t.Fatal("seen at work, still logged out")
 	}
 }
