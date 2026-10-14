@@ -389,6 +389,9 @@ type Agent struct {
 	// for a session the relay didn't yet know about, so an immediate viewer
 	// connect raced the child's registration and hit "session not found".
 	handshakeOnce sync.Once
+	// replayDone is closed once a restored session's scrollback is replayed
+	// into its screen (Run): what a viewer is answered from. nil before Run.
+	replayDone chan struct{}
 	// resumeGate is closed once the session's first try at the relay is
 	// over, whatever came of it (releaseResume): a restored session's coding
 	// agent is resumed only then (restoreStart), never in the race with the
@@ -954,7 +957,27 @@ func (a *Agent) Run() error {
 	// Build the emulator before the pump starts so it sees output from the
 	// very first byte (snapshot-on-attach; REMINAL_SNAPSHOT=0 disables it).
 	a.initScreen()
-	a.restoreResumedScrollback()
+	// A restored session's scrollback replayed behind its start, not ahead
+	// of it: on a quarter of a CPU a full one took seconds (4.2 s for 3 MB,
+	// and 13 s for a long one), every one of them before the session was
+	// reachable — what whoever started it waited on. Its screen's lock is taken here,
+	// before the pump starts, and let go when the replay is done: live output
+	// waits for it (record holds that lock), so nothing interleaves with the
+	// history; and a viewer's messages wait for it too (serveConn), so none
+	// is answered from a screen or a ring half made.
+	a.replayDone = make(chan struct{})
+	if a.resumeDump != nil {
+		a.screenMu.Lock()
+		go func() {
+			defer close(a.replayDone)
+			defer StartMark("replay")
+			defer a.screenMu.Unlock()
+			a.restoreResumedScrollbackLocked()
+		}()
+	} else {
+		StartMark("replay")
+		close(a.replayDone)
+	}
 	if a.restoring {
 		go a.restoreStart()
 	}
@@ -1351,11 +1374,13 @@ func (a *Agent) afterAttempt(err error) {
 // and ready to accept viewers. Best-effort — a closed pipe (parent
 // already exited) is logged but doesn't break the headless agent.
 func (a *Agent) writeHandshake() {
+	StartMark("register") // reachable (or the relay found unreachable)
 	payload := map[string]any{
 		"id":       a.sessionID,
 		"pin":      a.pin,
 		"open_url": fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID),
 		"pid":      os.Getpid(),
+		"phases":   startPhasesNow(), // its start in parts (startphases.go)
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -3113,6 +3138,15 @@ func (a *Agent) serveConn(conn *websocket.Conn, shellExit <-chan struct{}, local
 		}
 	}()
 	defer conn.Close()
+	// Its screen made first: a restored session's replay runs behind its
+	// registration (Run), and a viewer is never answered from half of it.
+	if a.replayDone != nil {
+		select {
+		case <-a.replayDone:
+		case <-shellExit:
+			return nil
+		}
+	}
 	conn.SetReadLimit(maxRelayMessageBytes) // untrusted peer — bound frame size
 
 	cursorCh := make(chan uint64, 4)

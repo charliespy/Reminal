@@ -232,6 +232,16 @@ func readScrollbackDump(path string, open func([]byte) ([]byte, error)) *scrollb
 // new session key and replays it into the snapshot emulator. Must run after
 // initScreen and before the PTY pump, or live output interleaves with history.
 func (a *Agent) restoreResumedScrollback() {
+	a.screenMu.Lock()
+	defer a.screenMu.Unlock()
+	a.restoreResumedScrollbackLocked()
+}
+
+// restoreResumedScrollbackLocked is restoreResumedScrollback with the
+// screen's lock held, from before its ring is restored to after its replay:
+// output recorded meanwhile (record, under the same lock) comes after both
+// (Run takes the lock before the pump starts and runs this behind it).
+func (a *Agent) restoreResumedScrollbackLocked() {
 	d := a.resumeDump
 	a.resumeDump = nil
 	if d == nil || a.buf == nil || a.box == nil {
@@ -252,8 +262,6 @@ func (a *Agent) restoreResumedScrollback() {
 	}
 	a.buf.restore(entries, d.NextSeq, d.BaseCols, d.BaseRows)
 
-	a.screenMu.Lock()
-	defer a.screenMu.Unlock()
 	if a.screen == nil {
 		return
 	}

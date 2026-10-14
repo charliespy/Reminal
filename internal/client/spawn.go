@@ -29,6 +29,9 @@ type SpawnedSession struct {
 	PIN     string `json:"pin"`
 	OpenURL string `json:"open_url"`
 	PID     int    `json:"pid"`
+	// Phases is how its start went, in parts (ms: StartMark), from an agent
+	// that says it; none from one from before.
+	Phases map[string]int64 `json:"phases,omitempty"`
 }
 
 // Spawn launches a detached headless reminal child via the running
