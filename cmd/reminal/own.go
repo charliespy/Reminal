@@ -14,6 +14,7 @@ import (
 	"golang.org/x/term"
 
 	"reminal/internal/client"
+	"reminal/internal/session"
 )
 
 // runOwn prints this device's public owner id and the exact command to paste on
@@ -205,6 +206,24 @@ func parseAddOwnerArgs(args []string) (id, label string, yes bool) {
 	return id, label, yes
 }
 
+// printRekeyed says which sessions a revoke restarted, and their new PINs:
+// the revoked device may have learned the old ones (an owner's Share menu
+// shows them), so they change, as with repin.
+func printRekeyed(rs []session.Active) {
+	if len(rs) == 0 {
+		return
+	}
+	fmt.Printf("  %s Signed out of %d open session(s) here. Each has a new PIN; the old ones and links made with them no longer work:\n", cGreen("✓"), len(rs))
+	for i := range rs {
+		pin, err := newPINOf(&rs[i])
+		if err != nil {
+			fmt.Printf("    %-24s %v\n", repinLabel(&rs[i]), err)
+			continue
+		}
+		fmt.Printf("    %-24s new PIN %s\n", repinLabel(&rs[i]), pin)
+	}
+}
+
 // runOwners lists the machine's owner devices, or renames/revokes one.
 // Usage: reminal owners [rename <id|label> <new-label> | revoke <id|label>]
 func runOwners(args []string) error {
@@ -242,27 +261,44 @@ func runOwners(args []string) error {
 
 	case "revoke":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: reminal owners revoke <id|label>")
+			return fmt.Errorf("usage: reminal owners revoke <id|label>...")
 		}
-		target := args[1]
-		o, n, err := client.RemoveOwner(target)
-		if needsSudoRetry(err) {
-			return sudoReexec()
-		}
-		if err != nil {
-			return err
-		}
-		switch {
-		case n == 0:
-			fmt.Printf("  %s No owner matching %q — run %s to see them.\n", cRed("!"), target, cBold("reminal owners"))
-		case n > 1:
-			printAmbiguous(target)
-		default:
-			name := o.Label
-			if name == "" {
-				name = o.ID
+		// Several at once revoke together, and the sessions restart once
+		// for all of them (RekeySessions, below).
+		revoked := 0
+		for _, target := range args[1:] {
+			o, n, err := client.RemoveOwner(target)
+			if needsSudoRetry(err) {
+				// Run as root for the store; the sessions are this user's, and
+				// this process tells them once root's is done.
+				if err := sudoReexec(); err != nil {
+					return err
+				}
+				printRekeyed(client.RekeySessions())
+				return nil
 			}
-			fmt.Printf("  %s Revoked %s  %s\n", cGreen("✓"), cBold(name), cDim("("+o.ID+")"))
+			if err != nil {
+				return err
+			}
+			switch {
+			case n == 0:
+				fmt.Printf("  %s No owner matching %q — run %s to see them.\n", cRed("!"), target, cBold("reminal owners"))
+			case n > 1:
+				printAmbiguous(target)
+			default:
+				revoked++
+				name := o.Label
+				if name == "" {
+					name = o.ID
+				}
+				fmt.Printf("  %s Revoked %s  %s\n", cGreen("✓"), cBold(name), cDim("("+o.ID+")"))
+			}
+		}
+		if revoked > 0 {
+			// Signed out of the sessions open on this machine straight away:
+			// each restarts in place under a new key (programs keep running,
+			// PIN viewers and the remaining owners reconnect on their own).
+			printRekeyed(client.RekeySessions())
 			// The background daemon stays installed — it is the machine's permanent
 			// presence + stats layer, not an ownership-gated feature (see above).
 			// But bounce it so it re-keys the machine channel NOW: a revoked device

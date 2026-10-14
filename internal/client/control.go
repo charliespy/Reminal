@@ -221,6 +221,43 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			return
 		}
 		_, _ = fmt.Fprintln(conn, "ok")
+	case line == "rekey":
+		// The owner set may have changed (`reminal owners revoke`, a
+		// self-revoke: RekeySessions). Every viewer shares this process's
+		// session key, so a device revoked after it handshook keeps it; a
+		// restart in place — same PTY and programs, same PIN — makes a new
+		// one, and the revoked device's fresh handshake is refused. Only if
+		// the owner set is not what this process began with: a burst of
+		// revokes already covered by one restart does not restart again.
+		//
+		// With a new PIN, as repin: a device that owned this machine could
+		// have learned the PIN as it was (an owner's Share menu shows it),
+		// and a key change alone would let it back in with that. Sent only
+		// on a revoke, so any change to the owner stores since this process
+		// began is one — even a device added and revoked again since, which
+		// leaves the set as it was but had its chance to connect.
+		if !ownersChangedSince(a.ownersAt) {
+			_, _ = fmt.Fprintln(conn, "ok unchanged")
+			return
+		}
+		if !a.rekeying.CompareAndSwap(false, true) {
+			_, _ = fmt.Fprintln(conn, "ok restarting")
+			return
+		}
+		pin, err := session.NewPIN(6)
+		if err != nil {
+			a.rekeying.Store(false)
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		hash, err := session.HashPIN(pin)
+		if err != nil {
+			a.rekeying.Store(false)
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		a.nextPIN, a.nextPinHash = pin, hash
+		fallthrough
 	case line == "restart":
 		// Hot-restart: ack the CLI first (so it doesn't see the WS
 		// vanish before getting a response), then schedule the Exec
@@ -242,6 +279,7 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 				// session could only be ended by finding its pid. Re-arm
 				// it before saying anything.
 				a.stopControlFn = a.listenControl()
+				a.rekeying.Store(false)
 				a.broadcastNotice("restart failed (" + err.Error() +
 					") — still running the previous version; try again")
 			}

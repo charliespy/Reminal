@@ -96,6 +96,11 @@ type Agent struct {
 	version     string // running binary's version, shown in banner + exit summary
 	box         *crypto.Box
 	sessionKey  []byte // 32-byte AES key wrapped per-viewer via EKE; see crypto/kex.go
+	// ownersAt is when this process began, under the session key (and PIN)
+	// it has: an owner store written since (ownersChangedSince) is a device
+	// added or revoked since — what a "rekey" asks about.
+	ownersAt time.Time
+	rekeying atomic.Bool // a rekey's restart under way: more rekeys wait for the next process
 	// machine is set for the machine-mode agent (AgentOptions.Machine). It has
 	// no PTY: everything terminal-shaped is refused at the reader, and the
 	// handlers that touch the shell check a.term for nil.
@@ -631,6 +636,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			version:        version,
 			box:            box,
 			sessionKey:     sessionKey,
+			ownersAt:       time.Now(),
 			buf:            newScrollback(scrollbackBytes),
 			hostEscape:     make(chan struct{}),
 			pendingUploads: make(map[string]*pendingUpload),
@@ -690,6 +696,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 		version:        version,
 		box:            box,
 		sessionKey:     sessionKey,
+		ownersAt:       time.Now(),
 		buf:            newScrollback(scrollbackBytes),
 		hostEscape:     make(chan struct{}),
 		pendingUploads: make(map[string]*pendingUpload),
@@ -3314,7 +3321,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// `top` on macOS), which must not stall the reader that also carries
 			// viewer keystrokes. writeMsg is mutex-guarded, so concurrent replies
 			// are safe.
-			go a.handleHostInfo(conn)
+			go a.handleHostInfo(conn, msg.Data)
 		case protocol.TypeNewSession:
 			go a.handleNewSession(conn, msg.Data)
 		case protocol.TypeChangelog:

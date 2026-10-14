@@ -18,8 +18,24 @@ import (
 
 // handleHostInfo replies to a viewer's TypeHostInfo request with the machine's
 // current stats, E2E-encrypted (same envelope as the window/app messages).
-func (a *Agent) handleHostInfo(conn *websocket.Conn) {
-	if msg, ok := a.hostInfoMsg(); ok {
+//
+// The PIN rides only on a reply to a request that asks for it ({"pin":true},
+// under the session key): the Share menu of a viewer that connected as an
+// owner, which never typed it. Never on every reply nor on a push, where an
+// owner's browser would come to hold it — and keep it after the device was
+// revoked.
+func (a *Agent) handleHostInfo(conn *websocket.Conn, data string) {
+	wantPIN := false
+	if data != "" && a.box != nil {
+		if pt, err := a.box.Decrypt(data); err == nil {
+			var req struct {
+				PIN bool `json:"pin"`
+			}
+			_ = json.Unmarshal(pt, &req)
+			wantPIN = req.PIN
+		}
+	}
+	if msg, ok := a.hostInfoMsg(wantPIN); ok {
 		_ = a.writeMsg(conn, msg)
 	}
 }
@@ -36,7 +52,7 @@ func (a *Agent) pushHostInfo() {
 	if conn == nil {
 		return
 	}
-	if msg, ok := a.hostInfoMsg(); ok {
+	if msg, ok := a.hostInfoMsg(false); ok {
 		_ = a.writeMsg(conn, msg)
 	}
 }
@@ -44,7 +60,7 @@ func (a *Agent) pushHostInfo() {
 // hostInfoMsg builds the encrypted host_info message shared by the request
 // reply and the live push, so the two can't drift. ok is false when there's no
 // session key yet (nothing to encrypt under) or serialization fails.
-func (a *Agent) hostInfoMsg() (protocol.Message, bool) {
+func (a *Agent) hostInfoMsg(withPIN bool) (protocol.Message, bool) {
 	if a.box == nil {
 		return protocol.Message{}, false
 	}
@@ -56,11 +72,14 @@ func (a *Agent) hostInfoMsg() (protocol.Message, bool) {
 	info.Attn = a.attnState
 	a.metaMu.Unlock()
 	// Owners connect PIN-free, so the browser never typed the PIN. The share
-	// menu still needs it to mint a Join link / `reminal connect` line. This
-	// rides the session channel, encrypted — anyone who can read it already
-	// has the session key (PIN join, or owner handshake). The directory
-	// channel still omits PINs (see protocol.DirSession).
-	info.PIN = a.pin
+	// menu still needs it to mint a Join link / `reminal connect` line, and
+	// asks for it (handleHostInfo); the viewer holds it in memory for that
+	// and never stores it. It rides the session channel, encrypted — anyone
+	// who can read it already has the session key. The directory channel
+	// still omits PINs (see protocol.DirSession).
+	if withPIN {
+		info.PIN = a.pin
+	}
 	raw, err := json.Marshal(info)
 	if err != nil {
 		return protocol.Message{}, false

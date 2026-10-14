@@ -460,6 +460,8 @@ func (a *Agent) handleDirRevokeSelf(conn *websocket.Conn, data string) {
 		ack.Error = err.Error()
 	} else {
 		ack.OK = true
+		// Out of the sessions it has open here too, not only new ones.
+		go RekeySessions() // the new PINs: `reminal info`, as after a repin
 	}
 	a.sendWindowMsg(conn, protocol.TypeDirRevokeSelf, ack)
 }

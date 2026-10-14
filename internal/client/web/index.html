@@ -2591,13 +2591,13 @@
         if (document.getElementById('host') && document.getElementById('host').open) requestUpdateCheck();
       }
       if (info.hostname) rememberHost(sessionId, info.hostname);
-      // Owner (PIN-free) connects never typed the PIN. The agent includes it
-      // on host_info so Share can show it and mint a real Join link.
+      // Owner (PIN-free) connects never typed the PIN. Share asks the agent
+      // for it, to show it and mint a real Join link; it is kept for that, in
+      // memory, for this session only — never stored, never made the
+      // connection's credential: a device that is later revoked must not
+      // keep a way back in.
       if (info.pin && /^\d{6,8}$/.test(info.pin)) {
-        if (!pinValue) {
-          pinValue = info.pin;
-          rememberSession(sessionId, info.pin);
-        }
+        sharePinFromAgent = { sid: sessionId, pin: info.pin };
         const modal = document.getElementById('share-modal');
         if (modal && modal.style.display === 'flex') fillShare();
       }
@@ -10246,8 +10246,9 @@
     const shareModal = document.getElementById('share-modal');
     const shareQrEl = document.getElementById('share-qr');
     let shareQrCode = null;
+    let sharePinFromAgent = null; // { sid, pin }: asked for by Share, in memory only
     function sharePin() {
-      return pinValue || (lastHostInfo && lastHostInfo.pin) || '';
+      return pinValue || (sharePinFromAgent && sharePinFromAgent.sid === sessionId && sharePinFromAgent.pin) || '';
     }
     function shareJoinURL() {
       const id = (sessionId || '').toUpperCase();
@@ -10348,7 +10349,7 @@
     function openShare() {
       if (!sessionId) return;
       fillShare();
-      if (!sharePin() && typeof sendWin === 'function') sendWin('host_info');
+      if (!sharePin() && typeof sendWin === 'function') sendWin('host_info', { pin: true });
       shareModal.style.display = 'flex';
     }
     function closeShare() {
