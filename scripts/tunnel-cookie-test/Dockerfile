@@ -3,6 +3,9 @@
 FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+# go.mod's replace names a copy in the tree (third_party/ultraviolet): its
+# go.mod is what `go mod download` reads of it.
+COPY third_party/ultraviolet/go.mod third_party/ultraviolet/go.mod
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOFLAGS=-buildvcs=false go build -o /out/reminal ./cmd/reminal
