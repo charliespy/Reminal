@@ -62,15 +62,48 @@ func WriteHookState(id, state string) error {
 // session, with the background work it said it still has (nil: it said
 // nothing about that).
 func WriteHookStateWith(id, state string, bg *Background) error {
+	// Under the record's lock, so it never lands between another hook's
+	// reading the record and writing it back (UpdateHookBackground) to be
+	// overwritten by the older state. A turn's state must land: if the lock
+	// cannot be had in time, it is written anyway.
+	if unlock, err := lockHookState(id); err == nil {
+		defer unlock()
+	}
 	return writeHookState(id, HookState{State: state, TS: time.Now(), Background: bg})
+}
+
+// hookLockWait caps waiting for a session's hook record: a hook holds up the
+// harness that fired it, and the other holder is a hook writing one small
+// file.
+const hookLockWait = time.Second
+
+// lockHookState takes the session's hook record lock (an OS lock, let go if
+// its holder dies).
+func lockHookState(id string) (func(), error) {
+	if id == "" {
+		return nil, errors.New("hook state requires a session id")
+	}
+	dir, err := activeDir()
+	if err != nil {
+		return nil, err
+	}
+	return atrest.Lock(dir, "hook-"+id+".lock", hookLockWait)
 }
 
 // UpdateHookBackground records the background work a harness still has
 // running, said between turns (a subagent of its own finishing), leaving its
 // turn's state and when that was said as they are: the state is the turn's,
 // and a subagent finishing inside a turn does not end it. With no state yet
-// there is no turn to attach it to, and nothing is written.
+// there is no turn to attach it to, and nothing is written. Read and written
+// back under the record's lock, so a turn's state written meanwhile is not
+// undone; without the lock it is left alone — the next turn's end says the
+// count again.
 func UpdateHookBackground(id string, bg *Background) error {
+	unlock, err := lockHookState(id)
+	if err != nil {
+		return nil
+	}
+	defer unlock()
 	hs := ReadHookStateAnyAge(id)
 	if hs == nil {
 		return nil
@@ -158,6 +191,7 @@ func ClearHookState(id string) error {
 	if err != nil {
 		return err
 	}
+	_ = os.Remove(filepath.Join(filepath.Dir(p), "hook-"+id+".lock"))
 	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
