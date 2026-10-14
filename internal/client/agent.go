@@ -389,6 +389,11 @@ type Agent struct {
 	// for a session the relay didn't yet know about, so an immediate viewer
 	// connect raced the child's registration and hit "session not found".
 	handshakeOnce sync.Once
+	// registered is closed the first time the session is reachable
+	// (signalRegistered): a restored session's coding agent is resumed only
+	// then (restoreStart), never in the race with its own registration.
+	registeredOnce, registeredClose sync.Once
+	registeredCh                    chan struct{}
 	// resumed marks this Agent as taking over an already-running PTY
 	// from a previous binary image via syscall.Exec hot-restart. When
 	// true, Run() skips spawning a fresh shell and uses a.term as-is.
@@ -1307,10 +1312,18 @@ func (a *Agent) broadcastSize(cols, rows uint16) {
 // later calls no-ops, so reconnects and the second path don't re-signal. No-op
 // for non-spawned agents (handshakeFD 0).
 func (a *Agent) signalRegistered() {
+	c := a.registered()
+	a.registeredClose.Do(func() { close(c) })
 	if a.handshakeFD == 0 && a.handshakeAddr == "" {
 		return
 	}
 	a.handshakeOnce.Do(a.writeHandshake)
+}
+
+// registered is closed once the session is reachable (signalRegistered).
+func (a *Agent) registered() chan struct{} {
+	a.registeredOnce.Do(func() { a.registeredCh = make(chan struct{}) })
+	return a.registeredCh
 }
 
 // writeHandshake emits the agent's credentials to the parent process's
