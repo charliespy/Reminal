@@ -32,6 +32,9 @@ func TestARestoreShowsTheNoteItWasAskedFor(t *testing.T) {
 	if _, note = withRestoreNote("", func() (string, string) { return "", "its own" })(); note != "its own" {
 		t.Errorf("no note asked for: %q", note)
 	}
+	if got := noteSafe("abc\u202edef\u2066ghi\u2069", 200); got != "abcdefghi" {
+		t.Errorf("bidirectional controls kept: %q", got)
+	}
 	if long := noteSafe(strings.Repeat("x", 500), 200); len([]rune(long)) > 201 {
 		t.Errorf("a note of %d characters", len([]rune(long)))
 	}

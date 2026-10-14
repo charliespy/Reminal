@@ -48,7 +48,10 @@ func noteSafe(s string, max int) string {
 	var b strings.Builder
 	n := 0
 	for _, c := range strings.ToValidUTF8(s, "") {
-		if c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f) {
+		// Control characters, and the bidirectional overrides and isolates,
+		// which would show the line's text in another order than it is
+		// (review of #273).
+		if c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) {
 			continue
 		}
 		if n == max {
