@@ -8647,7 +8647,9 @@
     function uploadLink() { return authed && cryptoKey && ws && ws.readyState === WebSocket.OPEN ? { sock: ws, key: cryptoKey } : null; }
     function uploadLinkLive(l) { return !!l && ws === l.sock && cryptoKey === l.key && l.sock.readyState === WebSocket.OPEN; }
     // uploadFile sends file to the session of link (the current one when
-    // none is given); false once that session has been left.
+    // none is given). false: none sent, nor will any more be — that session
+    // left, not connected, or a send failed; a batch stops there. A file
+    // refused for itself (too large) is said, and the rest go on.
     async function uploadFile(file, ttlSeconds, link) {
       link = link || uploadLink();
       if (!link) {
@@ -8726,7 +8728,7 @@
       // once it has been left.
       const link = uploadLink();
       if (!link) { alert('Not connected — connect to a session first.'); return; }
-      for (const f of files) if (!(await uploadFile(f, ttl, link))) return;
+      for (const f of files) if ((await uploadFile(f, ttl, link)) === false) return;
     }
     const uploadInput = document.getElementById('upload-input');
     document.getElementById('upload-btn').addEventListener('click', () => uploadInput.click());
@@ -8765,7 +8767,7 @@
       e.preventDefault();
       const DEFAULT_PASTE_TTL = 3600; // 1h — phone-pasted screenshots are mostly ephemeral
       const link = uploadLink(); // every image to the session it was pasted into
-      if (!link) return;
+      if (!link) { viewerNote('pasted image not uploaded: not connected to the session'); return; }
       for (const f of imageFiles) {
         // Phone clipboard images often come in as "image.png" with no
         // useful name. Stamp a timestamp so concurrent pastes don't collide.
@@ -8773,7 +8775,7 @@
           ? f.name
           : 'paste-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
         const renamed = new File([f], stamped, { type: f.type });
-        if (!(await uploadFile(renamed, DEFAULT_PASTE_TTL, link))) return;
+        if ((await uploadFile(renamed, DEFAULT_PASTE_TTL, link)) === false) return;
       }
       viewerNote('pasted ' + imageFiles.length + ' image' +
         (imageFiles.length === 1 ? '' : 's') + ' (auto-delete in 1h)');

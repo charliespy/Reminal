@@ -99,6 +99,13 @@ const left = await page.evaluate(async () => {
   await uploadFile(file('big.bin', 3 * UPLOAD_CHUNK_BYTES + 1), 0);
   await uploadBatch([file('one.bin', 10), file('two.bin', 10)]);
   r.stayed = kinds(p.a).filter(t => t === 'upload').length;
+  // A file too large for an upload, mid-batch: said, and the rest still sent.
+  const alerts = []; window.alert = (m) => alerts.push(String(m));
+  p = pair(1000);
+  const mb = new Uint8Array(1 << 20);
+  const huge = new File(Array.from({ length: (UPLOAD_MAX_BYTES >> 20) + 1 }, () => mb), 'huge.bin');
+  await uploadBatch([file('one.bin', 10), huge, file('three.bin', 10)]);
+  r.afterHuge = kinds(p.a).filter(t => t === 'upload').length; r.hugeSaid = alerts.some(m => /too large/.test(m));
   p = pair(1);
   await uploadFile(file('big.bin', 3 * UPLOAD_CHUNK_BYTES + 1), 0);
   r.fileOnA = kinds(p.a).length; r.fileOnB = kinds(p.b).filter(t => t === 'upload').length;
@@ -123,6 +130,7 @@ const left = await page.evaluate(async () => {
   ws = null; cryptoKey = null; authed = false; snapLive = null;
   return r;
 });
+if (left.afterHuge !== 2 || !left.hugeSaid) fails.push('a too-large file mid-batch: ' + left.afterHuge + ' of the 2 others sent' + (left.hugeSaid ? '' : ', and it was not said'));
 if (left.stayed !== 6) fails.push('an upload whose session was not left sent ' + left.stayed + ' of 6 chunks');
 if (left.fileOnA !== 1 || left.fileOnB) fails.push('a file whose session was left mid-upload: ' + left.fileOnB + ' chunk(s) went to the next session (' + left.fileOnA + ' on its own)');
 if (left.batchOnA !== 1 || left.batchOnB) fails.push('a batch whose session was left: ' + left.batchOnB + ' file(s) went to the next session');
