@@ -181,14 +181,18 @@ func effectiveOwnersFingerprint(of *ownersFile) string {
 }
 
 // ownersChangedSince reports whether either owner store — owners.json or
-// the self-revoke tombstones — was written after t.
+// the self-revoke tombstones — was written after t, or in the same whole
+// second: a filesystem that keeps whole-second times (HFS+) gives a write
+// just after t the second t is in, and a write missed is a revoked device
+// kept, where a write counted twice is one restart more.
 func ownersChangedSince(t time.Time) bool {
+	from := t.Truncate(time.Second)
 	for _, path := range []func() (string, error){ownersPath, revokedPath} {
 		p, err := path()
 		if err != nil {
 			continue
 		}
-		if fi, err := os.Stat(p); err == nil && fi.ModTime().After(t) {
+		if fi, err := os.Stat(p); err == nil && !fi.ModTime().Before(from) {
 			return true
 		}
 	}

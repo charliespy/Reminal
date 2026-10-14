@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"net"
+	"os"
 	"testing"
 	"time"
 )
@@ -65,11 +66,11 @@ func TestOwnersFingerprintSeesEveryWayOut(t *testing.T) {
 func TestOwnersChangedSinceSeesAnAddThenARevoke(t *testing.T) {
 	rekeyTestHome(t)
 	newOwner(t)
+	time.Sleep(1100 * time.Millisecond) // into the next whole second: the write above is before it
 	began := time.Now()
 	if ownersChangedSince(began) {
 		t.Fatal("changed with nothing written since")
 	}
-	time.Sleep(20 * time.Millisecond) // mtime must move past began on any filesystem's clock
 	d := newOwner(t)
 	if _, _, err := RemoveOwner(ownerID(d)); err != nil {
 		t.Fatal(err)
@@ -77,10 +78,10 @@ func TestOwnersChangedSinceSeesAnAddThenARevoke(t *testing.T) {
 	if !ownersChangedSince(began) {
 		t.Fatal("an owner added and revoked since the session began went unnoticed")
 	}
+	time.Sleep(1100 * time.Millisecond)
 	if ownersChangedSince(time.Now()) {
 		t.Fatal("a session begun after the revoke would restart again")
 	}
-	time.Sleep(20 * time.Millisecond)
 	if err := RevokeSelf(d); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +105,7 @@ func rekeyReply(t *testing.T, a *Agent) string {
 func TestRekeyWithTheSameOwnersDoesNotRestart(t *testing.T) {
 	rekeyTestHome(t)
 	newOwner(t)
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(1100 * time.Millisecond)
 	a := &Agent{ownersAt: time.Now()}
 	if got := rekeyReply(t, a); got != "ok unchanged\n" {
 		t.Fatalf("rekey with the owner set unchanged: %q, want no restart", got)
@@ -121,5 +122,28 @@ func TestRekeyRestartsOnceWhileOneIsUnderWay(t *testing.T) {
 	a.rekeying.Store(true) // one under way: the next waits for the new process
 	if got := rekeyReply(t, a); got != "ok restarting\n" {
 		t.Fatalf("a second rekey during a restart: %q", got)
+	}
+}
+
+// A write in the same whole second as the session began counts: with
+// whole-second file times (HFS+) it reads as that second, not after it.
+func TestOwnersChangedSinceCountsAWriteInTheSameSecond(t *testing.T) {
+	rekeyTestHome(t)
+	d := newOwner(t)
+	p, err := ownersPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	began := time.Now()
+	if _, _, err := RemoveOwner(ownerID(d)); err != nil {
+		t.Fatal(err)
+	}
+	// As a whole-second filesystem would keep it: the second it was in.
+	sec := began.Truncate(time.Second)
+	if err := os.Chtimes(p, sec, sec); err != nil {
+		t.Fatal(err)
+	}
+	if !ownersChangedSince(began) {
+		t.Fatal("a revoke written in the second the session began went unnoticed")
 	}
 }
