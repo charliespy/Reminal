@@ -168,3 +168,13 @@ func (s *Session) EndedBySignal() bool {
 	}
 	return s.cmd.ProcessState != nil && s.cmd.ProcessState.ExitCode() == -1
 }
+
+// WriteCancel is Write that stop cuts short: once stop is closed, a write
+// held because nothing reads the PTY's input — its queue full — no longer
+// holds its caller, who is told it was stopped (errWriteStopped). A PTY
+// master is a blocking descriptor (its Fd is taken), which no deadline
+// reaches, so a write it holds is let go on: it ends when the PTY is read
+// or closed — at once when the session ends with it.
+func (s *Session) WriteCancel(p []byte, stop <-chan struct{}) (int, error) {
+	return writeCancel(s.ptmx, p, stop)
+}
