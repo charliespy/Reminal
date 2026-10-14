@@ -113,6 +113,10 @@ type Active struct {
 	// leave a session parked on a long-lived process looking busy for ever.
 	// The count is what says whether done means finished.
 	Shells int `json:"shells,omitempty"`
+	// Agents is how many subagents of its own the foreground harness still
+	// has running in the background, beside Attn for the same reason: a turn
+	// that ended handing work to them is done, and not finished.
+	Agents int `json:"agents,omitempty"`
 	// Fg is the name of the command holding the terminal's foreground — "bash",
 	// "claude", "python3". It is what tells a session running an agent from one
 	// that is a plain terminal doing a job of its own.

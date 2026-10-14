@@ -346,7 +346,9 @@ func agentTargets() []agentTarget {
 					{Event: "UserPromptSubmit", State: "working"}, // a turn begins
 					{Event: "PermissionRequest", State: "input"},  // blocked on your approval — the precise event
 					{Event: "Notification", State: "notify"},      // idle (or, on older builds, permission) — split by payload
-					{Event: "Stop", State: "done"},                // turn finished
+					{Event: "Stop", State: "done"},                // turn finished, with what it left running
+					// One of its own subagents finished: what is still running.
+					{Event: "SubagentStop", State: "subagent"},
 				},
 			},
 		},

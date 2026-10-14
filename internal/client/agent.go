@@ -285,6 +285,9 @@ type Agent struct {
 	// having left work going is still "done", and the count is what says whether
 	// done means finished.
 	attnShells int
+	// attnAgents is how many subagents of its own it says it still has
+	// running in the background (its hook; see attnHookBackground).
+	attnAgents int
 	// attnFG is the command in the terminal's foreground, as the attention
 	// detector last saw it. Written to the session record so a list can tell
 	// an agent from a plain terminal.
@@ -1350,6 +1353,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	attnFG := a.attnFG
 	attnFGAt := a.attnFGAt
 	attnShells := a.attnShells
+	attnAgents := a.attnAgents
 	a.metaMu.Unlock()
 	if last.IsZero() {
 		last = a.startedAt
@@ -1374,6 +1378,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		Fg:           attnFG,
 		FgSince:      attnFGAt,
 		Shells:       attnShells,
+		Agents:       attnAgents,
 	}
 }
 

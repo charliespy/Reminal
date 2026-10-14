@@ -298,8 +298,14 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// state rather than folded into it: a finished turn that left a build
 		// going is honestly "done", and "done · 1 shell" is the thing worth
 		// knowing before deciding it needs nothing from you.
-		a.noteShells(attnShellCount(agentActive, bottom))
 		hs := session.ReadHookStateAnyAge(a.sessionID)
+		shells, agents := attnShellCount(agentActive, bottom), 0
+		if bg := attnHookBackground(agentActive, hs, fgAt); bg != nil {
+			// What the harness's own hook said it left running: the footer
+			// counts shells only, and only what it shows.
+			shells, agents = max(shells, bg.Shells), bg.Agents
+		}
+		a.noteShells(shells, agents)
 		state, source := resolveAttn(screenState, hs, last, fgAt, idleMs,
 			attnLooksLikePrompt(bottom), attnLooksBusy(bottom), hookTurns[prog])
 		if a.harnessDown() {
@@ -491,12 +497,28 @@ func processArgs(pid int) []string {
 // noteForeground records the foreground command and, when it changes, flushes
 // the session record — `claude` starting or exiting is what turns a terminal
 // into an agent and back, and `reminal list` should see it within a tick.
-// noteShells records how many shells the harness still has running, and flushes
-// the record when it changes so `reminal list` sees it within a tick.
-func (a *Agent) noteShells(n int) {
+// attnHookBackground is the background work the harness's own hook said it
+// left running, when that can be believed: said at rest (a turn that begins
+// says nothing of it, and a new one takes its place), by the harness in the
+// foreground now and not one that has since exited. nil otherwise, or when
+// the hook said nothing about it.
+func attnHookBackground(agentActive bool, hs *session.HookState, fgAt time.Time) *session.Background {
+	if !agentActive || hs == nil || hs.Background == nil || hs.State == "working" {
+		return nil
+	}
+	if !fgAt.IsZero() && hs.TS.Before(fgAt) {
+		return nil
+	}
+	return hs.Background
+}
+
+// noteShells records how many shells and subagents the harness still has
+// running, and flushes the record when that changes so `reminal list` sees it
+// within a tick.
+func (a *Agent) noteShells(n, agents int) {
 	a.metaMu.Lock()
-	changed := n != a.attnShells
-	a.attnShells = n
+	changed := n != a.attnShells || agents != a.attnAgents
+	a.attnShells, a.attnAgents = n, agents
 	a.metaMu.Unlock()
 	if !changed {
 		return
