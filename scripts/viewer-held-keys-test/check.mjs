@@ -27,7 +27,9 @@ const out = await page.evaluate(async () => {
     const r = { held: held(), switchingTo };
     abandonSwitch();
     await new Promise((res) => setTimeout(res, 300)); // the terminal draws what it is given a frame later
-    r.said = /What you typed for YYYY2222 was not sent/.test(document.querySelector('.xterm-rows').innerText);
+    // Said over the terminal, never in it (viewerNote).
+    r.said = /What you typed for YYYY2222 was not sent/.test(document.getElementById('viewer-notes').innerText);
+    document.getElementById('viewer-notes').replaceChildren(); // not read again by the next case
     return r;
   };
   const forOther = await back('YYYY2222');
