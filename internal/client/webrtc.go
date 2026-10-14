@@ -13,8 +13,19 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 	"reminal/internal/protocol"
+)
+
+// rtcAPI makes the agent's peer connections. They carry DataChannels only
+// (frames, ctl, input) — no RTP media — so they get no codecs and no RTP
+// interceptors: pion's defaults (NACK, RTCP reports, TWCC, …) run timers of
+// their own that woke an agent dozens of times a second for each viewer,
+// with nothing to do.
+var rtcAPI = webrtc.NewAPI(
+	webrtc.WithMediaEngine(&webrtc.MediaEngine{}),
+	webrtc.WithInterceptorRegistry(&interceptor.Registry{}),
 )
 
 // rtcProbeWindow is how long a connected-but-unconfirmed DataChannel is probed
@@ -378,7 +389,7 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 	}
 
 	pionICE, viewerICE := iceConfig()
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: pionICE})
+	pc, err := rtcAPI.NewPeerConnection(webrtc.Configuration{ICEServers: pionICE})
 	if err != nil {
 		return // frames stay on the WS fallback
 	}
