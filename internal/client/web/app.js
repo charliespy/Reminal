@@ -3795,6 +3795,14 @@
     // queryDirectory reaches a machine's directory channel and either lists its
     // sessions (default) or spawns a new one (opts.spawn). Resolves with the
     // decrypted DirResponse {hostname, sessions} or, when spawning, {id, pin}.
+    // dirReqId is a directory request's id, which its reply carries back:
+    // every owner on a machine's channel hears every reply, and a request
+    // takes only the one carrying its own. 8 random bytes as hex, never
+    // empty or short, as Math.random's base-36 tail could be: an empty id
+    // took another owner's reply for its own.
+    function dirReqId() {
+      return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
+    }
     async function queryDirectory(machinePubU8, opts) {
       opts = opts || {};
       const dk = await loadDeviceKeyPair();
@@ -3862,17 +3870,17 @@
               box = await crypto.subtle.importKey('raw', skRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
               ch.key = box;
               if (opts.spawn) {
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 const enc = await encrypt(box, JSON.stringify({ name: opts.spawnName || '', cwd: opts.spawnCwd || '', req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'new_session', data: enc }));
                 state = 'spawn';
               } else if (opts.rename) {
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 const enc = await encrypt(box, JSON.stringify({ id: opts.rename.id, name: opts.rename.name, req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_rename', data: enc }));
                 state = 'rename';
               } else if (opts.revokeSelf) {
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 // Prove this is a SELF-revoke: sign (machineKey, deviceKey) with our
                 // device key. Matches Go's RevokeSelfTranscript (sessionID = "").
                 const tr = await ownerTranscript('reminal-revoke-self-v1', '', [machinePubU8, dk.pubRaw]);
@@ -3881,7 +3889,7 @@
                 sock.send(JSON.stringify({ type: 'dir_revoke_self', data: enc }));
                 state = 'revoke';
               } else if (opts.kill) {
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 const enc = await encrypt(box, JSON.stringify({ id: opts.kill, req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_kill', data: enc }));
                 state = 'kill';
@@ -3892,7 +3900,7 @@
                 const p = opts.push;
                 const proof = await signOwnerAction('push:' + p.op + ':' + p.sub.endpoint, dirID);
                 if (!proof) return done(new Error('this device has no owner key'));
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 const enc = await encrypt(box, JSON.stringify({ push: { op: p.op, sub: p.sub, rules: p.rules || undefined, proof, req_id: att.reqId } }));
                 sock.send(JSON.stringify({ type: 'dir_query', data: enc }));
                 state = 'query';
@@ -3900,7 +3908,7 @@
                 // An open lookup rides dir_query with a payload; the host answers
                 // the same dir_resp with open_url/open_pin for that one port. Asked
                 // per click, so the PIN never lands in the cached session list.
-                att.reqId = Math.random().toString(36).slice(2);
+                att.reqId = dirReqId();
                 const enc = await encrypt(box, JSON.stringify({ open_id: opts.open, req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_query', data: enc }));
                 state = 'query';
