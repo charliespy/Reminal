@@ -127,6 +127,12 @@ func harnessTail(render string, n int) string {
 // it ("" when it is not known): only its own sign-in screen, and Claude
 // Code's notice only from Claude Code, are its own.
 func harnessProblemIn(tail, prog string) bool {
+	if !isAgentProgram(prog) {
+		// Not one the probe names as an agent ("node", "python3": an agent
+		// run from a path it does not know, or a shell): not known, so every
+		// CLI's sign-in screen and notice count, as before.
+		prog = ""
+	}
 	var rows []string
 	for _, row := range strings.Split(tail, "\n") {
 		if flat := strings.ToLower(strings.Join(strings.Fields(row), "")); flat != "" {
@@ -176,7 +182,10 @@ func harnessNoticeRow(flat string, bottom bool) bool {
 // for longer than a logged-out one lasts: one turned away ends at once ("Login
 // expired" and done), so a turn still going after harnessTurnProof, with its
 // screen still moving (a spinner, output), is an agent that can work —
-// whatever the screen's text says of logins.
+// whatever the screen's text says of logins. What that could hide: a CLI that
+// keeps its hook "working" and its screen moving after its login failed —
+// for at most session.HookStateTTL (15 min), past which the hook is not
+// believed. Claude Code ends a turn it turned away at once.
 func harnessAtWork(hs *session.HookState, now time.Time, settledMs int64) bool {
 	if hs == nil || hs.State != "working" {
 		return false

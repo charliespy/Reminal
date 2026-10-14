@@ -281,6 +281,12 @@ func TestAnotherAgentsSignInScreenIsNotThisAgents(t *testing.T) {
 	if !harnessProblemIn(harnessTail(codex, harnessRows), "codex") {
 		t.Fatal("Codex's own sign-in screen was missed")
 	}
+	// A program the probe does not name as an agent ("node": an agent run
+	// from a path it does not know) is not known: every sign-in screen counts.
+	gemini := "│   How would you like to authenticate for this project?   │\n│   ● 1. Sign in with Google   │"
+	if !harnessProblemIn(harnessTail(gemini, harnessRows), "node") {
+		t.Fatal("Gemini's sign-in screen under \"node\" was missed")
+	}
 	// And Claude Code's notice is Claude Code's alone: a Codex session's tool
 	// printing it is not Codex logged out.
 	if harnessProblemIn(harnessTail(loggedOutScreen, harnessRows), "codex") {
