@@ -10,7 +10,7 @@ import { chromium } from 'playwright';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 const html = readFileSync('/t/index.html');
-const srv = http.createServer((q, r) => { r.writeHead(200, { 'content-type': 'text/html' }); r.end(html); }).listen(8099);
+const srv = http.createServer((q, r) => { const a = /^\/assets\/([\w.-]+\.js)$/.exec(q.url.split('?')[0]); if (a) { let b; try { b = readFileSync('/t/assets/' + a[1]); } catch (_) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'content-type': 'text/javascript' }); return r.end(b); } r.writeHead(200, { 'content-type': 'text/html' }); r.end(html); }).listen(8099);
 const b = await chromium.launch();
 const page = await b.newPage();
 await page.goto('http://127.0.0.1:8099/');
