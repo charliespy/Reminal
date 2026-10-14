@@ -389,6 +389,13 @@ type Agent struct {
 	// for a session the relay didn't yet know about, so an immediate viewer
 	// connect raced the child's registration and hit "session not found".
 	handshakeOnce sync.Once
+	// resumeGate is closed once the session's first try at the relay is
+	// over, whatever came of it (releaseResume): a restored session's coding
+	// agent is resumed only then (restoreStart), never in the race with the
+	// session's own registration, and never held back by a relay that is
+	// down or refusing.
+	resumeGateOnce, resumeGateClose sync.Once
+	resumeGateCh                    chan struct{}
 	// resumed marks this Agent as taking over an already-running PTY
 	// from a previous binary image via syscall.Exec hot-restart. When
 	// true, Run() skips spawning a fresh shell and uses a.term as-is.
@@ -1081,6 +1088,7 @@ func (a *Agent) serveRelay(shellExit <-chan struct{}) error {
 		// let the PTY pumps continue serving the host terminal as a
 		// plain local shell until shell exit / Ctrl-].
 		if a.paused.Load() {
+			a.releaseResume() // no try at the relay while paused: nothing to wait for
 			select {
 			case <-shellExit:
 				return nil
@@ -1106,10 +1114,8 @@ func (a *Agent) serveRelay(shellExit <-chan struct{}) error {
 		// relay-joinable) — and a transient failure against a reachable relay is
 		// deliberately NOT signalled here, so the parent waits for the retry's
 		// registration and the printed URL is joinable the moment it returns.
-		// sync.Once → a no-op once either path has fired.
-		if isRelayUnreachable(err) {
-			a.signalRegistered()
-		}
+		// sync.Once → a no-op once either path has fired. (afterAttempt)
+		a.afterAttempt(err)
 
 		// runConnection returned because pause() closed the WS — don't
 		// log "Reconnecting…" or burn through backoff cycles.
@@ -1307,10 +1313,36 @@ func (a *Agent) broadcastSize(cols, rows uint16) {
 // later calls no-ops, so reconnects and the second path don't re-signal. No-op
 // for non-spawned agents (handshakeFD 0).
 func (a *Agent) signalRegistered() {
+	a.releaseResume()
 	if a.handshakeFD == 0 && a.handshakeAddr == "" {
 		return
 	}
 	a.handshakeOnce.Do(a.writeHandshake)
+}
+
+// resumeReady is closed once the session's first try at the relay is over
+// (releaseResume).
+func (a *Agent) resumeReady() chan struct{} {
+	a.resumeGateOnce.Do(func() { a.resumeGateCh = make(chan struct{}) })
+	return a.resumeGateCh
+}
+
+// releaseResume lets a restored session's agent be resumed; once.
+func (a *Agent) releaseResume() {
+	c := a.resumeReady()
+	a.resumeGateClose.Do(func() { close(c) })
+}
+
+// afterAttempt is what one try at the relay that ended with err releases:
+// the resume, whatever the outcome (registered, unreachable, refused, timed
+// out, another agent still registered after a restart — none of them keeps
+// a session's agent from coming back); and the parent's handshake, only for
+// an unreachable relay (a reachable one signalled at authenticate).
+func (a *Agent) afterAttempt(err error) {
+	a.releaseResume()
+	if isRelayUnreachable(err) {
+		a.signalRegistered()
+	}
 }
 
 // writeHandshake emits the agent's credentials to the parent process's
