@@ -4706,6 +4706,12 @@
     // current IME field (see the beforeinput handler). Top-level so sendInput
     // can invalidate it when out-of-band input (keybar, paste) edits the line.
     let imeField = '';
+    // Android: where the IME double-fires (Samsung Keyboard commits a tap
+    // through composition and then sends the same character again as
+    // insertText). The filters for that are for it alone: a keyboard
+    // anywhere else sends each key once, and a key repeated — held down, or
+    // typed fast — is meant.
+    const ANDROID = /Android/i.test(navigator.userAgent);
     if (helperTA) {
       const isAppleMobile = APPLE_MOBILE;
       helperTA.setAttribute('autocorrect', 'off');
@@ -4755,6 +4761,12 @@
       // untouched.
       let lastCommittedData = null;        // last char/word committed via composition OR insertText
       let lastCommittedAt = -Infinity;
+      // How it was committed: 'composition' (compositionend), 'punct' (a
+      // Samsung smart-punctuation tap, re-sent below), or 'key' (an
+      // insertText of its own). Only a composition's or a smart-punctuation's
+      // commit is followed by the IME's duplicate; one insertText after
+      // another is a key repeated, never a double-fire.
+      let lastCommitSource = '';
       let inSuspiciousComposition = false;
       let compositionFirstUpdateSeen = false;
       let compositionStartedCold = false;  // composition began with no recent typing → user speech/paste, not autocorrect
@@ -5019,12 +5031,13 @@
               // Strip everything after the first char and re-inject
               // just the punctuation via sendInput. Longer multi-char
               // insertText is paste (e.g. clipboard) — leave alone.
-              if (e.data && e.data.length > 1 && e.data.length <= 3 && PUNCT_RX.test(e.data[0])) {
+              if (ANDROID && e.data && e.data.length > 1 && e.data.length <= 3 && PUNCT_RX.test(e.data[0])) {
                 e.preventDefault();
                 e.stopPropagation();
                 sendInput(e.data[0]);
                 lastCommittedData = e.data[0];
                 lastCommittedAt = now;
+                lastCommitSource = 'punct';
                 return;
               }
               // Dup-fire: a single key tap commits via composition
@@ -5036,14 +5049,21 @@
               // wider for punctuation than letters: punctuation dup-fires
               // arrive ~80ms later; letters need a tight window so
               // "letter" still types fast.
+              // On Android only, and only after a commit that is followed
+              // by a duplicate (a composition's, a smart punctuation's):
+              // after an insertText of its own the same key again is the
+              // key typed again — "44", "((", a key held down — and is
+              // never dropped (a desktop keyboard lost them all).
               const dupWindow = PUNCT_RX.test(e.data) ? DUP_WINDOW_PUNCT_MS : DUP_WINDOW_LETTER_MS;
-              if (e.data === lastCommittedData && (now - lastCommittedAt) < dupWindow) {
+              if (ANDROID && (lastCommitSource === 'composition' || lastCommitSource === 'punct') &&
+                  e.data === lastCommittedData && (now - lastCommittedAt) < dupWindow) {
                 e.preventDefault();
                 e.stopPropagation();
                 return;
               }
               lastCommittedData = e.data;
               lastCommittedAt = now;
+              lastCommitSource = 'key';
             }
             return;
         }
@@ -5111,6 +5131,7 @@
         if (e.data) {
           lastCommittedData = e.data;
           lastCommittedAt = performance.now();
+          lastCommitSource = 'composition';
         }
       }, true);
 
@@ -9702,9 +9723,16 @@
     // arriving at the PTY — xterm.js calls sendInput twice for one
     // typed character via some IME path. 5ms is far below any legit
     // typing interval (autorepeat is ~30ms, fast human typing is
-    // ~60ms+), so this filters genuine duplicates only.
+    // ~60ms+), so this filters genuine duplicates only. And only a send
+    // with no key or input event of its own: one that came with a keydown
+    // or a beforeinput since the last is a key typed again, however fast
+    // (a paste of keys, an automation, a key held down on a fast repeat).
     let lastSendInputData = null;
     let lastSendInputAt = -Infinity;
+    let inputEventSerial = 0;      // keydowns and beforeinputs seen, anywhere on the page
+    let lastSendInputSerial = -1;  // inputEventSerial at the last send
+    document.addEventListener('keydown', () => { inputEventSerial++; }, true);
+    document.addEventListener('beforeinput', () => { inputEventSerial++; }, true);
     // --- Predictive local echo (mosh-style) ---
     // For high-RTT sessions (phone over LTE → relay → laptop) the
     // typing experience is dominated by the round-trip: keystroke →
@@ -9932,11 +9960,12 @@
         imeField = '';
         if (helperTA) { helperTA.value = ''; }
       }
-      if (data === lastSendInputData && (now - lastSendInputAt) < 5) {
+      if (data === lastSendInputData && (now - lastSendInputAt) < 5 && inputEventSerial === lastSendInputSerial) {
         return;
       }
       lastSendInputData = data;
       lastSendInputAt = now;
+      lastSendInputSerial = inputEventSerial;
       // Time-windowed multi-char drop. Real user typing arrives one
       // char at a time; autocorrect-spawned composition commits arrive
       // as multi-char strings or backspace-and-replace sequences. If a
