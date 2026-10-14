@@ -187,6 +187,8 @@
       justify-content: flex-end;
       overflow: hidden;
     }
+    /* A remembered screen shown while a switch connects: not live yet. */
+    #terminal.stale { opacity: 0.55; filter: grayscale(1); }
     .xterm {
       height: auto !important;
       width: 100%;
@@ -2483,6 +2485,7 @@
       if (typeof refreshTabTitle === 'function') refreshTabTitle();
     }
     function forgetSession(id) {
+      forgetCachedScreen(id);
       saveHistory(loadHistory().filter(e => e.id !== id));
       renderRecents();
     }
@@ -2650,7 +2653,7 @@
       pinTyped = false;
       const rec = document.getElementById('recents'); if (rec) rec.open = false;
       const h = document.getElementById('host'); if (h) h.open = false;
-      if (sessionId && sessionId !== id) userDisconnect();
+      if (sessionId && sessionId !== id) userDisconnect({ switching: true });
       startConnect();
     }
 
@@ -2769,6 +2772,7 @@
         // extractable=false → the PRIVATE key can never leave the browser.
         const kp = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
         await idbPut(db, 'device', { privateKey: kp.privateKey, publicKey: kp.publicKey });
+        forgetCachedScreen(); // a new owner key: what the old one opened is not this one's
         pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
       }
       return 'rmnl_' + b64url(pub);
@@ -4476,7 +4480,7 @@
           if (sessionId && sessionId !== e.id) {
             // Switching to a different session — close the live one first
             // so its socket releases cleanly before we dial a new one.
-            userDisconnect();
+            userDisconnect({ switching: true });
           }
           startConnect();
         });
@@ -5462,6 +5466,7 @@
         kexTimer = 0;
         if (cryptoKey) return; // raced with a late response
         dbg('✗ KEX TIMEOUT after ' + KEX_TIMEOUT_MS + 'ms (no matching pake_resp)');
+        if (staleScreen) forgetCachedScreen(sessionId);
         kexAttempts.clear();
         kexExID = '';
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -5577,6 +5582,7 @@
       ownerAttempts.clear();
       dbg('owner handshake gave up: ' + reason);
       if (pinValue) { sendKexInit().catch(() => {}); return; }
+      forgetCachedScreen(sessionId); // no way in without a PIN
       setStatus(reason === 'busy'
         ? 'This machine is too busy to confirm this device right now — retry, or enter the PIN'
         : 'Couldn’t connect as an owner — enter the PIN, or add this device as an owner', 'error');
@@ -5883,6 +5889,7 @@
     }
     async function forgetOwnedMachineWeb(machineB64) {
       await withOwnedMachines(m => { delete m[machineB64]; });
+      forgetCachedScreen(); // which of them were on it is not worth the risk of a wrong guess
       // And the sessions it was pinned for, or the next owner connect would
       // trust it again from those pins.
       try {
@@ -7215,7 +7222,7 @@
       pinForSession = '';
       pinTyped = false;
       const rec = document.getElementById('recents'); if (rec) rec.open = false;
-      if (sessionId && sessionId !== id.toUpperCase()) userDisconnect();
+      if (sessionId && sessionId !== id.toUpperCase()) userDisconnect({ switching: true });
       startConnect();
     }
 
@@ -7395,7 +7402,7 @@
       if (!helloShown) {
         helloShown = true;
         const ht = lastDialMs > 0 ? ' · handshake ' + lastDialMs + 'ms' : '';
-        term.write('\x1b[2m[reminal] Connected to ' + sessionId + ht + ' · AES-256-GCM end-to-end\x1b[0m\r\n');
+        writeNote('\x1b[2m[reminal] Connected to ' + sessionId + ht + ' · AES-256-GCM end-to-end\x1b[0m\r\n');
       } else if (reconnectMessagePending) {
         // We dropped (either WS hiccup or agent_offline transition)
         // and just came back. Status-bar change alone isn't enough —
@@ -7407,7 +7414,7 @@
         // An upgrade's restart ends in exactly this reconnect; onHostInfo
         // waits for it before judging the version that comes back.
         if (upgradeState && upgradeState.stage === 'restart') upgradeState.reconnected = true;
-        term.write('\r\n\x1b[2m[reminal] Reconnected to ' + sessionId + ' — press Enter to refresh the prompt.\x1b[0m\r\n');
+        writeNote('\r\n\x1b[2m[reminal] Reconnected to ' + sessionId + ' — press Enter to refresh the prompt.\x1b[0m\r\n');
       }
       // Sent already, right behind the handshake whose answer brought the
       // key (sendEarlyResume). Behind any other — one answered pake_busy, an
@@ -7655,6 +7662,14 @@
     let flushScheduled = false;
     function flushPendingChunks() {
       if (pendingChunks.length === 0) return;
+      // Every path that writes the session's output comes through here.
+      if (staleScreen) {
+        staleScreen = false;
+        const enc = new TextEncoder();
+        pendingChunks.unshift(enc.encode('\x1b[H\x1b[2J\x1b[3J'), ...staleNotes.map(t => enc.encode(t)));
+        staleNotes.length = 0;
+        document.getElementById('terminal').classList.remove('stale');
+      }
       let total = 0;
       for (const c of pendingChunks) total += c.byteLength;
       if (total === 0) { pendingChunks.length = 0; return; }
@@ -8530,6 +8545,59 @@
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
     }
 
+    // The last screen of each session this page has shown, put up the moment
+    // a switch back to it starts, so there is something to look at while the
+    // connection is made — dimmed, without its colours (#terminal.stale), and
+    // replaced by the live screen when the first output arrives. Text only,
+    // in this page's memory only: never stored, gone with the tab, and never
+    // more than a few sessions' worth.
+    const SCREEN_CACHE_MAX = 8;
+    const screenCache = new Map(); // session id → [row text, …]
+    let screenCachedFor = ''; // the session whose screen was taken, before anything was written over it
+    let staleScreen = false;  // a remembered screen is up, not the live one
+    function cacheScreen() {
+      if (!sessionId || !cryptoKey || lastSeq === 0 || staleScreen) return; // nothing live to remember
+      const b = term.buffer.active;
+      const rows = [];
+      for (let y = b.baseY; y < b.baseY + term.rows; y++) {
+        const line = b.getLine(y);
+        rows.push(line ? line.translateToString(true) : '');
+      }
+      screenCache.delete(sessionId);
+      screenCache.set(sessionId, rows);
+      while (screenCache.size > SCREEN_CACHE_MAX) screenCache.delete(screenCache.keys().next().value);
+      screenCachedFor = sessionId;
+    }
+    // A session this page can no longer open, or no longer should show, has
+    // no screen to remember: forgotten, its connect failed or ended before it
+    // was live, its machine forgotten, this browser's owner key new, the page
+    // going away. Taken down at once if it is the one up.
+    function forgetCachedScreen(id) {
+      if (id) screenCache.delete(id); else screenCache.clear();
+      if (staleScreen && (!id || id === sessionId)) {
+        staleScreen = false;
+        staleNotes.length = 0;
+        term.write('\x1b[H\x1b[2J\x1b[3J');
+        document.getElementById('terminal').classList.remove('stale');
+      }
+    }
+    // Lines reminal writes itself while a remembered screen is up go after
+    // the live screen replaces it, not under it to be wiped with it.
+    const staleNotes = [];
+    function writeNote(text) {
+      if (staleScreen) staleNotes.push(text); else term.write(text);
+    }
+    function showCachedScreen(id) {
+      const rows = screenCache.get(id);
+      if (!rows) return;
+      // Cleared first: writes queued before the reset (the "Disconnected"
+      // line) land after it.
+      term.write('\x1b[H\x1b[2J\x1b[3J\x1b[2m' + rows.slice(0, term.rows).map(r => r.slice(0, term.cols)).join('\r\n') + '\x1b[0m\x1b[H');
+      staleScreen = true;
+      document.getElementById('terminal').classList.add('stale');
+    }
+    // Live output takes it away, without a trace in the scrollback: see
+    // flushPendingChunks.
     async function startConnect() {
       const s = sessionInput.value.trim().toUpperCase();
       let p = pinInput.value.trim();
@@ -8580,9 +8648,16 @@
         // machine's windows, apps or banners are never shown for this one —
         // unless the session it is going to is on that same machine.
         const sameMachine = onSameMachine(sessionId, s);
+        if (screenCachedFor !== sessionId) cacheScreen();
+        screenCachedFor = '';
+        // A remembered screen of the session being left is not this one's.
+        staleScreen = false;
+        staleNotes.length = 0;
+        document.getElementById('terminal').classList.remove('stale');
         lastSeq = 0;
         sessionId = s;
         term.reset();
+        showCachedScreen(s);
         // host_info describes the session we are LEAVING. Share falls back to
         // it for the PIN (see sharePin), so keeping it here handed out an
         // invite pairing the new session's id with the old session's PIN —
@@ -8750,6 +8825,9 @@
 
       ws.onclose = (e) => {
         dbg('ws CLOSE' + (e && e.code ? ' code=' + e.code : ''));
+        // Closed before it was live (a wrong PIN, an ended session, a refusal):
+        // the screen remembered for it is not shown any longer.
+        if (staleScreen) forgetCachedScreen(sessionId);
         cancelDial();
         authed = false;
         agentLive = false;
@@ -8834,7 +8912,7 @@
           try {
             if (handshakeSock !== ws) await startHandshake();
           } catch (e) {
-            setStatus('Handshake failed: ' + e.message, 'error');
+            setStatus('Handshake failed: ' + e.message, 'error'); forgetCachedScreen(sessionId);
             fatal = true;
             try { ws.close(); } catch (_) {}
           }
@@ -8865,7 +8943,7 @@
             if (ws !== msgSock) break; // an older connection's answer; this one is unaffected
             if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
             if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
-            setStatus('Owner connect failed: ' + e.message, 'error');
+            setStatus('Owner connect failed: ' + e.message, 'error'); forgetCachedScreen(sessionId);
             fatal = true;
             try { ws.close(); } catch (_) {}
             break;
@@ -8904,7 +8982,7 @@
             if (ws !== msgSock) break; // an older connection's answer; this one is unaffected
             if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
             if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
-            setStatus('Handshake failed: PIN mismatch', 'error');
+            setStatus('Handshake failed: PIN mismatch', 'error'); forgetCachedScreen(sessionId);
             fatal = true;
             try { ws.close(); } catch (_) {}
             break;
@@ -8979,6 +9057,7 @@
           break;
         case 'agent_offline':
           agentLive = false;
+          if (staleScreen) forgetCachedScreen(sessionId); // not live, and maybe never again
           setStatus('Agent offline — waiting…', 'warn connecting');
           showOverlay('Agent offline — waiting for it to reconnect…');
           // Keep the WS open; the relay will tell us when the agent is back.
@@ -9237,7 +9316,11 @@
       }
     }
 
-    function userDisconnect() {
+    // switching: the page goes on to another session at once, whose terminal
+    // this would be written into (term.reset() is immediate, a write is not).
+    function userDisconnect(opts) {
+      const switching = !!(opts && opts.switching);
+      cacheScreen(); // before the "Disconnected" line goes over it
       manualClose = true;
       cancelReconnect();
       cancelDial();
@@ -9265,7 +9348,7 @@
       // there will be no echo to reconcile against. Drop them so
       // they can't dim chars into a stale "Disconnected" footer.
       resetPredictionsHard();
-      if (helloShown && connectedAt) {
+      if (helloShown && connectedAt && !switching) {
         const dur = Math.max(1, Math.round((Date.now() - connectedAt) / 1000));
         term.write('\x1b[2m[reminal] Disconnected from ' + sessionId + ' after ' + humanDuration(dur) + ' · sent ' + humanBytes(bytesSent) + ' · received ' + humanBytes(bytesReceived) + '\x1b[0m\r\n');
       }
@@ -9398,6 +9481,7 @@
     const PREDICT_ENABLED = false;
     function predictLocalEcho(data) {
       if (!PREDICT_ENABLED) return;
+      if (staleScreen) return; // the cursor is on a remembered screen, not the live one
       const now = performance.now();
       if (now < predictBlockedUntil) return;
       if (data.length !== 1) return;
@@ -9715,6 +9799,7 @@
       }
     }
     window.addEventListener('pagehide', gracefulClose);
+    window.addEventListener('pagehide', () => forgetCachedScreen());
     window.addEventListener('beforeunload', gracefulClose);
 
     // Keybar buttons: single-tap sends one keystroke. Buttons tagged
