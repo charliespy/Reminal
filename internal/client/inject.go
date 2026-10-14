@@ -172,7 +172,8 @@ func InjectKeysByID(id string, data []byte) error {
 }
 
 // SendRemoteKeys asks an owned machine to type into one of its sessions.
-// ok is false when the host listed but did not inject (older reminal).
+// ok is false, with a *HostTooOldError, when the host listed but did not
+// inject (an older reminal).
 func SendRemoteKeys(machinePub ed25519.PublicKey, sessionID string, data []byte) (ok bool, err error) {
 	if len(data) == 0 {
 		return false, fmt.Errorf("keys is empty")
@@ -187,7 +188,10 @@ func SendRemoteKeys(machinePub ed25519.PublicKey, sessionID string, data []byte)
 	if resp.KeysError != "" {
 		return false, fmt.Errorf("%s", resp.KeysError)
 	}
-	return resp.KeysOK, nil
+	if !resp.KeysOK {
+		return false, hostTooOld("accept keystrokes", resp)
+	}
+	return true, nil
 }
 
 func applyLocalKeys(resp *protocol.DirResponse, sessionID, b64 string) {

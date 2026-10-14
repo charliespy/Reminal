@@ -606,6 +606,15 @@ type DirResponse struct {
 	// for a silence. Derived from what the agent actually accepts, so it can
 	// never claim something it would not answer.
 	Caps []string `json:"caps,omitempty"`
+	// ReqID is the req_id of the query this reply answers, and Tagged says
+	// this build puts it there — set on every reply, a plain listing's too.
+	// Every owner on the channel hears every reply, so a caller that asked
+	// for something takes only the reply carrying its own id: another
+	// owner's listing has none, and is not its answer. Untagged replies are
+	// from builds older than this, which a caller has to judge by what they
+	// hold.
+	ReqID  string `json:"req_id,omitempty"`
+	Tagged bool   `json:"tagged,omitempty"`
 	// KeysOK/KeysError are set when the query asked to inject keystrokes into
 	// one session. Omitted by older hosts (they still return the session list).
 	KeysOK    bool   `json:"keys_ok,omitempty"`

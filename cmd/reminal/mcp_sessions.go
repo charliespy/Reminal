@@ -483,12 +483,23 @@ func sendOneKeys(h transcriptRef, data []byte) (string, error) {
 	}
 	ok, err := client.SendRemoteKeys(h.m.Key, h.s.ID, data)
 	if err != nil {
-		return "", err
+		return "", onMachineErr(h, err)
 	}
 	if !ok {
 		return "", fmt.Errorf("session %s is on %s, but that reminal is too old to accept keystrokes — upgrade it", h.s.ID, h.m.Name)
 	}
 	return fmt.Sprintf("Typed %d byte(s) into %s on %s.", len(data), h.s.ID, h.m.Name), nil
+}
+
+// onMachineErr says which session and machine a remote call was about when
+// the machine was too old for it: "session X is on Y, but its reminal (3.1.4)
+// is too old to …".
+func onMachineErr(h transcriptRef, err error) error {
+	var old *client.HostTooOldError
+	if errors.As(err, &old) {
+		return fmt.Errorf("session %s is on %s, but %w", h.s.ID, h.m.Name, err)
+	}
+	return err
 }
 
 type transcriptRef struct {
@@ -591,7 +602,7 @@ func readOneTranscript(h transcriptRef) (string, error) {
 	}
 	text, truncated, ok, err := client.ReadRemoteTranscript(h.m.Key, h.s.ID)
 	if err != nil {
-		return "", err
+		return "", onMachineErr(h, err)
 	}
 	if !ok {
 		return "", fmt.Errorf("session %s is on %s, but that reminal is too old to dump scrollback — upgrade it", h.s.ID, h.m.Name)
