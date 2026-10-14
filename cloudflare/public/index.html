@@ -9307,6 +9307,7 @@
           agentLive = true;
           connectedAt = Date.now();
           backoffMs = 1000;
+          redialNow = true; // up: its first close redials at once (as on 'connected')
           setStatus(sessionId, 'connected');
           hideOverlay();
           setBtnDisconnect();
