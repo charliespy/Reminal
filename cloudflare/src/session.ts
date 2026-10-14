@@ -12,6 +12,10 @@ const MAX_ATTEMPTS = 5;
 // per source. Same numbers as the Go relay (internal/relay/handshakelimit.go).
 const HANDSHAKE_BURST = 10;
 const HANDSHAKE_REFILL_MS = 60 * 1000;
+// Parking and unparking (a viewer switching away and back) are paced the
+// same way, more loosely: a switch is one of each.
+const PARK_BURST = 60;
+const PARK_REFILL_MS = 1000;
 const LOCKOUT_MS = 5 * 60 * 1000;
 
 // How long a room is kept alive after the agent disconnects, giving the
@@ -286,6 +290,13 @@ export class SessionRoom {
           return;
         }
 
+        if (attachment.role === "viewer" && (parsed.type === "park" || parsed.type === "unpark")) {
+          await this.park(ws, attachment, parsed.type === "park");
+          return;
+        }
+        // A parked viewer says nothing to the agent until it unparks.
+        if (attachment.role === "viewer" && attachment.parked) return;
+
         if (attachment.role === "viewer") {
           // A message names its type only as "type", and its source tag only
           // as "src": the agent reads field names without regard to case (and
@@ -350,7 +361,7 @@ export class SessionRoom {
     if (attachment.role === "agent") {
       for (const v of this.getSockets("viewer")) {
         const att = v.deserializeAttachment() as Attachment;
-        if (att?.authed && v.readyState === WebSocket.OPEN) {
+        if (att?.authed && !att.parked && v.readyState === WebSocket.OPEN) {
           v.send(message);
         }
       }
@@ -373,9 +384,10 @@ export class SessionRoom {
         if (!this.authedAgent(ws) && !this.authedTunnel() && (await this.used())) await this.armExpiry();
         return;
       }
+      this.closeParked(); // the agent they would resume is gone
       for (const v of this.getSockets("viewer")) {
         const att = v.deserializeAttachment() as Attachment;
-        if (att?.authed && v.readyState === WebSocket.OPEN) {
+        if (att?.authed && !att.parked && v.readyState === WebSocket.OPEN) {
           v.send(JSON.stringify({ type: "agent_offline" }));
         }
       }
@@ -386,11 +398,12 @@ export class SessionRoom {
         await this.state.storage.put("viewerAuthed", false);
       }
       const agent = this.authedAgent();
-      if (agent) {
+      // A parked socket was no viewer to the agent: its going changes nothing there.
+      if (agent && !attachment.parked) {
         agent.send(JSON.stringify({
           type: "closed",
           error: "viewer disconnected",
-          count: remaining.length,
+          count: remaining.filter(v => !(v.deserializeAttachment() as Attachment)?.parked).length,
         }));
       }
     } else if (attachment.role === "tunnel") {
@@ -576,9 +589,11 @@ export class SessionRoom {
       ws.send(JSON.stringify({ type: "auth_ok" }));
 
       if (attachment.role === "agent") {
+        // An agent come (back): parked sockets hold a key from before it.
+        this.closeParked();
         for (const v of this.getSockets("viewer")) {
           const att = v.deserializeAttachment() as Attachment;
-          if (att?.authed && v.readyState === WebSocket.OPEN) {
+          if (att?.authed && !att.parked && v.readyState === WebSocket.OPEN) {
             v.send(JSON.stringify({ type: "agent_online" }));
           }
         }
@@ -604,10 +619,7 @@ export class SessionRoom {
       {
         agent.send(JSON.stringify({
           type: "connected",
-          count: this.getSockets("viewer").filter(v => {
-            const a = v.deserializeAttachment() as Attachment;
-            return a?.authed;
-          }).length,
+          count: this.activeViewers(),
         }));
       }
     } else {
@@ -1419,26 +1431,74 @@ export class SessionRoom {
   // storage, not memory, because the room sleeps between messages.
   private async takeHandshake(src?: string): Promise<number> {
     if (!src) return 0;
-    const key = "hs:" + src;
+    return this.takeToken("hs:" + src, HANDSHAKE_BURST, HANDSHAKE_REFILL_MS);
+  }
+
+  private async takeToken(key: string, burst: number, refillMs: number): Promise<number> {
     const now = Date.now();
     const stored = await this.state.storage.get<{ t: number; at: number }>(key);
     if (!stored && Math.random() < 0.05) await this.pruneHandshakes(now);
-    const b = stored ?? { t: HANDSHAKE_BURST, at: now };
-    const tokens = Math.min(HANDSHAKE_BURST, b.t + (now - b.at) / HANDSHAKE_REFILL_MS);
+    const b = stored ?? { t: burst, at: now };
+    const tokens = Math.min(burst, b.t + (now - b.at) / refillMs);
     if (tokens < 1) {
       await this.state.storage.put(key, { t: tokens, at: now });
-      return Math.ceil((1 - tokens) * HANDSHAKE_REFILL_MS);
+      return Math.ceil((1 - tokens) * refillMs);
     }
     await this.state.storage.put(key, { t: tokens - 1, at: now });
     return 0;
   }
 
+  // activeViewers counts the viewers the agent has: authed and not parked.
+  private activeViewers(): number {
+    return this.getSockets("viewer").filter(v => {
+      const a = v.deserializeAttachment() as Attachment;
+      return a?.authed && !a.parked;
+    }).length;
+  }
+
+  // closeParked closes the parked viewer sockets: the agent they would
+  // resume has left or been replaced, and its key is not theirs.
+  private closeParked() {
+    for (const v of this.getSockets("viewer")) {
+      const a = v.deserializeAttachment() as Attachment;
+      if (a?.parked) {
+        try { v.close(4002, "agent changed"); } catch { /* already closing */ }
+      }
+    }
+  }
+
+  // park parks or unparks the viewer socket that sent it — never another —
+  // and tells the agent its count of viewers. Paced per address; unparking
+  // needs an agent to go back to. Refused, the viewer dials afresh.
+  private async park(ws: WebSocket, attachment: Attachment, park: boolean) {
+    const retry = await this.takeToken("pk:" + (attachment.src ?? ""), PARK_BURST, PARK_REFILL_MS);
+    if (retry > 0) {
+      ws.send(JSON.stringify({ type: "park_refused", error: "too many switches just now" }));
+      return;
+    }
+    const agent = this.authedAgent();
+    if (!park && !agent) {
+      ws.send(JSON.stringify({ type: "park_refused", error: "agent not connected" }));
+      return;
+    }
+    const changed = !!attachment.parked !== park;
+    ws.serializeAttachment({ ...attachment, parked: park } satisfies Attachment);
+    if (changed && agent) {
+      agent.send(JSON.stringify(park
+        ? { type: "closed", error: "viewer parked", count: this.activeViewers() }
+        : { type: "connected", count: this.activeViewers() }));
+    }
+    ws.send(JSON.stringify({ type: park ? "parked" : "unparked" }));
+  }
+
   // pruneHandshakes drops counts that have refilled completely.
   private async pruneHandshakes(now: number) {
-    const all = await this.state.storage.list<{ t: number; at: number }>({ prefix: "hs:" });
     const stale: string[] = [];
-    for (const [k, v] of all) {
-      if (v.t + (now - v.at) / HANDSHAKE_REFILL_MS >= HANDSHAKE_BURST) stale.push(k);
+    for (const [prefix, burst, refill] of [["hs:", HANDSHAKE_BURST, HANDSHAKE_REFILL_MS], ["pk:", PARK_BURST, PARK_REFILL_MS]] as const) {
+      const all = await this.state.storage.list<{ t: number; at: number }>({ prefix });
+      for (const [k, v] of all) {
+        if (v.t + (now - v.at) / refill >= burst) stale.push(k);
+      }
     }
     if (stale.length) await this.state.storage.delete(stale);
   }

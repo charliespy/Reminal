@@ -12,6 +12,10 @@ export type Attachment = {
   // src, on a viewer socket, is a hash of the address it connected from,
   // for counting its PIN handshakes (SessionRoom.allowHandshake).
   src?: string;
+  // parked, on a viewer socket: kept warm by a viewer that has switched to
+  // another session (a "park" frame). It is sent nothing of the agent's and
+  // is not counted as a viewer until it unparks.
+  parked?: boolean;
 };
 
 // TunnelMeta is persisted in DO storage once the tunnel agent registers

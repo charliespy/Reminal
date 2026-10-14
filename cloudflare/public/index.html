@@ -2486,6 +2486,8 @@
     }
     function forgetSession(id) {
       forgetCachedScreen(id);
+      const w = warmSockets.get(String(id).toUpperCase()) || warmSockets.get(id);
+      if (w) closeWarm(w);
       saveHistory(loadHistory().filter(e => e.id !== id));
       renderRecents();
     }
@@ -2773,6 +2775,7 @@
         const kp = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
         await idbPut(db, 'device', { privateKey: kp.privateKey, publicKey: kp.publicKey });
         forgetCachedScreen(); // a new owner key: what the old one opened is not this one's
+        closeAllWarm();
         pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
       }
       return 'rmnl_' + b64url(pub);
@@ -5900,6 +5903,7 @@
     async function forgetOwnedMachineWeb(machineB64) {
       await withOwnedMachines(m => { delete m[machineB64]; });
       forgetCachedScreen(); // which of them were on it is not worth the risk of a wrong guess
+      closeAllWarm();
       // And the sessions it was pinned for, or the next owner connect would
       // trust it again from those pins.
       try {
@@ -7496,7 +7500,8 @@
     // once. An agent that predates them never says so, and nothing changes.
     const UNSEALED = new Set(['auth', 'auth_ok', 'register', 'join', 'connected', 'error',
       'ping', 'pong', 'closed', 'resume', 'agent_online', 'agent_offline', 'kex_init',
-      'kex_resp', 'pake_init', 'pake_resp', 'pake_busy', 'own_init', 'own_resp', 'own_busy', 'sealed']);
+      'kex_resp', 'pake_init', 'pake_resp', 'pake_busy', 'own_init', 'own_resp', 'own_busy', 'sealed',
+      'park', 'unpark', 'parked', 'unparked', 'park_refused']);
     const sealable = (t) => !!t && !UNSEALED.has(t);
     let sealState = null; // this connection's: { a2v, v2a, stream, outCtr, inLast }
     let sealSendChain = Promise.resolve();
@@ -8698,6 +8703,118 @@
     }
     // Live output takes it away, without a trace in the scrollback: see
     // flushPendingChunks.
+    // ---- Warm sockets ----
+    // A switch away from a live session parks its socket instead of closing
+    // it (the relay then sends it nothing and does not count it as a viewer),
+    // and a switch back unparks it: no connect, no handshake, just the screen.
+    // At most WARM_MAX, the most recent; each keeps its own session key and
+    // sealing state, in this page's memory only, dropped with the socket.
+    // Closed when the page goes, after a minute hidden, when the session is
+    // forgotten — and by the relay when the agent leaves or comes back. One
+    // that does not answer, is refused, or whose frames do not open is
+    // dropped and the session dialled afresh; never retried.
+    const WARM_MAX = 3;
+    const warmSockets = new Map(); // session id → { sid, ws, cryptoKey, sealState, iOwn, parked, lastPingAt }
+    let unparkTimer = 0;
+    let unparkProbe = null; // a socket just unparked, until a frame on it opens
+    function closeWarm(e) {
+      if (warmSockets.get(e.sid) === e) warmSockets.delete(e.sid);
+      const sock = e.ws;
+      e.ws = null; e.cryptoKey = null; e.sealState = null;
+      if (sock) {
+        sock.onmessage = null; sock.onclose = null; sock.onerror = null;
+        try { sock.close(1000, 'warm socket closed'); } catch (_) {}
+      }
+    }
+    function closeAllWarm() { for (const e of [...warmSockets.values()]) closeWarm(e); }
+    function parkCurrent() {
+      if (!ws || ws.readyState !== WebSocket.OPEN || !cryptoKey || !agentLive || !sessionId || !ownsTerminal) return false;
+      const sock = ws;
+      const e = { sid: sessionId, ws: sock, cryptoKey, sealState, iOwn: iOwnThisMachine, parked: false, lastPingAt: Date.now() };
+      if (!sock.sendRaw) return false;
+      sock.sendRaw(JSON.stringify({ type: 'park' }));
+      const old = warmSockets.get(e.sid);
+      if (old) closeWarm(old);
+      sock.onopen = null;
+      sock.onerror = null;
+      sock.onmessage = (ev) => {
+        let m;
+        try { m = JSON.parse(ev.data); } catch { return; }
+        if (m.type === 'parked') e.parked = true;
+        else if (m.type === 'park_refused') closeWarm(e);
+        // Anything else — output that was on its way before the park — is
+        // of no use: an unpark asks for the screen afresh.
+      };
+      sock.onclose = () => { if (warmSockets.get(e.sid) === e) warmSockets.delete(e.sid); e.ws = null; e.cryptoKey = null; e.sealState = null; };
+      warmSockets.set(e.sid, e);
+      ws = null;
+      return true; // trimmed to WARM_MAX once the session switched to is out (trimWarm)
+    }
+    // Past WARM_MAX the least recently used go. Run after the switch has
+    // taken its own: trimmed before, the session being switched to could be
+    // the one dropped.
+    function trimWarm() {
+      while (warmSockets.size > WARM_MAX) closeWarm(warmSockets.values().next().value);
+    }
+    // resumeWarm takes session s's parked socket for this page's connection,
+    // if it has one that is still open, and unparks it.
+    function resumeWarm(s) {
+      const e = warmSockets.get(s);
+      if (!e) return false;
+      warmSockets.delete(s);
+      if (!e.parked || !e.ws || e.ws.readyState !== WebSocket.OPEN) { closeWarm(e); return false; }
+      cancelReconnect();
+      cancelDial();
+      if (ws) {
+        try { ws.onopen = null; ws.onmessage = null; ws.onclose = null; ws.onerror = null; ws.close(); } catch (_) {}
+      }
+      ws = e.ws;
+      cryptoKey = e.cryptoKey;
+      sealState = e.sealState;
+      // A probe or a key's wait belongs to the socket it was for (as in openSocket).
+      if (probe) { clearTimeout(probe.timer); probe = null; }
+      if (echoWatch) { clearTimeout(echoWatch); echoWatch = 0; }
+      unechoed = 0;
+      authed = true;
+      agentLive = false; // until the relay says it is a viewer again
+      if (snapAsm) { clearTimeout(snapAsm.timer); snapAsm = null; }
+      snapLive = null;
+      snapPartsOff = false;
+      kexAttempts.clear(); kexExID = ''; kexInFlight = false;
+      ownerAttempts.clear();
+      if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
+      handshakeSock = ws; // its handshake was done long ago
+      earlyResume = null;
+      keyExID = 'warm';
+      iOwnThisMachine = e.iOwn;
+      teardownWebRTC();
+      rtcRetryAt = 0;
+      setStatus('Connecting…', 'warn connecting');
+      showOverlay('Connecting…');
+      wireSocket(ws);
+      const sock = ws;
+      sock.sendRaw(JSON.stringify({ type: 'unpark' }));
+      // And the screen asked for right behind it, as behind a handshake: the
+      // relay takes the two in order, and drops the resume of a socket it
+      // has not unparked (refused: dialled afresh, which asks again).
+      if (ownsTerminal) { sendResume(); earlyResume = { sock, exID: 'warm' }; }
+      // Abort cap: a socket that died quietly while parked answers nothing.
+      if (unparkTimer) clearTimeout(unparkTimer);
+      unparkTimer = setTimeout(() => { unparkTimer = 0; if (ws === sock && !agentLive) warmFailed('no answer'); },
+        Math.max(1500, 2 * (observedRTT || 0) + 1000));
+      return true;
+    }
+    // The socket just unparked will not do: dial afresh.
+    function warmFailed(why) {
+      dbg('warm socket dropped (' + why + ') — dialling afresh');
+      if (unparkTimer) { clearTimeout(unparkTimer); unparkTimer = 0; }
+      unparkProbe = null;
+      if (ws) {
+        try { ws.onopen = null; ws.onmessage = null; ws.onclose = null; ws.onerror = null; ws.close(); } catch (_) {}
+        ws = null;
+      }
+      openSocket();
+    }
     async function startConnect() {
       const s = sessionInput.value.trim().toUpperCase();
       let p = pinInput.value.trim();
@@ -8781,7 +8898,8 @@
       sealState = null;
       sessionInput.value = sessionId;
       history.replaceState(null, '', '?s=' + sessionId);
-      openSocket();
+      if (!resumeWarm(sessionId)) openSocket();
+      trimWarm();
       // Keys typed from now on are the terminal's — held until it is live
       // (sendInput) — not lost to whatever had focus before it was shown.
       // startSessionFlow focuses it again once connected, as it always has.
@@ -8858,6 +8976,9 @@
       {
         const rawSend = ws.send.bind(ws);
         ws.send = (text) => sessionSend((t) => { try { rawSend(t); } catch (_) {} }, text);
+        // Unsealed, straight out: what a warm socket sends (park, ping) is
+        // never the page's session's to seal, nor held behind its queue.
+        ws.sendRaw = (t) => { try { rawSend(t); } catch (_) {} };
       }
       const dialingWs = ws;
       cancelDial();
@@ -8925,15 +9046,20 @@
         lastPingAt = Date.now();
       };
 
-      const thisWs = ws;
-      ws.onmessage = async (ev) => {
-        noteInbound(thisWs);
+      wireSocket(ws);
+    }
+
+    // wireSocket gives the page's connection its handlers: on a fresh dial,
+    // and on a warm socket unparked (resumeWarm).
+    function wireSocket(sock) {
+      sock.onmessage = async (ev) => {
+        noteInbound(sock);
         let msg;
         try { msg = JSON.parse(ev.data); } catch { return; }
         await handleMessage(msg);
       };
 
-      ws.onclose = (e) => {
+      sock.onclose = (e) => {
         dbg('ws CLOSE' + (e && e.code ? ' code=' + e.code : ''));
         // Closed before it was live (a wrong PIN, an ended session, a refusal):
         // the screen remembered for it is not shown any longer.
@@ -8968,7 +9094,7 @@
         scheduleReconnect();
       };
 
-      ws.onerror = () => {
+      sock.onerror = () => {
         dbg('ws ERROR');
         // ws.onclose will run after this; let it drive reconnect logic.
       };
@@ -8999,7 +9125,13 @@
           return;
         }
         msg = await unsealIn(msg);
-        if (!msg) return;
+        if (!msg) {
+          // The first frames after an unpark not opening under the key the
+          // socket kept: not this agent's key any more. Dial afresh.
+          if (unparkProbe === msgSock && ws === msgSock) warmFailed('frames do not open');
+          return;
+        }
+        if (unparkProbe === msgSock) unparkProbe = null;
       } else if (sealState && sealable(msg.type)) {
         return; // the unsealed copy the agent writes for viewers that predate sealing
       }
@@ -9165,6 +9297,24 @@
             }
             startSessionFlow();
           }
+          break;
+        case 'unparked':
+          // A warm socket is a viewer again: the screen is asked for as on
+          // any connect (startSessionFlow), under the key it kept.
+          if (ws !== msgSock || agentLive) break;
+          if (unparkTimer) { clearTimeout(unparkTimer); unparkTimer = 0; }
+          unparkProbe = ws;
+          agentLive = true;
+          connectedAt = Date.now();
+          backoffMs = 1000;
+          setStatus(sessionId, 'connected');
+          hideOverlay();
+          setBtnDisconnect();
+          renderRecents();
+          startSessionFlow();
+          break;
+        case 'park_refused':
+          if (ws === msgSock) warmFailed('refused: ' + (msg.error || ''));
           break;
         case 'agent_offline':
           agentLive = false;
@@ -9436,6 +9586,11 @@
       cancelReconnect();
       cancelDial();
       clearCred();
+      // Switching to another session: this one's socket is kept warm
+      // (parkCurrent), for a switch back. Else closed.
+      if (switching) parkCurrent();
+      if (unparkTimer) { clearTimeout(unparkTimer); unparkTimer = 0; }
+      unparkProbe = null;
       // Stop the heartbeat — we null out ws.onclose below to bypass
       // the auto-reconnect path, so its own clear-interval won't fire.
       if (ws) {
@@ -9911,7 +10066,13 @@
       }
     }
     window.addEventListener('pagehide', gracefulClose);
-    window.addEventListener('pagehide', () => forgetCachedScreen());
+    window.addEventListener('pagehide', () => { forgetCachedScreen(); closeAllWarm(); });
+    // A page hidden a while keeps no warm sockets: a minute, then they go.
+    let warmHiddenTimer = 0;
+    document.addEventListener('visibilitychange', () => {
+      if (warmHiddenTimer) { clearTimeout(warmHiddenTimer); warmHiddenTimer = 0; }
+      if (document.hidden && warmSockets.size) warmHiddenTimer = setTimeout(() => { warmHiddenTimer = 0; closeAllWarm(); }, 60000);
+    });
     window.addEventListener('beforeunload', gracefulClose);
 
     // Keybar buttons: single-tap sends one keystroke. Buttons tagged
@@ -13149,6 +13310,14 @@
       if (ws && ws.readyState === WebSocket.OPEN && tnow - lastPingAt >= 30000) {
         lastPingAt = tnow;
         try { ws.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
+      }
+      // Warm sockets too, on the same cadence (answered by the relay without
+      // waking anything: setWebSocketAutoResponse).
+      for (const e of warmSockets.values()) {
+        if (e.ws && e.ws.readyState === WebSocket.OPEN && tnow - e.lastPingAt >= 30000) {
+          e.lastPingAt = tnow;
+          e.ws.sendRaw(JSON.stringify({ type: 'ping' }));
+        }
       }
       // Always prefer P2P: whenever we're not connected/negotiating and the
       // cooldown has passed, (re)attempt WebRTC — so WS upgrades to P2P as soon

@@ -16,3 +16,25 @@ this machine:
    (`--network container:<name>`), the viewer at `http://localhost:8080`:
    `node cached-screen.js joins.txt`. Every field of the JSON it prints is
    true, and `afterPagehide` is 0.
+
+## Warm sockets
+
+`warm-sockets.js joins.txt` (five sessions) tours them, then switches among the
+last four: every switch must be `park,unpark,resume` on the wire — no `auth`, no
+handshake — and live; typing works after one; a session whose agent restarts
+(`reminal restart`, asked of `rig-ctl.py` — `python3 rig-ctl.py <reminal>`
+in the agents' container; the browser shares its network, so it is reached
+at 127.0.0.1:18999, which unlike a file in a shared mount is seen at once)
+loses its parked socket and the switch back dials afresh; pagehide closes
+them all.
+
+`warm-revoke.js joins.txt` (two sessions, one owner device): with one
+session parked and one live, the device is revoked (`reminal owners revoke`,
+on `/p/revoke`): the parked socket is closed, the live one cut, and the
+switch back dials afresh and gets no key.
+
+`warm-idle.js joins.txt <secs>` holds one live and three parked sockets for
+`<secs>`, then one live alone for as long, writing the phase to `/p/phase` so
+the relay's and the agents' load can be sampled in each. Against the Worker,
+count the Durable Object's websocket events with a `console.log` in
+`webSocketMessage` in a scratch copy (never in the tree).

@@ -55,9 +55,13 @@ var upgrader = websocket.Upgrader{
 }
 
 type peer struct {
-	conn    *websocket.Conn
-	role    protocol.Role
-	authed  bool
+	conn   *websocket.Conn
+	role   protocol.Role
+	authed bool
+	// parked: a viewer's warm socket for a session it has switched away
+	// from (protocol.TypePark). It gets nothing of the agent's and is not
+	// counted as a viewer.
+	parked  bool
 	writeMu sync.Mutex
 }
 
@@ -250,16 +254,22 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 				}
 			}
 			authed = true // loosen this conn's read deadline to the liveness budget
+			var stale []*peer
+			if role == protocol.RoleAgent {
+				// An agent come (back): parked sockets hold a key from before it.
+				stale = r.dropParkedLocked()
+			}
 			// Compute presence flags for notifications after unlock.
 			agentOnline := r.agent != nil && r.agent.authed
 			anyViewerOnline := false
 			for _, v := range r.viewers {
-				if v.authed {
+				if v.authed && !v.parked {
 					anyViewerOnline = true
 					break
 				}
 			}
 			r.mu.Unlock()
+			closeParked(stale)
 
 			s.writeTo(p, protocol.Message{Type: protocol.TypeAuthOK})
 
@@ -289,7 +299,15 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 		switch {
 		case msg.Type == protocol.TypePing:
 			s.writeTo(p, protocol.Message{Type: protocol.TypePong})
+		case role == protocol.RoleViewer && (msg.Type == protocol.TypePark || msg.Type == protocol.TypeUnpark):
+			s.park(sessionID, p, msg.Type == protocol.TypePark)
 		case forwardableTypes[msg.Type]:
+			r.mu.Lock()
+			parked := p.parked
+			r.mu.Unlock()
+			if parked {
+				continue // a parked viewer says nothing to the agent until it unparks
+			}
 			if ok, retry := s.admitHandshake(sessionID, role, conn, &msg); !ok {
 				s.writeTo(p, pakeBusy(msg, retry))
 				continue
@@ -561,6 +579,10 @@ func (s *Server) detach(sessionID string, role protocol.Role, conn *websocket.Co
 			break
 		}
 		r.agent = nil
+		// Parked sockets are closed instead: the agent they would resume has
+		// gone, and the one that comes back has a key of its own.
+		stale := r.dropParkedLocked()
+		defer closeParked(stale)
 		for _, v := range r.viewers {
 			if v.authed {
 				s.writeTo(v, protocol.Message{Type: protocol.TypeAgentOffline})
@@ -574,17 +596,21 @@ func (s *Server) detach(sessionID string, role protocol.Role, conn *websocket.Co
 		sid := sessionID
 		r.cleanup = time.AfterFunc(s.orphanTTL(), func() { s.expireRoom(sid) })
 	case protocol.RoleViewer:
+		counted := false
 		for i, v := range r.viewers {
 			if v.conn == conn {
+				counted = !v.parked
 				r.viewers = append(r.viewers[:i], r.viewers[i+1:]...)
 				break
 			}
 		}
-		if r.agent != nil && r.agent.authed {
+		// A parked socket was no viewer to the agent — nor one the room has
+		// already dropped (dropParkedLocked): its going changes nothing there.
+		if counted && r.agent != nil && r.agent.authed {
 			s.writeTo(r.agent, protocol.Message{
 				Type:  protocol.TypeClosed,
 				Error: "viewer disconnected",
-				Count: len(r.viewers),
+				Count: r.activeViewersLocked(),
 			})
 		}
 	}
@@ -693,9 +719,10 @@ func (s *Server) forward(sessionID string, from protocol.Role, conn *websocket.C
 			r.mu.Unlock()
 			return
 		}
-		// Broadcast agent output to every authed viewer.
+		// Broadcast agent output to every authed viewer, but not to a
+		// parked one.
 		for _, v := range r.viewers {
-			if v.authed {
+			if v.authed && !v.parked {
 				targets = append(targets, v)
 			}
 		}
@@ -720,7 +747,79 @@ func (s *Server) viewerCount(sessionID string) int {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.viewers)
+	return r.activeViewersLocked()
+}
+
+// activeViewersLocked counts the viewers the agent has: all but the parked.
+// Callers hold r.mu.
+func (r *room) activeViewersLocked() int {
+	n := 0
+	for _, v := range r.viewers {
+		if !v.parked {
+			n++
+		}
+	}
+	return n
+}
+
+// dropParkedLocked takes the parked sockets out of the room, to be closed
+// (closeParked) once r.mu is let go. Callers hold r.mu.
+func (r *room) dropParkedLocked() []*peer {
+	var out []*peer
+	kept := r.viewers[:0]
+	for _, v := range r.viewers {
+		if v.parked {
+			out = append(out, v)
+		} else {
+			kept = append(kept, v)
+		}
+	}
+	r.viewers = kept
+	return out
+}
+
+func closeParked(ps []*peer) {
+	for _, p := range ps {
+		go p.conn.Close()
+	}
+}
+
+// park parks or unparks the viewer p, which sent it — never another
+// socket — and tells the agent its count of viewers. It is paced per
+// session and address (takePark). Unparking needs an agent to go back to;
+// without one, or past the pace, it is refused and the viewer dials afresh.
+func (s *Server) park(sessionID string, p *peer, park bool) {
+	if ok, _ := s.takePark(sessionID, p.conn, time.Now()); !ok {
+		s.writeTo(p, protocol.Message{Type: protocol.TypeParkRefused, Error: "too many switches just now"})
+		return
+	}
+	r := s.getRoom(sessionID)
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if !park && (r.agent == nil || !r.agent.authed) {
+		r.mu.Unlock()
+		s.writeTo(p, protocol.Message{Type: protocol.TypeParkRefused, Error: "agent not connected"})
+		return
+	}
+	changed := p.parked != park
+	p.parked = park
+	agent := r.agent
+	count := r.activeViewersLocked()
+	r.mu.Unlock()
+	if changed && agent != nil && agent.authed {
+		if park {
+			s.writeTo(agent, protocol.Message{Type: protocol.TypeClosed, Error: "viewer parked", Count: count})
+		} else {
+			s.writeTo(agent, protocol.Message{Type: protocol.TypeConnected, Count: count})
+		}
+	}
+	if park {
+		s.writeTo(p, protocol.Message{Type: protocol.TypeParked})
+	} else {
+		s.writeTo(p, protocol.Message{Type: protocol.TypeUnparked})
+	}
 }
 
 // broadcastViewers sends msg to every authed viewer in the room. Used for
@@ -734,7 +833,7 @@ func (s *Server) broadcastViewers(sessionID string, msg protocol.Message) {
 	r.mu.Lock()
 	targets := make([]*peer, 0, len(r.viewers))
 	for _, v := range r.viewers {
-		if v.authed {
+		if v.authed && !v.parked {
 			targets = append(targets, v)
 		}
 	}

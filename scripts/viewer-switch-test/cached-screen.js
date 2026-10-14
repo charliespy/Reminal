@@ -18,7 +18,9 @@ const fs = require('fs');
   await go(A); await p.waitForTimeout(30); R.cachedShown = (await stale()) && (await rows()).includes(mA);
   await live(mA); await p.waitForTimeout(800);
   R.noDisconnectedLine = !(await all()).includes('Disconnected from');
-  // 2. wrong PIN for B: the remembered screen comes down and is forgotten
+  // 2. wrong PIN for B: the remembered screen comes down and is forgotten.
+  // A fresh dial: a warm socket (one already proven) would not ask for a PIN.
+  await p.evaluate(() => { if (typeof closeAllWarm === 'function') closeAllWarm(); });
   await go(B, '000000');
   await p.waitForFunction(() => /PIN mismatch|failed/i.test(document.getElementById('status')?.textContent || ''), null, { timeout: 15000 });
   await p.waitForTimeout(200);
@@ -33,6 +35,7 @@ const fs = require('fs');
   R.forgotten = await p.evaluate((id) => !screenCache.has(id), A.id);
   await go(A); await p.waitForTimeout(30); R.noStaleAfterForget = !(await stale()); await live(mA);
   // 4. an ended session: C live, D live, kill C, back to C → the stale comes down
+  // (C's warm socket, if any, closes with its agent; the switch back dials afresh)
   await go(C); await live('PIPE-OK'); const mC = await mark();
   await go(D); await live('PIPE-OK');
   fs.writeFileSync('/p/kill-' + C.id, '');

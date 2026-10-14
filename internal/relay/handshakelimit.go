@@ -130,6 +130,21 @@ func (s *Server) agentConnected(sessionID string) bool {
 }
 
 func (s *Server) takeHandshake(key string, now time.Time) (bool, time.Duration) {
+	return s.takeToken(key, now, handshakeBurst, handshakeRefill)
+}
+
+// Parking and unparking (a viewer switching away and back) are paced in the
+// same table under keys of their own, more loosely: a switch is one of each.
+const (
+	parkBurst  = 60
+	parkRefill = time.Second
+)
+
+func (s *Server) takePark(sessionID string, conn *websocket.Conn, now time.Time) (bool, time.Duration) {
+	return s.takeToken("park|"+sessionID+"|"+addressGroup(s.clientAddr(conn)), now, parkBurst, parkRefill)
+}
+
+func (s *Server) takeToken(key string, now time.Time, burst float64, refill time.Duration) (bool, time.Duration) {
 	s.hsMu.Lock()
 	defer s.hsMu.Unlock()
 	if s.handshakes == nil {
@@ -143,21 +158,21 @@ func (s *Server) takeHandshake(key string, now time.Time) (bool, time.Duration) 
 		if len(s.handshakes) > 4096 && now.Sub(s.hsPruned) > time.Minute {
 			s.hsPruned = now
 			for k, o := range s.handshakes {
-				if now.Sub(o.at) >= handshakeBurst*handshakeRefill {
+				if now.Sub(o.at) >= handshakeBurst*handshakeRefill { // the longest refill of any kept here
 					delete(s.handshakes, k)
 				}
 			}
 		}
-		b = &addrBucket{tokens: handshakeBurst, at: now}
+		b = &addrBucket{tokens: burst, at: now}
 		s.handshakes[key] = b
 	}
-	b.tokens += float64(now.Sub(b.at)) / float64(handshakeRefill)
-	if b.tokens > handshakeBurst {
-		b.tokens = handshakeBurst
+	b.tokens += float64(now.Sub(b.at)) / float64(refill)
+	if b.tokens > burst {
+		b.tokens = burst
 	}
 	b.at = now
 	if b.tokens < 1 {
-		return false, time.Duration((1 - b.tokens) * float64(handshakeRefill))
+		return false, time.Duration((1 - b.tokens) * float64(refill))
 	}
 	b.tokens--
 	return true, 0

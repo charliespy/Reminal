@@ -31,6 +31,11 @@ var exemptFromSessionForwarding = map[protocol.MessageType]string{
 	protocol.TypePong:         "relay-generated: reply to ping",
 	protocol.TypeAgentOnline:  "relay-generated: agent presence",
 	protocol.TypeAgentOffline: "relay-generated: agent presence",
+	protocol.TypePark:         "relay-handled: a viewer parks its own socket",
+	protocol.TypeUnpark:       "relay-handled: a viewer unparks its own socket",
+	protocol.TypeParked:       "relay-generated: reply to park",
+	protocol.TypeUnparked:     "relay-generated: reply to unpark",
+	protocol.TypeParkRefused:  "relay-generated: park or unpark refused",
 
 	// The copy/paste rendezvous is a different endpoint with its own room, so
 	// its handshake never reaches this switch.
