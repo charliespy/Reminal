@@ -7630,8 +7630,10 @@
     // The rows above the prompt are scrolled up by one (a scroll region that
     // ends just above it; what leaves the top goes to the scrollback as any
     // line does) and the line written in the row freed. With the prompt on
-    // the top row (a screen just cleared), a row is opened above it instead
-    // and the prompt and cursor move down one with it. With a full-screen
+    // one of the top two rows (a screen just cleared), a row is opened at
+    // the prompt's own instead — a scroll region needs two rows at least, and
+    // one of a single row is ignored, which had the line written over the
+    // prompt — and the prompt and cursor move down one with it. With a full-screen
     // program on the screen (the alternate buffer, whose screen is all its
     // own), nothing is written.
     function writeAbovePrompt(line) {
@@ -7642,8 +7644,8 @@
       // a scroll at the top of the screen sends a line to the scrollback and
       // moves the screen under a restored cursor, which then sat a row above
       // the prompt. ESC 7/8 keep what is drawn with (colours) as it was.
-      if (y < 1) {
-        term.write('\x1b7' + '\x1b[H' + '\x1b[L' + line + '\x1b8' + '\x1b[2;' + (x + 1) + 'H');
+      if (y < 2) {
+        term.write('\x1b7' + '\x1b[' + (y + 1) + ';1H' + '\x1b[L' + line + '\x1b8' + '\x1b[' + (y + 2) + ';' + (x + 1) + 'H');
         return;
       }
       term.write('\x1b7' + '\x1b[1;' + y + 'r' + '\x1b[' + y + ';1H' + '\n' + '\r\x1b[2K' + line + '\x1b[r' + '\x1b8' + '\x1b[' + (y + 1) + ';' + (x + 1) + 'H');

@@ -87,16 +87,25 @@ const live = (p) => p.waitForFunction(() => inputLive(), null, { timeout: 60000 
 
 // ---- 4: after a reconnect, the next keys echo on the prompt's line, and
 // the reconnect is said just above it: with the prompt at the top of a
-// cleared screen (a), and further down (b) ----
-for (const [k, setup] of [['a', 'clear'], ['b', 'echo one; echo two; echo three']]) {
+// cleared screen (a), on its second row (c: a scroll region of one row is
+// ignored), and further down (b) ----
+for (const [k, setup] of [['a', 'clear'], ['c', null], ['b', 'echo one; echo two; echo three']]) {
   const { ctx, p } = await page();
   await p.goto(`${BASE}/?s=${S}#p=${PIN}`, { waitUntil: 'domcontentloaded' });
   await live(p);
-  await p.keyboard.type(setup, { delay: 40 });
-  await p.keyboard.press('Enter');
+  if (setup) {
+    await p.keyboard.type(setup, { delay: 40 });
+    await p.keyboard.press('Enter');
+  } else {
+    // The prompt on the second row exactly: the screen drawn here (a shell's
+    // own output after a clear is not so exact), its keys the session's.
+    await p.waitForTimeout(1000);
+    await p.evaluate(() => term.write('\x1b[H\x1b[2J' + 'one\r\n' + '$ '));
+  }
   await p.waitForTimeout(2000);
   const row = (d) => p.evaluate((d) => { const b = term.buffer.active; return b.getLine(b.baseY + b.cursorY + d)?.translateToString(true) || ''; }, d);
   const prompt = (await row(0)).trim();
+  const at = await p.evaluate(() => term.buffer.active.cursorY);
   await p.evaluate(() => ws.close());
   await p.waitForFunction(() => !inputLive(), null, { timeout: 10000 });
   await live(p);
@@ -105,7 +114,7 @@ for (const [k, setup] of [['a', 'clear'], ['b', 'echo one; echo two; echo three'
   await p.waitForTimeout(2000);
   const line = (await row(0)).trim(), above = (await row(-1)).trim();
   const ok = prompt.length > 0 && line === prompt + ' echo MARK42' && /\[reminal\] Reconnected to /.test(above);
-  out.push(`4${k} prompt "${prompt}"; after the reconnect the cursor's line is "${line}", the line above "${above}"   ${verdict(ok)}`);
+  out.push(`4${k} prompt "${prompt}" on row ${at}; after the reconnect the cursor's line is "${line}", the line above "${above}"   ${verdict(ok)}`);
   await ctx.close();
 }
 
