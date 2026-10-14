@@ -21,6 +21,7 @@
 // This is why a ~40-bit code is safe here where it wouldn't be for a
 // store-and-forward drop.
 
+import { closeBack } from "./closeback";
 import { armAlarm } from "./alarm";
 
 const RV_TTL_MS = 60 * 60 * 1000; // hard server cap; the source may close earlier
@@ -130,7 +131,16 @@ export class RendezvousRoom {
     }
   }
 
-  async webSocketClose(ws: WebSocket) {
+  // As SessionRoom's: its own bookkeeping, then the close answered.
+  async webSocketClose(ws: WebSocket, code?: number, reason?: string) {
+    try {
+      await this.onSocketClose(ws);
+    } finally {
+      closeBack(ws, code, reason);
+    }
+  }
+
+  private async onSocketClose(ws: WebSocket) {
     const att = ws.deserializeAttachment() as RvAttachment;
     if (!att || att.rejected) return;
 
