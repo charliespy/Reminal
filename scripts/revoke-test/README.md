@@ -18,6 +18,7 @@ round. Every field must come out as:
 - `ownerLearnedPIN` true: a device's Share menu could fetch the PIN;
 - `ownerStoredNoPIN` true: a device that only ever connected as an owner keeps no PIN;
 - `revokedLiveCut` true and `revokedState.key` false: the revoked device's open viewer has no key;
+- `revokedSharePin` "": mid-cut, it asks for the PIN as Share would and gets nothing;
 - `oldPinRefused` true, `newPinPrinted` true, `newPinWorks` true: the PIN changed with the key;
 - `enrolledOwnerBack` true: an owner still enrolled reconnects with no PIN;
 - `revokedFreshDial.key` false, and `revokedPinDial` "PIN mismatch": the revoked device gets in neither as an owner nor with the PIN it learned;

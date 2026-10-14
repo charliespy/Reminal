@@ -42,6 +42,8 @@ const wait = (f) => new Promise(r => { const t = setInterval(() => { if (fs.exis
   await A.waitForFunction(() => !cryptoKey || !agentLive, null, { timeout: 20000 }).then(() => R.revokedLiveCut = true, () => R.revokedLiveCut = false);
   await A.waitForTimeout(4000);
   R.revokedState = await state(A);
+  // Mid-cut, it asks for the PIN as Share would: nothing comes, old or new.
+  R.revokedSharePin = await A.evaluate(async () => { sharePinFromAgent = null; try { sendWin('host_info', { pin: true }); } catch (_) {} await new Promise(r => setTimeout(r, 5000)); return sharePin() || ''; });
   // The PIN changed with the key: the old one no longer opens it.
   await C.waitForFunction(() => /PIN mismatch|failed/i.test(document.getElementById('status')?.textContent || ''), null, { timeout: 20000 })
     .then(() => R.oldPinRefused = true, () => R.oldPinRefused = false);
