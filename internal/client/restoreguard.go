@@ -120,7 +120,7 @@ func spawnEnv(extra ...string) []string {
 	var out []string
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == envRestore || k == envNewName {
+		if k == envRestore || k == envNewName || k == envRestoreNote {
 			continue
 		}
 		out = append(out, kv)

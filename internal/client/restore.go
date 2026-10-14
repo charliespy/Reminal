@@ -690,7 +690,8 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 			st.Dump = readScrollbackDump(p, func(b []byte) ([]byte, error) { return b, nil })
 		}
 	}
-	plan := func() (string, string) {
+	lead := restoreNoteEnv()
+	plan := withRestoreNote(lead, func() (string, string) {
 		peers, _ := session.ReadRestores()
 		sh := config.Shell()
 		argv, note := resumePlanFor(*r, peers, sh)
@@ -701,7 +702,7 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 			return "", why
 		}
 		return shellCommand(lowPriority(argv, sh), sh), note
-	}
+	})
 	return st, plan, nil
 }
 
@@ -781,6 +782,12 @@ func Restorable() ([]session.Restore, error) {
 // RestoreSession starts a headless agent that takes r over. Its shell starts
 // where the old one was, or at home when that directory is gone.
 func RestoreSession(r session.Restore) (*SpawnedSession, error) {
+	return RestoreSessionWith(r, "")
+}
+
+// RestoreSessionWith is RestoreSession, the restored session showing note
+// (when there is one) under its restore banner: what came back, as of when.
+func RestoreSessionWith(r session.Restore, note string) (*SpawnedSession, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -791,7 +798,11 @@ func RestoreSession(r session.Restore) (*SpawnedSession, error) {
 	}
 	defer devnull.Close()
 	cmd := exec.Command(exe, "--headless")
-	cmd.Env = spawnEnv(envRestore + "=" + r.ID)
+	extra := []string{envRestore + "=" + r.ID}
+	if note = noteSafe(note, 200); note != "" {
+		extra = append(extra, envRestoreNote+"="+note)
+	}
+	cmd.Env = spawnEnv(extra...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
 	if dir, err := resolveSpawnDir(r.Cwd); err == nil && dir != "" {
 		cmd.Dir = dir
@@ -827,6 +838,34 @@ func RestoreSession(r session.Restore) (*SpawnedSession, error) {
 			sp.ID, sp.Phases["load"], sp.Phases["agent"], sp.Phases["replay"], sp.Phases["register"])
 	}
 	return sp, nil
+}
+
+// envRestoreNote is a line whoever restores a session asks it to show under
+// its restore banner (what came back, as of when): REMINAL_RESTORE_NOTE.
+const envRestoreNote = "REMINAL_RESTORE_NOTE"
+
+// restoreNoteEnv is that line, made safe to show (no control character, at
+// most 200 characters), or "". Taken out of the environment as it is read,
+// as RestoreEnvID is: never inherited by the session's shell.
+func restoreNoteEnv() string {
+	n := strings.TrimSpace(noteSafe(os.Getenv(envRestoreNote), 200))
+	_ = os.Unsetenv(envRestoreNote)
+	return n
+}
+
+// withRestoreNote is plan with lead shown first in its note, when there is
+// one: the restore banner's next line says both.
+func withRestoreNote(lead string, plan func() (string, string)) func() (string, string) {
+	if lead == "" {
+		return plan
+	}
+	return func() (string, string) {
+		run, note := plan()
+		if note == "" {
+			return run, lead
+		}
+		return run, lead + " — " + note
+	}
 }
 
 // RestoreEnvID is the session a headless agent was started to restore, or "".
