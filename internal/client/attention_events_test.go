@@ -137,3 +137,36 @@ func TestAttnNextRead(t *testing.T) {
 		}
 	}
 }
+
+// stopAttention returns only once the detector has: a read under way when
+// the session goes must be over before the PTY is closed under it.
+func TestStopAttentionWaitsForTheReadUnderWay(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	inRead, release := make(chan struct{}), make(chan struct{})
+	attnReadHook = func() {
+		select {
+		case inRead <- struct{}{}:
+			<-release
+		default:
+		}
+	}
+	t.Cleanup(func() { attnReadHook = nil })
+	a := &Agent{sessionID: "ATTNSTOP"}
+	a.screen = vt.NewEmulator(80, 24)
+	go io.Copy(io.Discard, a.screen)
+	a.startAttention()
+	<-inRead // the detector is in a read
+	stopped := make(chan struct{})
+	go func() { a.stopAttention(); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("stopAttention returned while the detector was still reading")
+	case <-time.After(300 * time.Millisecond): // the window is the assertion
+	}
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second): // the test's own abort cap
+		t.Fatal("stopAttention never returned")
+	}
+}

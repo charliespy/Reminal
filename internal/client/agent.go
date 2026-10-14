@@ -420,6 +420,7 @@ type Agent struct {
 	// attnStop ends the attention detector (see startAttention).
 	attnMu   sync.Mutex
 	attnStop chan struct{}
+	attnDone chan struct{} // closed when the detector has returned (stopAttention waits on it)
 	// attnKick wakes the detector (kickAttention), made on first use.
 	attnKick     chan struct{}
 	attnKickOnce sync.Once

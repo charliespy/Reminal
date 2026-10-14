@@ -72,8 +72,17 @@ func (a *Agent) startAttention() {
 		a.attnStop = make(chan struct{})
 	}
 	stop := a.attnStop
+	if a.attnDone != nil {
+		a.attnMu.Unlock()
+		return // already running
+	}
+	done := make(chan struct{})
+	a.attnDone = done
 	a.attnMu.Unlock()
-	go a.runAttention(os.Getenv("REMINAL_ATTENTION_PROBE"), stop)
+	go func() {
+		defer close(done)
+		a.runAttention(os.Getenv("REMINAL_ATTENTION_PROBE"), stop)
+	}()
 }
 
 // kickAttention tells the detector something it reads may have changed: PTY
@@ -91,16 +100,28 @@ func (a *Agent) attnKicks() chan struct{} {
 	return a.attnKick
 }
 
-// stopAttention ends the detector: the session is going, and a probe that
-// outlives its PTY polls a closed file (a data race the tests caught).
+// stopAttention ends the detector and returns once it has: the session is
+// going, and a probe still mid-read when the PTY closes polls a closed file
+// (a data race the tests caught). Told to stop, it finishes the read it is
+// in and returns; this waits for that, so whatever closes the PTY next is
+// after it.
 func (a *Agent) stopAttention() {
 	a.attnMu.Lock()
-	defer a.attnMu.Unlock()
 	if a.attnStop != nil {
 		close(a.attnStop)
 		a.attnStop = nil
 	}
+	done := a.attnDone
+	a.attnDone = nil
+	a.attnMu.Unlock()
+	if done != nil {
+		<-done
+	}
 }
+
+// attnReadHook, for tests only, runs as the detector starts a read of the
+// screen and the terminal.
+var attnReadHook func()
 
 type attentionProbeSample struct {
 	TS        int64  `json:"ts"`         // unix millis
@@ -159,6 +180,9 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		due = time.Time{}
 		timer.Stop()
 		lastRead = time.Now()
+		if attnReadHook != nil {
+			attnReadHook()
+		}
 		a.screenMu.Lock()
 		scr := a.screen
 		if scr == nil { // snapshot disabled / torn down — nothing to read
