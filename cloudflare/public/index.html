@@ -7900,8 +7900,14 @@
     const TermSize = (() => {
       const MIN_C = 20, MIN_R = 8, SETTLE_MS = 200;
       let timer = 0, lastW = 0, lastH = 0;
-      let lastReportC = 0, lastReportR = 0, lastReportAway = null;
-      let ptyC = 0, ptyR = 0;
+      // What was last told, and to whom: the session key it went under.
+      // Another key is another agent (a switch, warm or fresh, or a new
+      // handshake), which has been told nothing yet — told at once, even
+      // when this screen's size is the one the last session was told.
+      let lastReportC = 0, lastReportR = 0, lastReportAway = null, lastReportKey = null;
+      // The PTY an agent said it has, under its key: another session's is
+      // no limit on this one's grid.
+      let ptyC = 0, ptyR = 0, ptyKey = null;
 
       function atLiveBottom() {
         try {
@@ -8040,7 +8046,7 @@
         if (!wrap) wrap = measure();
         if (!wrap) return;
         let cols = wrap.cols, rows = wrap.rows;
-        if (ptyC >= MIN_C && ptyR >= MIN_R) {
+        if (ptyC >= MIN_C && ptyR >= MIN_R && ptyKey === cryptoKey) {
           cols = Math.min(cols, ptyC);
           // Match the visible wrap, including keyboard-open. A tall PTY
           // grid CSS-clipped into a short wrap left a black hole under
@@ -8049,19 +8055,22 @@
         }
         paint(cols, rows);
       }
-      function report(wrap) {
+      // parked: a warm socket being unparked, whose agent is not live to
+      // this page yet but takes the resize behind the unpark (resumeWarm).
+      function report(wrap, parked) {
         // Not before the session key: send() drops a resize it cannot
         // encrypt, and a report remembered as sent is never sent again.
-        if (!ownsTerminal || !agentLive || !cryptoKey) return;
+        if (!ownsTerminal || (!agentLive && !parked) || !cryptoKey) return null;
         if (!wrap) wrap = measure();
-        if (!wrap) return;
+        if (!wrap) return null;
         const away = !TermSight.inSight();
-        if (wrap.cols === lastReportC && wrap.rows === lastReportR && away === lastReportAway) return;
+        if (cryptoKey === lastReportKey && wrap.cols === lastReportC && wrap.rows === lastReportR && away === lastReportAway) return null;
         lastReportC = wrap.cols;
         lastReportR = wrap.rows;
         lastReportAway = away;
+        lastReportKey = cryptoKey;
         sizeTrace('send', wrap.cols, wrap.rows);
-        send({ type: 'resize', cols: wrap.cols, rows: wrap.rows, away });
+        return send({ type: 'resize', cols: wrap.cols, rows: wrap.rows, away });
       }
       function sync() {
         const wrap = measure();
@@ -8071,6 +8080,9 @@
 
       return {
         sync,
+        // A warm socket's agent told this screen's size now, ahead of the
+        // screen asked for behind it: the promise of the send, or null.
+        reportUnparking() { const wrap = measure(); display(wrap); return report(wrap, true); },
         schedule() {
           applyViewportHeight();
           if (timer) clearTimeout(timer);
@@ -8087,6 +8099,7 @@
           if (c < MIN_C || r < MIN_R) return;
           ptyC = c;
           ptyR = r;
+          ptyKey = cryptoKey;
           display();
         },
         boxDrift(el) {
@@ -8794,10 +8807,19 @@
       wireSocket(ws);
       const sock = ws;
       sock.sendRaw(JSON.stringify({ type: 'unpark' }));
-      // And the screen asked for right behind it, as behind a handshake: the
-      // relay takes the two in order, and drops the resume of a socket it
-      // has not unparked (refused: dialled afresh, which asks again).
-      if (ownsTerminal) { sendResume(); earlyResume = { sock, exID: 'warm' }; }
+      // This screen's size right behind it, and the screen asked for behind
+      // that, as behind a handshake: the relay takes them in order, and
+      // drops what comes from a socket it has not unparked (refused:
+      // dialled afresh, which asks again). The size first, so the agent
+      // sizes the PTY before it draws the screen: drawn at the size the
+      // last viewer left it, a full-screen program filled the top of the
+      // grid and left a band under it until the next resize.
+      if (ownsTerminal) {
+        earlyResume = { sock, exID: 'warm' };
+        const sized = TermSize.reportUnparking();
+        if (sized) sized.then(() => { if (ws === sock) sendResume(); }, () => { if (ws === sock) sendResume(); });
+        else sendResume();
+      }
       // Abort cap: a socket that died quietly while parked answers nothing.
       if (unparkTimer) clearTimeout(unparkTimer);
       unparkTimer = setTimeout(() => { unparkTimer = 0; if (ws === sock && !agentLive) warmFailed('no answer'); },
