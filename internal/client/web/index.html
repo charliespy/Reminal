@@ -209,6 +209,13 @@
       border-radius: 4px;
     }
     #overlay.visible { display: flex; }
+    /* The viewer's own notes (Connected, Reconnected, a download, a copy):
+       over the terminal, never in it. Text written into the terminal moved
+       the screen a full-screen program draws by relative moves under it, and
+       its next redraws landed a row off (viewerNote). */
+    #viewer-notes { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: calc(100% - 32px); pointer-events: none; z-index: 5; }
+    .viewer-note { background: rgba(22, 27, 34, 0.94); border: 1px solid #30363d; color: #c9d1d9; font-size: 12.5px; line-height: 1.35; padding: 6px 12px; border-radius: 6px; text-align: center; transition: opacity .4s; }
+    .viewer-note.gone { opacity: 0; }
     #overlay span { background: #161b22; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; }
 
     /* ---- Mobile text-selection handles + copy bar ----
@@ -2063,6 +2070,7 @@
   <div id="terminal-wrap">
     <div id="terminal"></div>
     <div id="overlay"><span id="overlay-text">Connecting…</span></div>
+    <div id="viewer-notes" aria-live="polite"></div>
     <button id="jump-bottom" title="Jump to bottom">↓ Jump to bottom</button>
     <div id="findbar">
       <input id="find-input" type="search" placeholder="Find in scrollback" autocomplete="off">
@@ -7437,23 +7445,17 @@
       if (!helloShown) {
         helloShown = true;
         const ht = lastDialMs > 0 ? ' · handshake ' + lastDialMs + 'ms' : '';
-        writeNote('\x1b[2m[reminal] Connected to ' + sessionId + ht + ' · AES-256-GCM end-to-end\x1b[0m\r\n');
+        viewerNote('Connected to ' + sessionId + ht + ' · AES-256-GCM end-to-end');
       } else if (reconnectMessagePending) {
         // We dropped (either WS hiccup or agent_offline transition)
         // and just came back. Status-bar change alone isn't enough —
-        // users staring at the terminal area don't notice it: a single
-        // dim line says we're live again, above the prompt, leaving the
-        // prompt and the cursor where they were (writeAbovePrompt).
+        // users staring at the terminal area don't notice it: a note says
+        // we're live again, over the terminal and never in it (viewerNote).
         reconnectMessagePending = false;
         // An upgrade's restart ends in exactly this reconnect; onHostInfo
         // waits for it before judging the version that comes back.
         if (upgradeState && upgradeState.stage === 'restart') upgradeState.reconnected = true;
-        // A remembered screen up (a switch): the line goes ahead of the
-        // live screen that replaces it (writeNote), where no prompt is drawn
-        // yet. Else just above the prompt, leaving it and the cursor where
-        // they were.
-        if (staleScreen) writeNote('\x1b[2m[reminal] Reconnected to ' + sessionId + '\x1b[0m\r\n');
-        else writeAbovePrompt('\x1b[2m[reminal] Reconnected to ' + sessionId + '\x1b[0m');
+        viewerNote('Reconnected to ' + sessionId);
       }
       // Sent already, right behind the handshake whose answer brought the
       // key (sendEarlyResume). Behind any other — one answered pake_busy, an
@@ -7648,33 +7650,21 @@
       return proto + '//' + location.host + '/ws/' + sessionId.toUpperCase() + '/viewer';
     }
 
-    // writeAbovePrompt puts a line of ours in the terminal just above the
-    // line the cursor is on — the shell's or the agent's prompt — and leaves
-    // that line and the cursor exactly where they were. Written at the
-    // cursor instead ("\r\n…\r\n"), it left the prompt above and the cursor
-    // on a line of its own, so what was typed next echoed below the prompt.
-    // The rows above the prompt are scrolled up by one (a scroll region that
-    // ends just above it; what leaves the top goes to the scrollback as any
-    // line does) and the line written in the row freed. With the prompt on
-    // one of the top two rows (a screen just cleared), a row is opened at
-    // the prompt's own instead — a scroll region needs two rows at least, and
-    // one of a single row is ignored, which had the line written over the
-    // prompt — and the prompt and cursor move down one with it. With a full-screen
-    // program on the screen (the alternate buffer, whose screen is all its
-    // own), nothing is written.
-    function writeAbovePrompt(line) {
-      const b = term.buffer.active;
-      if (b.type === 'alternate') return;
-      const y = b.cursorY, x = b.cursorX; // 0-based: the prompt's row, the cursor's column
-      // The cursor is put back by its place, not by restoring it alone (ESC 8):
-      // a scroll at the top of the screen sends a line to the scrollback and
-      // moves the screen under a restored cursor, which then sat a row above
-      // the prompt. ESC 7/8 keep what is drawn with (colours) as it was.
-      if (y < 2) {
-        term.write('\x1b7' + '\x1b[' + (y + 1) + ';1H' + '\x1b[L' + line + '\x1b8' + '\x1b[' + (y + 2) + ';' + (x + 1) + 'H');
-        return;
-      }
-      term.write('\x1b7' + '\x1b[1;' + y + 'r' + '\x1b[' + y + ';1H' + '\n' + '\r\x1b[2K' + line + '\x1b[r' + '\x1b8' + '\x1b[' + (y + 1) + ';' + (x + 1) + 'H');
+    // viewerNote shows a line of the viewer's own over the terminal for a
+    // few seconds: never in the terminal's text. A program drawing the whole
+    // screen (an agent's TUI) moves its cursor relative to where it left it;
+    // a line of ours written in between moved the screen under it, and its
+    // next redraws landed a row off, leaving half-lines and stray characters
+    // until something made it repaint (a resize).
+    function viewerNote(text, ms = 5000) {
+      const box = document.getElementById('viewer-notes');
+      if (!box) return;
+      const el = document.createElement('div');
+      el.className = 'viewer-note';
+      el.textContent = text;
+      box.appendChild(el);
+      while (box.children.length > 3) box.firstChild.remove();
+      setTimeout(() => { el.classList.add('gone'); setTimeout(() => el.remove(), 450); }, ms);
     }
 
     function setStatus(text, cls) {
@@ -7735,8 +7725,7 @@
       if (staleScreen) {
         staleScreen = false;
         const enc = new TextEncoder();
-        pendingChunks.unshift(enc.encode('\x1b[H\x1b[2J\x1b[3J'), ...staleNotes.map(t => enc.encode(t)));
-        staleNotes.length = 0;
+        pendingChunks.unshift(enc.encode('\x1b[H\x1b[2J\x1b[3J'));
         document.getElementById('terminal').classList.remove('stale');
       }
       let total = 0;
@@ -8635,7 +8624,7 @@
       if (echoWatch) { clearTimeout(echoWatch); echoWatch = 0; }
       const lost = unechoed;
       unechoed = 0;
-      if (lost) term.write('\r\n\x1b[2m[reminal] The connection dropped: the last ' + lost + ' character' + (lost === 1 ? '' : 's') + ' you typed may not have reached the session.\x1b[0m\r\n');
+      if (lost) viewerNote('The connection dropped: the last ' + lost + ' character' + (lost === 1 ? '' : 's') + ' you typed may not have reached the session.');
       const sock = ws;
       ws = null;
       try { sock.onopen = null; sock.onmessage = null; sock.onclose = null; sock.onerror = null; sock.close(); } catch (_) {}
@@ -8715,16 +8704,9 @@
       if (id) screenCache.delete(id); else screenCache.clear();
       if (staleScreen && (!id || id === sessionId)) {
         staleScreen = false;
-        staleNotes.length = 0;
         term.write('\x1b[H\x1b[2J\x1b[3J');
         document.getElementById('terminal').classList.remove('stale');
       }
-    }
-    // Lines reminal writes itself while a remembered screen is up go after
-    // the live screen replaces it, not under it to be wiped with it.
-    const staleNotes = [];
-    function writeNote(text) {
-      if (staleScreen) staleNotes.push(text); else term.write(text);
     }
     function showCachedScreen(id) {
       const rows = screenCache.get(id);
@@ -8886,7 +8868,7 @@
       // still on the page, say): never sent where it was not typed for.
       if (s !== sessionId || (switchingTo && switchingTo !== s)) {
         if (switchingTo && switchingTo !== s && (heldInput.length || heldOverflow)) {
-          term.write('\r\n\x1b[2m[reminal] What you typed for ' + switchingTo + ' was not sent.\x1b[0m\r\n');
+          viewerNote('What you typed for ' + switchingTo + ' was not sent.');
         }
         dropHeldInput();
       }
@@ -8917,7 +8899,6 @@
         screenCachedFor = '';
         // A remembered screen of the session being left is not this one's.
         staleScreen = false;
-        staleNotes.length = 0;
         document.getElementById('terminal').classList.remove('stale');
         lastSeq = 0;
         sessionId = s;
@@ -9378,7 +9359,7 @@
             const payload = JSON.parse(new TextDecoder().decode(bytes));
             handleDownloadChunk(payload);
           } catch (e) {
-            term.write('\r\n\x1b[2m[reminal] download failed: ' + e + '\x1b[0m\r\n');
+            viewerNote('download failed: ' + e + '');
           }
           break;
         }
@@ -9660,7 +9641,7 @@
       resetPredictionsHard();
       if (helloShown && connectedAt && !switching) {
         const dur = Math.max(1, Math.round((Date.now() - connectedAt) / 1000));
-        term.write('\x1b[2m[reminal] Disconnected from ' + sessionId + ' after ' + humanDuration(dur) + ' · sent ' + humanBytes(bytesSent) + ' · received ' + humanBytes(bytesReceived) + '\x1b[0m\r\n');
+        viewerNote('Disconnected from ' + sessionId + ' after ' + humanDuration(dur) + ' · sent ' + humanBytes(bytesSent) + ' · received ' + humanBytes(bytesReceived) + '');
       }
       setStatus('Disconnected');
       hideOverlay();
@@ -10057,7 +10038,7 @@
       const items = heldInput, late = Date.now() - heldSince > INPUT_HOLD_MS, over = heldOverflow;
       dropHeldInput();
       if (late || over) {
-        term.write('\r\n\x1b[2m[reminal] ' + (late ? 'What you typed while not connected was not sent.' : 'Some of what you typed while not connected was too much to hold and was not sent.') + '\x1b[0m\r\n');
+        viewerNote('' + (late ? 'What you typed while not connected was not sent.' : 'Some of what you typed while not connected was too much to hold and was not sent.') + '');
         if (late) return;
       }
       dbg('live: sending ' + items.length + ' held keystroke(s)');
@@ -10345,7 +10326,7 @@
       const mime = previewMimeFor(name);
       if (mime) {
         showPreview(name, new Blob([bytes], { type: mime }), mime);
-        term.write('\r\n\x1b[2m[reminal] previewing ' + name + ' (' + humanBytes(bytes.length) + ')\x1b[0m\r\n');
+        viewerNote('previewing ' + name + ' (' + humanBytes(bytes.length) + ')');
         return;
       }
       const url = URL.createObjectURL(new Blob([bytes]));
@@ -10355,7 +10336,7 @@
       document.body.appendChild(a);
       a.click();
       setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
-      term.write('\r\n\x1b[2m[reminal] downloaded ' + (name || 'file') + ' (' + humanBytes(bytes.length) + ')\x1b[0m\r\n');
+      viewerNote('downloaded ' + (name || 'file') + ' (' + humanBytes(bytes.length) + ')');
     }
 
     // Chunked-download reassembly, mirroring the Go viewer (viewer.go). The agent
@@ -10375,12 +10356,12 @@
       }
       const total = payload.total;
       if (total > DOWNLOAD_MAX_CHUNKS) {
-        term.write('\r\n\x1b[2m[reminal] download failed: too many chunks (' + total + ')\x1b[0m\r\n');
+        viewerNote('download failed: too many chunks (' + total + ')');
         return;
       }
       const idx = payload.index;
       if (typeof idx !== 'number' || idx < 0 || idx >= total) {
-        term.write('\r\n\x1b[2m[reminal] download failed: bad chunk index ' + idx + '/' + total + '\x1b[0m\r\n');
+        viewerNote('download failed: bad chunk index ' + idx + '/' + total + '');
         return;
       }
       const id = payload.download_id;
@@ -10396,7 +10377,7 @@
         if (dl.bytes + bytes.length > DOWNLOAD_MAX_BYTES) {
           clearTimeout(dl.timer);
           pendingDownloads.delete(id);
-          term.write('\r\n\x1b[2m[reminal] download aborted: exceeds cap\x1b[0m\r\n');
+          viewerNote('download aborted: exceeds cap');
           return;
         }
         dl.chunks.set(idx, bytes);
@@ -10724,14 +10705,14 @@
     document.getElementById('copy-btn').addEventListener('click', async () => {
       const sel = term.getSelection();
       if (!sel) {
-        term.write('\r\n\x1b[2m[reminal] nothing selected — long-press to select first\x1b[0m\r\n');
+        viewerNote('nothing selected — long-press to select first');
         return;
       }
       try {
         await navigator.clipboard.writeText(sel);
-        term.write('\r\n\x1b[2m[reminal] copied ' + sel.length + ' chars\x1b[0m\r\n');
+        viewerNote('copied ' + sel.length + ' chars');
       } catch (e) {
-        term.write('\r\n\x1b[2m[reminal] copy failed: ' + e + '\x1b[0m\r\n');
+        viewerNote('copy failed: ' + e + '');
       }
     });
     // Paste routes to the focused window when the window keyboard is up,
@@ -10748,7 +10729,7 @@
         const text = await navigator.clipboard.readText();
         if (text) toWindow = typeToTarget(text);
       } catch (e) {
-        term.write('\r\n\x1b[2m[reminal] paste failed: ' + e + '\x1b[0m\r\n');
+        viewerNote('paste failed: ' + e + '');
       }
       (toWindow ? wkey : term).focus();
     };
@@ -10841,8 +10822,8 @@
       // number of failed uploads. Stale-clean after 5 min — well
       // past any legitimate round-trip even on a slow connection.
       setTimeout(() => pendingUploadIDs.delete(uploadId), 5 * 60 * 1000);
-      term.write('\r\n\x1b[2m[reminal] uploading ' + file.name + ' (' +
-        humanBytes(file.size) + ', ' + total + ' chunk' + (total === 1 ? '' : 's') + ')…\x1b[0m\r\n');
+      viewerNote('uploading ' + file.name + ' (' +
+        humanBytes(file.size) + ', ' + total + ' chunk' + (total === 1 ? '' : 's') + ')…');
       try {
         for (let i = 0; i < total; i++) {
           const start = i * UPLOAD_CHUNK_BYTES;
@@ -10869,7 +10850,7 @@
         // for that whole window. The auto-paste won't fire anyway —
         // an upload_ack racing in afterwards lands on an empty set.
         pendingUploadIDs.delete(uploadId);
-        term.write('\r\n\x1b[2m[reminal] upload failed at send: ' + e + '\x1b[0m\r\n');
+        viewerNote('upload failed at send: ' + e + '');
       }
     }
     // Prompt once per upload batch — same TTL applies to every selected file.
@@ -10929,8 +10910,8 @@
         const renamed = new File([f], stamped, { type: f.type });
         await uploadFile(renamed, DEFAULT_PASTE_TTL);
       }
-      term.write('\r\n\x1b[2m[reminal] pasted ' + imageFiles.length + ' image' +
-        (imageFiles.length === 1 ? '' : 's') + ' (auto-delete in 1h)\x1b[0m\r\n');
+      viewerNote('pasted ' + imageFiles.length + ' image' +
+        (imageFiles.length === 1 ? '' : 's') + ' (auto-delete in 1h)');
     });
 
     // ---- Viewport / layout sizing (single source of truth) ----

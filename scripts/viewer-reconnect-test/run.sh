@@ -32,8 +32,9 @@ docker run -d --name "$NAME" --cap-add NET_ADMIN "$NAME" >/dev/null
 trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true; docker rmi -f "$NAME" >/dev/null 2>&1 || true; rm -f "$PWD/reminal"' EXIT
 docker exec -d "$NAME" sh -c 'reminal relay 18080 >/tmp/relay.log 2>&1'
 sleep 3
-docker exec "$NAME" sh -c 'cd /root && reminal new alpha >/dev/null 2>&1'
-creds=$(docker exec "$NAME" sh -c 'reminal info alpha | grep -E "Session:|PIN:" | awk "{print \$2}"' | tr '\n' ' ')
+docker cp tui.sh "$NAME":/root/tui.sh >/dev/null
+docker exec "$NAME" sh -c 'cd /root && reminal new alpha >/dev/null 2>&1 && SHELL=/root/tui.sh reminal new tui >/dev/null 2>&1'
+creds=$(docker exec "$NAME" sh -c 'for s in alpha tui; do reminal info $s | grep -E "Session:|PIN:" | awk "{print \$2}"; done' | tr '\n' ' ')
 echo "session: $creds   link: $DELAY each way, $RATE"
 docker exec "$NAME" tc qdisc add dev lo root netem delay "$DELAY" rate "$RATE"
 docker run --rm --network "container:$NAME" -v "$PWD:/t" -w /tmp "$PW" sh -c \
