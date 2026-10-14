@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Harshal Gajjar
 import { chromium, devices } from 'playwright';
 const BASE = 'http://127.0.0.1:18080';
-const [S, PIN] = process.argv.slice(2);
+const [S, PIN, TS, TPIN] = process.argv.slice(2);
 const b = await chromium.launch();
 const out = [];
 let failed = 0;
@@ -90,7 +90,7 @@ const live = (p) => p.waitForFunction(() => inputLive(), null, { timeout: 60000 
 }
 
 // ---- 4: after a reconnect, the next keys echo on the prompt's line, and
-// the reconnect is said just above it: with the prompt at the top of a
+// the reconnect is said over the terminal, nothing of ours in it: with the prompt at the top of a
 // cleared screen (a), on its second row (c: a scroll region of one row is
 // ignored), and further down (b) ----
 for (const [k, setup] of [['a', 'clear'], ['c', null], ['b', 'echo one; echo two; echo three']]) {
@@ -116,10 +116,49 @@ for (const [k, setup] of [['a', 'clear'], ['c', null], ['b', 'echo one; echo two
   await p.waitForTimeout(1500);
   await p.keyboard.type('echo MARK42', { delay: 40 });
   await p.waitForTimeout(2000);
-  const line = (await row(0)).trim(), above = (await row(-1)).trim();
-  const ok = prompt.length > 0 && line === prompt + ' echo MARK42' && /\[reminal\] Reconnected to /.test(above);
-  out.push(`4${k} prompt "${prompt}" on row ${at}; after the reconnect the cursor's line is "${line}", the line above "${above}"   ${verdict(ok)}`);
+  const line = (await row(0)).trim();
+  // The reconnect is said over the terminal, never in it.
+  const inTerm = await p.evaluate(() => { const b = term.buffer.active; for (let i = 0; i < b.length; i++) if ((b.getLine(i)?.translateToString(true) || '').includes('[reminal]')) return true; return false; });
+  const note = await p.evaluate(() => document.getElementById('viewer-notes')?.textContent || '');
+  const ok = prompt.length > 0 && line === prompt + ' echo MARK42' && !inTerm && /Reconnected to /.test(note);
+  out.push(`4${k} prompt "${prompt}" on row ${at}; after the reconnect the cursor's line is "${line}"; a line of ours in the terminal: ${inTerm}; the note: "${note.slice(0, 40)}"   ${verdict(ok)}`);
   await ctx.close();
+}
+
+// ---- 6: a program that redraws only the cells that changed, by relative
+// moves (as an agent's interface does), its socket dropped mid-redraw: once
+// it is still, the page that reconnected shows what a page opened fresh does
+// (the agent's own screen), cell for cell. A line of ours written into the
+// terminal scrolled the rows above the cursor up one, and every later change
+// landed a row off, over them and over our line. ----
+if (TS) {
+  const screenRows = (p) => p.evaluate(() => { const b = term.buffer.active; const o = []; for (let y = 0; y < term.rows; y++) o.push(b.getLine(b.viewportY + y)?.translateToString(true) || ''); return o; });
+  const A = await page();
+  await A.p.goto(`${BASE}/?s=${TS}#p=${TPIN}`, { waitUntil: 'domcontentloaded' });
+  await live(A.p);
+  await A.p.waitForTimeout(1000);
+  await A.p.evaluate(() => { window.__notes = []; const box = document.getElementById('viewer-notes'); if (box) new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => __notes.push(n.textContent)))).observe(box, { childList: true }); });
+  await A.p.keyboard.press('Enter');
+  await A.p.waitForTimeout(1500);
+  await A.p.evaluate(() => ws.close());
+  await A.p.waitForFunction(() => !inputLive(), null, { timeout: 10000 });
+  await live(A.p);
+  await A.p.waitForFunction(() => { const b = term.buffer.active; for (let i = 0; i < b.length; i++) if ((b.getLine(i)?.translateToString(true) || '').includes('TUI-DONE')) return true; return false; }, null, { timeout: 30000 });
+  await A.p.waitForTimeout(1000);
+  const a = await screenRows(A.p);
+  const notified = (await A.p.evaluate(() => __notes)).some(t => t.includes('tui tick 55'));
+  const B = await page();
+  await B.p.goto(`${BASE}/?s=${TS}#p=${TPIN}`, { waitUntil: 'domcontentloaded' });
+  await live(B.p);
+  await B.p.waitForTimeout(2500);
+  const bb = await screenRows(B.p);
+  const trim = (r) => { const x = r.map(l => l.trimEnd()); while (x.length && !x[x.length - 1]) x.pop(); return x; };
+  const ta = trim(a), tb = trim(bb);
+  const same = ta.length === tb.length && ta.every((l, i) => l === tb[i]);
+  const ok6 = same && notified;
+  const diff = same ? '' : ' first difference: ' + JSON.stringify(ta.find((l, i) => l !== tb[i]) ?? '(rows ' + ta.length + ' vs ' + tb.length + ')') + ' vs ' + JSON.stringify(tb[ta.findIndex((l, i) => l !== tb[i])] ?? '');
+  out.push(`6  a redraw-heavy program, its socket dropped mid-redraw: the reconnected page's screen ${same ? 'is' : 'is NOT'} the agent's, cell for cell (${ta.length} rows)${diff}; its notification mid-redraw ${notified ? 'shown over the terminal' : 'NOT shown over the terminal'}   ${verdict(ok6)}`);
+  await A.ctx.close(); await B.ctx.close();
 }
 
 console.log(out.join('\n'));
