@@ -5166,6 +5166,11 @@
     let fatal = false;        // unrecoverable (bad PIN, session expired); do not auto-reconnect
     let reconnectTimer = null;
     let backoffMs = 1000;
+    // The first close after a session that was up redials at once: most are
+    // a blip (a relay deploy, a radio handoff) that a second dial goes
+    // straight through. Any close after that waits the backoff (1 s, 2 s, …),
+    // and only a session up again earns another at-once redial.
+    let redialNow = false;
     let lastPingAt = 0;
     const MAX_BACKOFF_MS = 30000;
     // Dial watchdog: a mobile radio handoff (5G↔Wi-Fi) can leave a WebSocket
@@ -5534,6 +5539,9 @@
       dbg('✓ handshake complete — session key set' + (sealState ? ', sealed frames' : ''));
       pakeTimeouts = 0;
       pakeBusyTries = 0;
+      // Whatever a wait on the way said ("Busy — trying again in 3s"), the
+      // session is up now: say so.
+      if (agentLive) setStatus(sessionId, 'connected');
       reportSizeNow();
       // Burn ALL ephemeral material (every outstanding attempt) — nothing
       // downstream needs it, and holding on makes a long-running tab a juicier
@@ -5812,6 +5820,8 @@
       sealState = st;
       cryptoKey = key;
       dbg('✓ owner handshake complete — PIN-free' + (sealState ? ', sealed frames' : ''));
+      // As the PIN path: a "Machine is busy — retrying…" on the way is over.
+      if (agentLive) setStatus(sessionId, 'connected');
       reportSizeNow();
       ownerAttempts.clear();
       if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
@@ -7406,15 +7416,19 @@
       } else if (reconnectMessagePending) {
         // We dropped (either WS hiccup or agent_offline transition)
         // and just came back. Status-bar change alone isn't enough —
-        // users staring at the terminal area don't notice it. Inline
-        // a single dim line so the cursor visibly advances and the
-        // user knows we're live again. Press-Enter hint matches the
-        // Go viewer's behaviour so the prompt redraws.
+        // users staring at the terminal area don't notice it: a single
+        // dim line says we're live again, above the prompt, leaving the
+        // prompt and the cursor where they were (writeAbovePrompt).
         reconnectMessagePending = false;
         // An upgrade's restart ends in exactly this reconnect; onHostInfo
         // waits for it before judging the version that comes back.
         if (upgradeState && upgradeState.stage === 'restart') upgradeState.reconnected = true;
-        writeNote('\r\n\x1b[2m[reminal] Reconnected to ' + sessionId + ' — press Enter to refresh the prompt.\x1b[0m\r\n');
+        // A remembered screen up (a switch): the line goes ahead of the
+        // live screen that replaces it (writeNote), where no prompt is drawn
+        // yet. Else just above the prompt, leaving it and the cursor where
+        // they were.
+        if (staleScreen) writeNote('\x1b[2m[reminal] Reconnected to ' + sessionId + '\x1b[0m\r\n');
+        else writeAbovePrompt('\x1b[2m[reminal] Reconnected to ' + sessionId + '\x1b[0m');
       }
       // Sent already, right behind the handshake whose answer brought the
       // key (sendEarlyResume). Behind any other — one answered pake_busy, an
@@ -7606,6 +7620,35 @@
     function relayURL(sessionId) {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       return proto + '//' + location.host + '/ws/' + sessionId.toUpperCase() + '/viewer';
+    }
+
+    // writeAbovePrompt puts a line of ours in the terminal just above the
+    // line the cursor is on — the shell's or the agent's prompt — and leaves
+    // that line and the cursor exactly where they were. Written at the
+    // cursor instead ("\r\n…\r\n"), it left the prompt above and the cursor
+    // on a line of its own, so what was typed next echoed below the prompt.
+    // The rows above the prompt are scrolled up by one (a scroll region that
+    // ends just above it; what leaves the top goes to the scrollback as any
+    // line does) and the line written in the row freed. With the prompt on
+    // one of the top two rows (a screen just cleared), a row is opened at
+    // the prompt's own instead — a scroll region needs two rows at least, and
+    // one of a single row is ignored, which had the line written over the
+    // prompt — and the prompt and cursor move down one with it. With a full-screen
+    // program on the screen (the alternate buffer, whose screen is all its
+    // own), nothing is written.
+    function writeAbovePrompt(line) {
+      const b = term.buffer.active;
+      if (b.type === 'alternate') return;
+      const y = b.cursorY, x = b.cursorX; // 0-based: the prompt's row, the cursor's column
+      // The cursor is put back by its place, not by restoring it alone (ESC 8):
+      // a scroll at the top of the screen sends a line to the scrollback and
+      // moves the screen under a restored cursor, which then sat a row above
+      // the prompt. ESC 7/8 keep what is drawn with (colours) as it was.
+      if (y < 2) {
+        term.write('\x1b7' + '\x1b[' + (y + 1) + ';1H' + '\x1b[L' + line + '\x1b8' + '\x1b[' + (y + 2) + ';' + (x + 1) + 'H');
+        return;
+      }
+      term.write('\x1b7' + '\x1b[1;' + y + 'r' + '\x1b[' + y + ';1H' + '\n' + '\r\x1b[2K' + line + '\x1b[r' + '\x1b8' + '\x1b[' + (y + 1) + ';' + (x + 1) + 'H');
     }
 
     function setStatus(text, cls) {
@@ -8577,6 +8620,16 @@
     function scheduleReconnect() {
       cancelReconnect();
       if (manualClose || fatal) return;
+      if (redialNow) {
+        redialNow = false;
+        setStatus('Reconnecting…', 'warn connecting');
+        showOverlay('Reconnecting…');
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          openSocket();
+        }, 0);
+        return;
+      }
       // Reset backoff if the previous session stayed up for a while.
       if (connectedAt && (Date.now() - connectedAt) > 30000) {
         backoffMs = 1000;
@@ -8657,6 +8710,11 @@
         pinInput.value = '';
       }
       if (!s) { setStatus('Session required', 'error'); return; }
+      // The PIN handshake's library, fetched now rather than once auth_ok
+      // asks for it: on a slow link that fetch was a round trip and more on
+      // every first open. Fetching it does nothing else (loadRistretto: one
+      // load, retried at its use if this one fails).
+      loadRistretto().catch(() => {});
       // Settle where keys go BEFORE the first await below: a key typed while
       // loadDeviceKeyPair runs is held for the session we are joining — not
       // dropped later as "typed for the session being left", not left in the
@@ -9071,6 +9129,7 @@
             agentLive = true;
             connectedAt = Date.now();
             backoffMs = 1000;
+            redialNow = true; // up: its first close redials at once
             setStatus(sessionId, 'connected'); // green dot already implies "connected"
             hideOverlay();
             setBtnDisconnect();
