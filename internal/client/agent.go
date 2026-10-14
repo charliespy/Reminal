@@ -426,6 +426,9 @@ type Agent struct {
 	attnMu   sync.Mutex
 	attnStop chan struct{}
 	attnDone chan struct{} // closed when the detector has returned (stopAttention waits on it)
+	// outSinceFree counts PTY output since memory was last handed back to
+	// the OS (releaseAfterBurst).
+	outSinceFree atomic.Int64
 	// attnKick wakes the detector (kickAttention), made on first use.
 	attnKick     chan struct{}
 	attnKickOnce sync.Once
@@ -2861,6 +2864,7 @@ func (a *Agent) pumpPTY() {
 			// hint. Both are cheap and update in-memory only; the on-disk
 			// rewrite is throttled by metaFlushLoop.
 			a.markActivity(time.Now())
+			a.outSinceFree.Add(int64(n))
 			a.feedTitle(buf[:n])
 			// Mirror to the host's stdout so the user typing at the agent
 			// terminal sees the shell's output as if they had run it
