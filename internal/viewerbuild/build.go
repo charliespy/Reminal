@@ -154,7 +154,7 @@ func Build(root string, write bool) ([]string, error) {
 			if n := len(re.FindAllIndex(html, -1)); n != 1 {
 				return nil, fmt.Errorf("viewerbuild: %s has %d script tags for its assets/%s.*.js, want exactly 1", page, n, sc)
 			}
-			html = re.ReplaceAll(html, []byte(Tag(sc, srcs[sc])))
+			html = re.ReplaceAllLiteral(html, []byte(Tag(sc, srcs[sc])))
 		}
 		if err := note(page, html); err != nil {
 			return nil, err
