@@ -199,6 +199,13 @@ func (s *Session) finish(err error) {
 	})
 }
 
+// WriteCancel is Write that stop cuts short (writeCancel): a write the
+// holder does not take — its console's input full — no longer holds its
+// caller. Write keeps its frames whole, so one let go on ends whole.
+func (s *Session) WriteCancel(p []byte, stop <-chan struct{}) (int, error) {
+	return writeCancel(s, p, stop)
+}
+
 func (s *Session) Write(p []byte) (int, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
