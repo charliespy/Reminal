@@ -17,7 +17,7 @@ const fs = require('fs');
   // 1. a cached switch back to A: shown at once, then live; no "Disconnected" line carried over
   await go(A); await p.waitForTimeout(30); R.cachedShown = (await stale()) && (await rows()).includes(mA);
   await live(mA); await p.waitForTimeout(800);
-  R.noDisconnectedLine = !(await all()).includes('Disconnected from');
+  R.noDisconnectedLine = !(await all()).includes('Disconnected from') && !(await p.evaluate(() => document.getElementById('viewer-notes')?.innerText || '')).includes('Disconnected from');
   // 2. wrong PIN for B: the remembered screen comes down and is forgotten.
   // A fresh dial: a warm socket (one already proven) would not ask for a PIN.
   await p.evaluate(() => { if (typeof closeAllWarm === 'function') closeAllWarm(); });
