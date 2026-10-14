@@ -708,13 +708,14 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 // restoreStart runs once the new shell is up: the banner, then — when an
 // agent was running — the command that resumes it, typed at the prompt.
 func (a *Agent) restoreStart() {
-	// Not before the session is reachable: resuming a long conversation is
+	// Not before the session's first try at the relay is over (registered,
+	// or the relay unreachable or refusing): resuming a long conversation is
 	// seconds of CPU (claude --resume of a 300 MB one is ~20 s on a quarter
 	// of a CPU), and started first it starved the session's own
 	// registration, which the process that started it waits for, with a
 	// deadline (spawnHandshakeTimeout). The session is up at once, its
 	// agent resumes behind it.
-	<-a.registered()
+	<-a.resumeReady()
 	if a.restorePlan != nil {
 		a.restoreRun, a.restoreNote = a.restorePlan()
 	}

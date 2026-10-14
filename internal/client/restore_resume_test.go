@@ -89,6 +89,36 @@ func TestAConversationTooBigForTheMachineIsNotResumedButSaid(t *testing.T) {
 	}
 }
 
+func TestACgroupLimitCountsAsTheMachinesMemory(t *testing.T) {
+	for in, want := range map[string]int64{"1073741824\n": 1 << 30, "max\n": 0, "9223372036854771712": 0, "": 0, "-1": 0, "x": 0} {
+		if got := parseMemLimit(in); got != want {
+			t.Errorf("parseMemLimit(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+// The resume is let go once the session's first try at the relay is over,
+// whatever came of it: a relay that is up but refusing (a 5xx, a timeout,
+// another agent still registered after a restart) never holds a session's
+// agent back — nor does the parent's handshake fire for it.
+func TestAFailedFirstTryAtTheRelayStillLetsTheAgentResume(t *testing.T) {
+	a := &Agent{}
+	a.afterAttempt(errors.New("relay: 503 Service Unavailable"))
+	select {
+	case <-a.resumeReady():
+	default:
+		t.Fatal("a refused first try at the relay held the resume back")
+	}
+	b := &Agent{}
+	b.afterAttempt(nil) // a connection that ended without an error: also over
+	select {
+	case <-b.resumeReady():
+	default:
+		t.Fatal("a first try that ended held the resume back")
+	}
+	b.afterAttempt(errors.New("again")) // later tries change nothing
+}
+
 func TestAResumeRunsAtALowerPriorityInAPOSIXShell(t *testing.T) {
 	old := lookNice
 	defer func() { lookNice = old }()

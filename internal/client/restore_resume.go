@@ -68,9 +68,18 @@ func claudeConvSize(conv string) int64 {
 	return max
 }
 
-// memTotal is the machine's memory in bytes (Linux: /proc/meminfo), or 0
-// where it is not known.
+// memTotal is the memory this session may use, in bytes: the machine's
+// (Linux: /proc/meminfo), or its cgroup's limit when that is lower (inside
+// a container MemTotal is the host's); 0 where neither is known.
 var memTotal = func() int64 {
+	m := meminfoTotal()
+	if c := cgroupMemoryLimit(); c > 0 && (m == 0 || c < m) {
+		m = c
+	}
+	return m
+}
+
+func meminfoTotal() int64 {
 	f, err := os.Open("/proc/meminfo")
 	if err != nil {
 		return 0
@@ -86,6 +95,29 @@ var memTotal = func() int64 {
 		}
 	}
 	return 0
+}
+
+// cgroupMemoryLimit is this process's cgroup memory limit (v2 memory.max,
+// or v1 memory.limit_in_bytes), or 0 for none ("max", or v1's near-2^63
+// "unlimited").
+func cgroupMemoryLimit() int64 {
+	for _, p := range []string{"/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		return parseMemLimit(string(b))
+	}
+	return 0
+}
+
+func parseMemLimit(s string) int64 {
+	s = strings.TrimSpace(s)
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n <= 0 || n >= 1<<62 {
+		return 0
+	}
+	return n
 }
 
 // lowPriority runs argv under nice, in a POSIX shell where there is one:
