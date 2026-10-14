@@ -20,10 +20,13 @@ import (
 )
 
 // viewerCSP must stay the same as the Content-Security-Policy line in
-// cloudflare/public/_headers; a test compares them.
-const viewerCSP = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com"
+// cloudflare/public/_headers; a test compares them. Its scripts are named
+// one by one — this origin's, and each CDN script the page loads, by its
+// exact versioned URL — so an injected tag can load nothing else from those
+// CDNs (TestCSPNamesEveryCDNScriptThePageLoads keeps the list true).
+const viewerCSP = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"
 
-//go:embed web/index.html web/sw.js web/manifest.webmanifest web/icons web/vendor
+//go:embed web/index.html web/sw.js web/manifest.webmanifest web/icons web/vendor web/assets
 var webIndex embed.FS
 
 func RunRelay(port string) error {
@@ -92,6 +95,25 @@ func relayMux() *http.ServeMux {
 			return
 		}
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		writeEmbedded(w, r, name, data)
+	})
+	// The page's own scripts (internal/viewerbuild): named by their content,
+	// so kept for good — a page names exactly the build it was made with,
+	// and a new build is a new name. As the Worker serves them (_headers).
+	mux.HandleFunc("GET /assets/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := "web/assets/" + path.Base(r.PathValue("name"))
+		if !strings.HasSuffix(name, ".js") {
+			http.NotFound(w, r)
+			return
+		}
+		data, err := webIndex.ReadFile(name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		writeEmbedded(w, r, name, data)
 	})
 	mux.HandleFunc("GET /icons/{name}", func(w http.ResponseWriter, r *http.Request) {
