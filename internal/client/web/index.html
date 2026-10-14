@@ -14694,6 +14694,12 @@
       ];
 
       let active = false, list = [], idx = 0, seen = new Set();
+      // The terminal had the keyboard when the tour opened: it keeps it. The
+      // tour never takes the keys of someone typing — what they type goes on
+      // to the session, and the card answers its own keys only once it is
+      // clicked or tabbed into.
+      let termKeeps = false;
+      const isTermKeys = (el) => !!(el && el.classList && el.classList.contains('xterm-helper-textarea'));
       let blockEl, ringEl, cardEl, mockEl = null, mockName = '', tick = null, lastKey = '', swipeX = null;
 
       // The welcome and the finale borrow reminal.app's hero: a faint grid,
@@ -14842,8 +14848,10 @@
         }
         const primary = cardEl.querySelector('.tour-btn1');
         // Focused for Enter and screen readers, without painting a focus
-        // ring nobody asked for (focusVisible is ignored where unsupported).
-        if (primary) primary.focus({ preventScroll: true, focusVisible: false });
+        // ring nobody asked for (focusVisible is ignored where unsupported) —
+        // unless the terminal has the keyboard (termKeeps): then it stays
+        // there, and the card waits to be clicked.
+        if (primary && !(termKeeps && isTermKeys(document.activeElement))) primary.focus({ preventScroll: true, focusVisible: false });
         lastKey = '';
         layout();
       }
@@ -14950,6 +14958,9 @@
 
       function onKey(e) {
         if (!active) return;
+        // A key for the terminal (it has the keyboard): the terminal's, Enter
+        // and the arrows and Escape too — never taken for the tour.
+        if (termKeeps && isTermKeys(e.target)) return;
         const k = e.key;
         const onBtn = e.target && e.target.closest && e.target.closest('.tour-card button');
         if ((k === 'Enter' || k === ' ') && onBtn) { e.stopPropagation(); return; } // the focused button's own click
@@ -14984,7 +14995,8 @@
         active = true;
         idx = 0;
         seen = new Set();
-        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        termKeeps = isTermKeys(document.activeElement);
+        if (!termKeeps && document.activeElement && document.activeElement.blur) document.activeElement.blur();
         build();
         // Fade the dim in instead of slamming it down.
         requestAnimationFrame(() => requestAnimationFrame(() => ringEl.classList.remove('intro')));
@@ -15057,9 +15069,16 @@
       if (seenBefore || document.body.classList.contains('pane-only') || params.has('pane')) return;
       const t0 = Date.now();
       const waitForSession = !!params.get('s');
+      // Not while someone is typing into the terminal: it opens in a pause
+      // (TOUR_TYPING_PAUSE_MS since their last key), never over a command
+      // being typed.
+      const TOUR_TYPING_PAUSE_MS = 2000;
+      let lastTermKeyAt = 0;
+      document.addEventListener('keydown', (e) => { if (isTermKeys(e.target)) lastTermKeyAt = Date.now(); }, true);
       (function poll() {
         const busy = document.querySelector('details[open]') ||
-          ($('share-modal') && getComputedStyle($('share-modal')).display !== 'none');
+          ($('share-modal') && getComputedStyle($('share-modal')).display !== 'none') ||
+          Date.now() - lastTermKeyAt < TOUR_TYPING_PAUSE_MS;
         const ready = !waitForSession || connected() || Date.now() - t0 > 6000;
         if (ready && !busy && Date.now() - t0 > 900) {
           // Connected: give the terminal a moment to paint its first screen
