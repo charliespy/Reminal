@@ -5622,7 +5622,12 @@
     }
 
     async function send(msg) {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      // The socket it was asked on: sealing is awaited, and the session may
+      // be left meanwhile — its socket closed (null), or the next one's open.
+      // A frame sealed for this session goes on this session's socket or not
+      // at all.
+      const sock = ws;
+      if (!sock || sock.readyState !== WebSocket.OPEN) return;
       if (msg.type === 'data' || msg.type === 'resize') {
         // Drop rather than leak plaintext: cryptoKey is only null
         // during the brief window between auth_ok and pake_resp, when
@@ -5637,8 +5642,9 @@
           const payload = JSON.stringify({ cols: msg.cols, rows: msg.rows, viewer: viewerId, ...(msg.away ? { away: true } : {}) });
           msg = { type: 'resize', data: await encrypt(cryptoKey, payload) };
         }
+        if (ws !== sock || sock.readyState !== WebSocket.OPEN) return;
       }
-      ws.send(JSON.stringify(msg));
+      sock.send(JSON.stringify(msg));
     }
 
     // iOS (incl. iPadOS, which reports as "MacIntel" + touch) is the only
@@ -9963,10 +9969,12 @@
           try { rtcInput.send(JSON.stringify(obj)); return; } catch (_) {}
         }
       }
-      if (!ws || ws.readyState !== WebSocket.OPEN || !cryptoKey) return;
+      const sock = ws; // as send(): this session's socket, or nothing
+      if (!sock || sock.readyState !== WebSocket.OPEN || !cryptoKey) return;
       const frame = { type };
       if (obj !== undefined) frame.data = await encrypt(cryptoKey, JSON.stringify(obj));
-      ws.send(JSON.stringify(frame));
+      if (ws !== sock || sock.readyState !== WebSocket.OPEN) return;
+      sock.send(JSON.stringify(frame));
     }
 
     // forgetHostState: the session shown is about to change. Its windows'

@@ -57,6 +57,27 @@ const out = await page.evaluate(async () => {
 });
 console.log(JSON.stringify(out, null, 1));
 const fails = [];
+// A frame sealed as the session is left: send() and sendWin() check the
+// socket, then await its sealing, then send — the socket closed meanwhile
+// (null) threw "Cannot read properties of null (reading 'send')", and one
+// opened meanwhile, the next session's, was sent a frame sealed for the last.
+const race = await page.evaluate(async () => {
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  const sock = () => ({ readyState: WebSocket.OPEN, sent: [], send(f) { this.sent.push(f); } });
+  const r = { threw: [], onNext: 0 };
+  const settle = async (p) => { try { await p; } catch (e) { r.threw.push(String(e)); } };
+  for (const go of [() => send({ type: 'resize', cols: 80, rows: 24 }), () => send({ type: 'data', data: btoa('x') }), () => sendWin('window_list', {})]) {
+    authed = true; cryptoKey = key;
+    ws = sock(); let p = go(); ws = null; await settle(p);
+    ws = sock(); p = go(); const next = sock(); ws = next; await settle(p);
+    r.onNext += next.sent.length;
+  }
+  ws = null; cryptoKey = null; authed = false;
+  return r;
+});
+if (race.threw.length) fails.push('a frame sealed as its session was left threw: ' + race.threw[0]);
+if (race.onNext) fails.push(race.onNext + ' frame(s) sealed for the session left were sent on the next one\'s socket');
+
 for (const k of ['other machine', 'unknown machine']) {
   const r = out[k];
   if (r.windows !== 0 || /Docker Desktop|Safari/.test(r.list)) fails.push(k + ': the machine left still listed in Windows');
