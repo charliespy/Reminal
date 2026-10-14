@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -119,6 +120,28 @@ func (a *Agent) stopAttention() {
 	}
 }
 
+// releaseAfterBurstBytes is how much output makes a burst worth handing its
+// memory back for once it is over.
+const releaseAfterBurstBytes = 32 << 20
+
+// releaseAfterBurst hands memory back to the OS once a burst of output is
+// over (the detector finds the screen settled). Taking in a burst makes
+// the emulator and the scrollback churn through far more memory than they
+// keep; Go keeps the difference for reuse and returns it only slowly — an
+// agent that printed for a minute sat at more than twice its live heap for
+// minutes after. One collection and scavenge, once per burst, on its own
+// goroutine: the detector does not wait for it.
+func (a *Agent) releaseAfterBurst() {
+	if a.outSinceFree.Load() < releaseAfterBurstBytes {
+		return
+	}
+	a.outSinceFree.Store(0)
+	go freeOSMemory()
+}
+
+// freeOSMemory is debug.FreeOSMemory; a variable for tests.
+var freeOSMemory = debug.FreeOSMemory
+
 // attnReadHook, for tests only, runs as the detector starts a read of the
 // screen and the terminal.
 var attnReadHook func()
@@ -217,6 +240,9 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		var idleMs int64
 		if !last.IsZero() {
 			idleMs = now.Sub(last).Milliseconds()
+		}
+		if idleMs >= attnSettleMs {
+			a.releaseAfterBurst()
 		}
 
 		// "An agent is running here" = a full-screen TUI took the alt screen, OR

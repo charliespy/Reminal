@@ -170,3 +170,45 @@ func TestStopAttentionWaitsForTheReadUnderWay(t *testing.T) {
 		t.Fatal("stopAttention never returned")
 	}
 }
+
+// After a burst of output, once the screen has settled, memory is handed
+// back to the OS once — not on every read, and not for a trickle.
+func TestMemoryIsReleasedOnceAfterABurst(t *testing.T) {
+	freed := make(chan struct{}, 8)
+	was := freeOSMemory
+	freeOSMemory = func() { freed <- struct{}{} }
+	t.Cleanup(func() { freeOSMemory = was })
+	a, log := attnTestAgent(t)
+	waitReads(t, log, 0)
+	count := func() int {
+		n := 0
+		for {
+			select {
+			case <-freed:
+				n++
+			case <-time.After(300 * time.Millisecond): // the window is the assertion
+				return n
+			}
+		}
+	}
+	// A trickle: nothing.
+	a.outSinceFree.Store(1 << 10)
+	a.markActivity(time.Now().Add(-5 * time.Second))
+	if n := count(); n != 0 {
+		t.Fatalf("released after %d bytes", 1<<10)
+	}
+	// A burst, then quiet: once.
+	a.outSinceFree.Store(64 << 20)
+	n := attnReads(t, log)
+	a.markActivity(time.Now().Add(-5 * time.Second))
+	waitReads(t, log, n)
+	if n := count(); n != 1 {
+		t.Fatalf("released %d times after a burst, want 1", n)
+	}
+	n = attnReads(t, log)
+	a.kickAttention()
+	waitReads(t, log, n)
+	if n := count(); n != 0 {
+		t.Fatalf("released again with no new output (%d)", n)
+	}
+}
