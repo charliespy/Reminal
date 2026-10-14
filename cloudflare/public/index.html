@@ -6001,7 +6001,9 @@
           if (val && Array.isArray(val.sessions)) noteDirectorySessions(machineB64Cmp, val.sessions);
           resolve(val);
         };
-        const timer = setTimeout(() => done(new Error('timeout')), opts.timeout || 6000);
+        // At the deadline, an older machine's reply that did not answer the
+        // request (kept below) is all it will say: that is the answer.
+        const timer = setTimeout(() => (att && att.maybe ? done(null, att.maybe) : done(new Error('timeout'))), opts.timeout || 6000);
         const ch = { seal: null, key: null };
         const sealer = sealSocket(sock, ch);
         sock.onerror = () => done(new Error('unreachable'));
@@ -6085,7 +6087,8 @@
                 // An open lookup rides dir_query with a payload; the host answers
                 // the same dir_resp with open_url/open_pin for that one port. Asked
                 // per click, so the PIN never lands in the cached session list.
-                const enc = await encrypt(box, JSON.stringify({ open_id: opts.open }));
+                att.reqId = Math.random().toString(36).slice(2);
+                const enc = await encrypt(box, JSON.stringify({ open_id: opts.open, req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_query', data: enc }));
                 state = 'query';
               } else {
@@ -6107,6 +6110,14 @@
               if (opts.push) {
                 if (!r.push) { if (alertHostTooOld(r)) return done(null, r); return; }
                 if (r.push.req_id && r.push.req_id !== att.reqId) return;
+              }
+              // An open lookup takes the reply carrying its id; from a machine
+              // that tags its replies, any other is another owner's. An older
+              // one's untagged reply answers it if it holds the link (or why
+              // not); one that does not is kept for the deadline.
+              if (opts.open) {
+                if (r.tagged || r.req_id) { if (r.req_id !== att.reqId) return; }
+                else if (!r.open_url && !r.open_error) { att.maybe = r; return; }
               }
               return done(null, r);
             }

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -62,6 +63,10 @@ type dirQueryReq struct {
 	OpenID string `json:"open_id,omitempty"`
 	// Push is a phone-alert request from an owner's browser (see pushdir.go).
 	Push *pushReq `json:"push,omitempty"`
+	// ReqID names this request; the reply to it carries it back
+	// (DirResponse.ReqID). Not a request of its own: a query with nothing
+	// else in it is a plain listing.
+	ReqID string `json:"req_id,omitempty"`
 }
 
 func (r dirQueryReq) empty() bool {
@@ -178,6 +183,11 @@ func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dir
 	req.KeysID = strings.TrimSpace(req.KeysID)
 	req.Keys = strings.TrimSpace(req.Keys)
 	if !req.empty() {
+		reqID, _, err := crypto.NewExID()
+		if err != nil {
+			return zero, err
+		}
+		req.ReqID = reqID
 		raw, err := json.Marshal(req)
 		if err != nil {
 			return zero, err
@@ -191,9 +201,17 @@ func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dir
 	if err := writeDir(conn, qmsg); err != nil {
 		return zero, err
 	}
+	// Every owner on the channel hears every reply: wait for this one's.
+	// The read deadline set at the dial bounds the wait.
+	var maybe *protocol.DirResponse
 	for {
 		var msg protocol.Message
 		if err := readDir(conn, &msg); err != nil {
+			if maybe != nil {
+				// An older machine that only ever answered with what it has:
+				// what it said is the answer (the caller says what it lacks).
+				return *maybe, nil
+			}
 			return zero, err
 		}
 		if msg.Type != protocol.TypeDirResp {
@@ -207,8 +225,99 @@ func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dir
 		if err := json.Unmarshal(plain, &resp); err != nil {
 			return zero, fmt.Errorf("directory: bad response")
 		}
-		return resp, nil
+		switch dirReplyFor(req, resp) {
+		case dirReplyMine:
+			return resp, nil
+		case dirReplyMaybe:
+			maybe = &resp
+		}
 	}
+}
+
+// dirReplyVerdict is what a reply heard on the channel is to a request.
+type dirReplyVerdict int
+
+const (
+	dirReplyOthers dirReplyVerdict = iota // another owner's
+	dirReplyMine                          // the answer to it
+	dirReplyMaybe                         // an untagged reply that does not answer it
+)
+
+func (v dirReplyVerdict) String() string {
+	return [...]string{"others", "mine", "maybe"}[v]
+}
+
+// dirReplyFor says whose a reply is. A plain listing takes any reply: each
+// carries the whole listing. A request takes the reply tagged with its id;
+// from a machine that tags its replies, any other is another owner's. A
+// machine too old to tag them is judged by what the reply holds: one that
+// answers what was asked is taken (a search cannot be told apart, and is
+// taken as before); one that does not is kept, as all that machine may ever
+// say, in case nothing better comes before the deadline.
+func dirReplyFor(req dirQueryReq, resp protocol.DirResponse) dirReplyVerdict {
+	if req.ReqID == "" {
+		return dirReplyMine
+	}
+	if resp.Tagged || resp.ReqID != "" {
+		if resp.ReqID == req.ReqID {
+			return dirReplyMine
+		}
+		return dirReplyOthers
+	}
+	answered := true
+	if req.KeysID != "" && req.Keys != "" {
+		answered = answered && (resp.KeysOK || resp.KeysError != "")
+	}
+	if req.Transcript != "" {
+		answered = answered && transcriptAnswered(resp, req.Transcript)
+	}
+	if req.Restart {
+		answered = answered && (resp.RestartOK || resp.RestartError != "")
+	}
+	if req.OpenID != "" {
+		answered = answered && (resp.OpenURL != "" || resp.OpenError != "")
+	}
+	if req.Push != nil {
+		answered = answered && resp.Push != nil
+	}
+	if answered {
+		return dirReplyMine
+	}
+	return dirReplyMaybe
+}
+
+// transcriptAnswered: the session's dump is there, or the session is not
+// (the caller says it was not found).
+func transcriptAnswered(resp protocol.DirResponse, id string) bool {
+	for _, s := range resp.Sessions {
+		if strings.EqualFold(s.ID, id) {
+			return s.TranscriptOK || s.Transcript != ""
+		}
+	}
+	return true
+}
+
+// HostTooOldError is a machine that took a request and did nothing with it:
+// a reminal from before that request was known. Version is what the machine
+// said it runs, when it said.
+type HostTooOldError struct {
+	What, Version string
+}
+
+func (e *HostTooOldError) Error() string {
+	who := "its reminal"
+	if e.Version != "" {
+		who += " (" + e.Version + ")"
+	}
+	return who + " is too old to " + e.What + " — upgrade it"
+}
+
+func hostTooOld(what string, resp protocol.DirResponse) error {
+	e := &HostTooOldError{What: what}
+	if resp.Stats != nil {
+		e.Version = resp.Stats.Version
+	}
+	return e
 }
 
 // SpawnOnMachine asks an owned machine to start a fresh detached session over
@@ -479,5 +588,12 @@ func parseDirQuery(box *crypto.Box, data string) dirQueryReq {
 	req.Transcript = strings.TrimSpace(req.Transcript)
 	req.KeysID = strings.TrimSpace(req.KeysID)
 	req.Keys = strings.TrimSpace(req.Keys)
+	if !reqIDShape.MatchString(req.ReqID) {
+		req.ReqID = "" // repeated back to every owner: an id, nothing else
+	}
 	return req
 }
+
+// reqIDShape is a request id as callers make them: hex (crypto.NewExID) or
+// base 36 (the web viewer).
+var reqIDShape = regexp.MustCompile(`^[0-9a-z]{1,64}$`)

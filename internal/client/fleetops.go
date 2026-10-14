@@ -143,8 +143,9 @@ func UpgradeOnMachine(machinePub ed25519.PublicKey, onStep func(UpgradeStep)) (U
 // running in them survive: a hot restart re-execs each agent while keeping its
 // PTY. Returns how many sessions the host moved.
 //
-// ok is false when the host listed but did not restart (a reminal too old to
-// understand the request), so a silent no-op can never read as success.
+// ok is false, with a *HostTooOldError, when the host listed but did not
+// restart (a reminal too old to understand the request), so a silent no-op
+// can never read as success.
 func RestartOnMachine(machinePub ed25519.PublicKey, timeout time.Duration) (count int, ok bool, err error) {
 	resp, err := queryDirectory(machinePub, timeout, dirQueryReq{Restart: true})
 	if err != nil {
@@ -153,5 +154,8 @@ func RestartOnMachine(machinePub ed25519.PublicKey, timeout time.Duration) (coun
 	if resp.RestartError != "" {
 		return resp.RestartCount, false, fmt.Errorf("%s", resp.RestartError)
 	}
-	return resp.RestartCount, resp.RestartOK, nil
+	if !resp.RestartOK {
+		return 0, false, hostTooOld("restart remotely", resp)
+	}
+	return resp.RestartCount, true, nil
 }

@@ -190,8 +190,8 @@ func ReadAgentTranscriptFromID(id string) (string, bool, error) {
 }
 
 // ReadRemoteTranscript asks an owned machine's directory host for one
-// session's stripped scrollback. ok is false when the host listed the
-// session but did not dump (older reminal).
+// session's stripped scrollback. ok is false, with a *HostTooOldError, when
+// the host listed the session but did not dump (an older reminal).
 func ReadRemoteTranscript(machinePub ed25519.PublicKey, sessionID string) (text string, truncated, ok bool, err error) {
 	resp, err := queryDirectory(machinePub, DirectoryTimeout, dirQueryReq{Transcript: sessionID})
 	if err != nil {
@@ -199,7 +199,10 @@ func ReadRemoteTranscript(machinePub ed25519.PublicKey, sessionID string) (text 
 	}
 	for _, s := range resp.Sessions {
 		if strings.EqualFold(s.ID, sessionID) {
-			return s.Transcript, s.TranscriptTruncated, s.TranscriptOK, nil
+			if !s.TranscriptOK {
+				return "", false, false, hostTooOld("dump scrollback", resp)
+			}
+			return s.Transcript, s.TranscriptTruncated, true, nil
 		}
 	}
 	return "", false, false, fmt.Errorf("session %s not found on that machine", sessionID)

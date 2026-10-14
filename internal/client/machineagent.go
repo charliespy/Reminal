@@ -350,6 +350,8 @@ func (a *Agent) handleDirQuery(conn *websocket.Conn, data string) {
 		resp.Stats.Version, resp.Stats.Update = a.version, updater.Available(a.version)
 	}
 	q := parseDirQuery(a.box, data)
+	// Every owner on the channel hears this reply: say whose it is.
+	resp.ReqID, resp.Tagged = q.ReqID, true
 	if q.Pattern != "" {
 		applyLocalSearchHits(&resp, q.Pattern)
 	}
