@@ -32,7 +32,7 @@ import (
 func runHook(args []string) error {
 	if len(args) < 1 {
 		_, _ = io.Copy(io.Discard, os.Stdin) // don't leave the harness pipe blocked
-		return fmt.Errorf("usage: reminal hook <working|input|done|notify>")
+		return fmt.Errorf("usage: reminal hook <working|input|done|notify|subagent>")
 	}
 	arg := strings.ToLower(strings.TrimSpace(args[0]))
 
@@ -51,28 +51,52 @@ func runHook(args []string) error {
 	}
 
 	var state string
+	var bg *session.Background // what it still has running in the background, if it said
 	switch arg {
 	case "working", "input", "done":
 		// The state is fixed; what the payload adds is which conversation the
 		// agent is in, kept so a restart can resume that one and not "the
 		// latest" (see session.Restore).
-		if conv := convFromPayload(readCappedStdin()); conv != "" && id != "" && convOwnSession(id) {
+		payload := readCappedStdin()
+		if conv := convFromPayload(payload); conv != "" && id != "" && convOwnSession(id) {
 			_ = session.WriteConv(id, conv)
 		}
+		if arg == "done" {
+			// What it left running as its turn ended (Claude Code's Stop):
+			// done, and still at work in the background.
+			bg = hookBackground(payload, "")
+			hookDebugBackground(id, arg, bg)
+		}
 		state = arg
+	case "subagent":
+		// A subagent of its own finished (Claude Code's SubagentStop): what is
+		// still running now. Not a turn's state — one inside a turn finishing
+		// does not end the turn — so only the count changes.
+		payload := readCappedStdin()
+		bg = hookBackground(payload, hookAgentID(payload))
+		hookDebugBackground(id, arg, bg)
+		if bg == nil {
+			return nil
+		}
 	case "notify":
 		// Ambiguous notification — decide "needs you" vs "done" from the payload
 		// AND the current turn state (see classifyNotify).
 		state = classifyNotify(readCappedStdin(), id)
 	default:
 		go func() { _, _ = io.Copy(io.Discard, os.Stdin) }()
-		return fmt.Errorf("unknown state %q (want working|input|done|notify)", arg)
+		return fmt.Errorf("unknown state %q (want working|input|done|notify|subagent)", arg)
 	}
 
 	if id == "" {
 		return nil
 	}
-	if err := session.WriteHookState(id, state); err != nil {
+	var err error
+	if arg == "subagent" {
+		err = session.UpdateHookBackground(id, bg)
+	} else {
+		err = session.WriteHookStateWith(id, state, bg)
+	}
+	if err != nil {
 		return err
 	}
 	// The session's agent reads the state when told to, so a turn that ends

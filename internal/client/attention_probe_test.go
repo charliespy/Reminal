@@ -581,3 +581,29 @@ func TestARestingHarnessThatReportsItsTurnsIgnoresItsOwnRepaint(t *testing.T) {
 		t.Fatalf("output after done from a harness without turn hooks read as %q (%s), want working (screen(resumed))", s, src)
 	}
 }
+
+// The background work a hook said it left running stands only when said at
+// rest, by the harness in the foreground now, while an agent is there.
+func TestAttnHookBackgroundIsBelievedOnlyFromTheHarnessAtRest(t *testing.T) {
+	now := time.Now()
+	bg := &session.Background{Shells: 1, Agents: 3}
+	for _, c := range []struct {
+		name        string
+		agentActive bool
+		hs          *session.HookState
+		fgAt        time.Time
+		want        *session.Background
+	}{
+		{"done, said by this harness", true, &session.HookState{State: "done", TS: now, Background: bg}, now.Add(-time.Minute), bg},
+		{"input (a prompt with work going)", true, &session.HookState{State: "input", TS: now, Background: bg}, time.Time{}, bg},
+		{"a turn is running", true, &session.HookState{State: "working", TS: now, Background: bg}, time.Time{}, nil},
+		{"said by a harness that has exited", true, &session.HookState{State: "done", TS: now.Add(-time.Hour), Background: bg}, now.Add(-time.Minute), nil},
+		{"no agent in front", false, &session.HookState{State: "done", TS: now, Background: bg}, time.Time{}, nil},
+		{"not said", true, &session.HookState{State: "done", TS: now}, time.Time{}, nil},
+		{"no hook", true, nil, time.Time{}, nil},
+	} {
+		if got := attnHookBackground(c.agentActive, c.hs, c.fgAt); got != c.want {
+			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}

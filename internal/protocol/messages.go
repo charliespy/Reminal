@@ -499,6 +499,9 @@ type DirSession struct {
 	// Attn rather than folded into it — "done · 1 shell" is a finished turn that
 	// left work going, which is not the same as nothing to come back for.
 	Shells int `json:"shells,omitempty"`
+	// Agents is how many subagents of its own the session's harness still has
+	// running in the background, beside Shells.
+	Agents int `json:"agents,omitempty"`
 	// Fg is the program in the session's foreground ("bash", "claude",
 	// "python3") — what says whether an agent or a plain terminal is there.
 	Fg string `json:"fg,omitempty"`

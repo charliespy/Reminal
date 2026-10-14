@@ -21,6 +21,18 @@ import (
 type HookState struct {
 	State string    `json:"state"` // "working" | "input" | "done"
 	TS    time.Time `json:"ts"`    // when the hook fired
+	// Background is the work the harness said it still had running when its
+	// turn ended: nil when it said nothing about it (a harness, or a build,
+	// that does not), which is not the same as none.
+	Background *Background `json:"background,omitempty"`
+}
+
+// Background is how many shells and subagents a harness still has running in
+// the background, as its own hooks said: a turn that ended with them going is
+// done, and its session is still at work.
+type Background struct {
+	Shells int `json:"shells,omitempty"`
+	Agents int `json:"agents,omitempty"`
 }
 
 // HookStateTTL bounds how long a hook state is trusted without a fresh event. A
@@ -43,6 +55,64 @@ func hookStatePath(id string) (string, error) {
 
 // WriteHookState records the agent-reported attention state for a session.
 func WriteHookState(id, state string) error {
+	return WriteHookStateWith(id, state, nil)
+}
+
+// WriteHookStateWith records the agent-reported attention state for a
+// session, with the background work it said it still has (nil: it said
+// nothing about that).
+func WriteHookStateWith(id, state string, bg *Background) error {
+	// Under the record's lock, so it never lands between another hook's
+	// reading the record and writing it back (UpdateHookBackground) to be
+	// overwritten by the older state. A turn's state must land: if the lock
+	// cannot be had in time, it is written anyway.
+	if unlock, err := lockHookState(id); err == nil {
+		defer unlock()
+	}
+	return writeHookState(id, HookState{State: state, TS: time.Now(), Background: bg})
+}
+
+// hookLockWait caps waiting for a session's hook record: a hook holds up the
+// harness that fired it, and the other holder is a hook writing one small
+// file.
+const hookLockWait = time.Second
+
+// lockHookState takes the session's hook record lock (an OS lock, let go if
+// its holder dies).
+func lockHookState(id string) (func(), error) {
+	if id == "" {
+		return nil, errors.New("hook state requires a session id")
+	}
+	dir, err := activeDir()
+	if err != nil {
+		return nil, err
+	}
+	return atrest.Lock(dir, "hook-"+id+".lock", hookLockWait)
+}
+
+// UpdateHookBackground records the background work a harness still has
+// running, said between turns (a subagent of its own finishing), leaving its
+// turn's state and when that was said as they are: the state is the turn's,
+// and a subagent finishing inside a turn does not end it. With no state yet
+// there is no turn to attach it to, and nothing is written. Read and written
+// back under the record's lock, so a turn's state written meanwhile is not
+// undone; without the lock it is left alone — the next turn's end says the
+// count again.
+func UpdateHookBackground(id string, bg *Background) error {
+	unlock, err := lockHookState(id)
+	if err != nil {
+		return nil
+	}
+	defer unlock()
+	hs := ReadHookStateAnyAge(id)
+	if hs == nil {
+		return nil
+	}
+	hs.Background = bg
+	return writeHookState(id, *hs)
+}
+
+func writeHookState(id string, hs HookState) error {
 	p, err := hookStatePath(id)
 	if err != nil {
 		return err
@@ -53,7 +123,7 @@ func WriteHookState(id, state string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
-	data, err := json.Marshal(HookState{State: state, TS: time.Now()})
+	data, err := json.Marshal(hs)
 	if err != nil {
 		return err
 	}
@@ -121,8 +191,34 @@ func ClearHookState(id string) error {
 	if err != nil {
 		return err
 	}
+	_ = os.Remove(filepath.Join(filepath.Dir(p), "hook-"+id+".lock"))
 	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
+}
+
+// AppendHookDebug adds one line to ~/.reminal/hook-debug.log: what a hook
+// made of its event, for whoever set REMINAL_HOOK_DEBUG to check it. Only
+// what the hook concluded goes in, never the payload it was given.
+func AppendHookDebug(line string) error {
+	dir, err := activeDir()
+	if err != nil {
+		return err
+	}
+	if err := atrest.CheckWritable(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "hook-debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(time.Now().Format(time.RFC3339) + " " + line + "\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }

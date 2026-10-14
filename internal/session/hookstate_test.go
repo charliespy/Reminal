@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // A hook state is written whole or not at all. Two hooks can fire close enough
@@ -92,5 +93,47 @@ func TestWriteHookStateIsNeverSeenHalfWritten(t *testing.T) {
 		if strings.HasSuffix(e.Name(), ".tmp") {
 			t.Errorf("left a temp file behind: %s", e.Name())
 		}
+	}
+}
+
+// A turn's state written while a subagent's count is being read and written
+// back waits for it, so it is not overwritten by the older state; a count
+// that cannot get the record in time is left unsaid.
+func TestAHookStateIsNotUndoneByACountWrittenBackAroundIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := WriteHookStateWith("LKLK2345", "done", &Background{Agents: 2}); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockHookState("LKLK2345") // a count being written back
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrote := make(chan error, 1)
+	go func() { wrote <- WriteHookStateWith("LKLK2345", "working", nil) }()
+	select {
+	case <-wrote:
+		t.Fatal("a turn's state was written in the middle of another hook's read and write back")
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	if err := <-wrote; err != nil {
+		t.Fatal(err)
+	}
+	if hs := ReadHookStateAnyAge("LKLK2345"); hs == nil || hs.State != "working" || hs.Background != nil {
+		t.Fatalf("after: %+v", hs)
+	}
+
+	unlock, err = lockHookState("LKLK2345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if err := UpdateHookBackground("LKLK2345", &Background{Shells: 9}); err != nil {
+		t.Fatal(err)
+	}
+	if hs := ReadHookStateAnyAge("LKLK2345"); hs == nil || hs.Background != nil {
+		t.Fatalf("a count written without the record's lock: %+v", hs)
 	}
 }
