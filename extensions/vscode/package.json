@@ -17,9 +17,9 @@
     "remote terminal", "cloud terminal", "web terminal", "terminal", "remote",
     "cloud", "ssh", "remote access", "remote desktop", "screen sharing",
     "share terminal", "pair programming", "mobile", "phone", "browser",
-    "tunnel", "port forwarding", "localhost", "file transfer",
+    "tunnel", "port forwarding", "remote control", "file transfer",
     "persistent terminal", "tmux", "mcp", "claude code", "codex", "gemini",
-    "ai agent", "notifications", "closed lid", "self-hosted", "reminal"
+    "ai agent", "mobile terminal", "remote development", "collaboration", "reminal"
   ],
   "categories": ["Other", "AI"],
   "engines": { "vscode": "^1.93.0" },
