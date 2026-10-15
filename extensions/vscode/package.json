@@ -1,8 +1,8 @@
 {
   "name": "reminal",
-  "displayName": "reminal",
-  "description": "Open a terminal you can reach from any browser or phone, one click from the terminal panel. On a Mac, closed-lid mode keeps it reachable with the lid shut.",
-  "version": "0.1.0",
+  "displayName": "reminal: Remote & Cloud Terminal",
+  "description": "Take your terminal anywhere. Open it from your phone or any browser, share it with a teammate or an AI agent, and know the moment your coding agent needs you. Remote terminal access through the cloud, with no SSH or port forwarding to set up, plus remote desktop, localhost tunnels and file transfer.",
+  "version": "0.1.1",
   "publisher": "reminal",
   "license": "AGPL-3.0-or-later",
   "icon": "media/icon.png",
@@ -14,10 +14,14 @@
   },
   "bugs": { "url": "https://github.com/harshalgajjar/Reminal/issues" },
   "keywords": [
-    "terminal", "remote", "phone", "mobile", "share", "browser", "reminal",
-    "claude code", "codex", "gemini", "ai agent", "agent", "pair programming"
+    "remote terminal", "cloud terminal", "web terminal", "terminal", "remote",
+    "cloud", "ssh", "remote access", "remote desktop", "screen sharing",
+    "share terminal", "pair programming", "mobile", "phone", "browser",
+    "tunnel", "port forwarding", "localhost", "file transfer",
+    "persistent terminal", "tmux", "mcp", "claude code", "codex", "gemini",
+    "ai agent", "notifications", "closed lid", "self-hosted", "reminal"
   ],
-  "categories": ["Other"],
+  "categories": ["Other", "AI"],
   "engines": { "vscode": "^1.93.0" },
   "extensionKind": ["workspace"],
   "capabilities": {

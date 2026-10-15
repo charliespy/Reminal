@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- A clearer store listing, and a few words on what else reminal can do.
+
 ## 0.1.0
 
 - A reminal terminal profile, a cloud button in the terminal panel that
