@@ -1,0 +1,15 @@
+#!/bin/sh
+# Stands in for an agent harness: reports its state the way an integration's
+# lifecycle hooks do (see `reminal integrate`), so the extension's status can
+# be driven through all three states without a model.
+# Each state repaints the screen, as an agent's TUI does, so an old question
+# isn't left at the bottom where reminal looks for one.
+h() { printf '\033[2J\033[H'; echo '{}' | "$HOME/.local/bin/reminal" hook "$1"; }
+h working; echo "fake-agent: working"; sleep "${WORK:-9}"
+h input; printf 'fake-agent: needs you, press Enter to go on: '; read _
+h working; echo "fake-agent: working again"; sleep "${WORK:-9}"
+# A real agent stays open after a turn, and reminal keeps "done" only while it
+# does; on exit the session is a bare shell again. It waits without printing a
+# prompt: a question left on a settled screen is read as "needs you" over a
+# "done" hook, which is how a real agent asking something is caught.
+h done; echo "fake-agent: done"; read _

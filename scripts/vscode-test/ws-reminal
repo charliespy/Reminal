@@ -1,0 +1,5 @@
+#!/bin/sh
+# Named as reminal.path by the test workspace's own settings. The extension
+# must not run it; if it does, the mark stays and run.sh fails.
+touch /tmp/ws-reminal-ran
+exec /home/coder/.local/bin/reminal "$@"

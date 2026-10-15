@@ -1,0 +1,186 @@
+{
+  "name": "reminal",
+  "displayName": "reminal",
+  "description": "Open a terminal you can reach from any browser or phone, one click from the terminal panel. On a Mac, closed-lid mode keeps it reachable with the lid shut.",
+  "version": "0.1.0",
+  "publisher": "reminal",
+  "license": "AGPL-3.0-or-later",
+  "icon": "media/icon.png",
+  "homepage": "https://reminal.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/harshalgajjar/Reminal.git",
+    "directory": "extensions/vscode"
+  },
+  "bugs": { "url": "https://github.com/harshalgajjar/Reminal/issues" },
+  "keywords": [
+    "terminal", "remote", "phone", "mobile", "share", "browser", "reminal",
+    "claude code", "codex", "gemini", "ai agent", "agent", "pair programming"
+  ],
+  "categories": ["Other"],
+  "engines": { "vscode": "^1.93.0" },
+  "extensionKind": ["workspace"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "The reminal program's path comes only from your user settings, never from a workspace.",
+      "restrictedConfigurations": ["reminal.path"]
+    },
+    "virtualWorkspaces": false
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onTerminalProfile:reminal.terminal",
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "terminal": {
+      "profiles": [
+        {
+          "id": "reminal.terminal",
+          "title": "reminal",
+          "icon": "cloud"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "reminal.terminals",
+        "title": "reminal Terminals",
+        "category": "reminal",
+        "icon": "$(cloud)"
+      },
+      {
+        "command": "reminal.newHere",
+        "title": "New reminal Terminal Here",
+        "category": "reminal"
+      },
+      {
+        "command": "reminal.openInFolder",
+        "title": "Open reminal in This Folder",
+        "category": "reminal"
+      },
+      {
+        "command": "reminal.shareForPerson",
+        "title": "Share for a Person",
+        "category": "reminal",
+        "icon": "$(person)"
+      },
+      {
+        "command": "reminal.shareForAgent",
+        "title": "Share for an AI Agent",
+        "category": "reminal",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "reminal.goToTerminal",
+        "title": "Go to a reminal Terminal",
+        "category": "reminal"
+      },
+      {
+        "command": "reminal.showLink",
+        "title": "Show Link for This Terminal",
+        "category": "reminal"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "reminal.terminals",
+          "when": "view == terminal",
+          "group": "navigation@10"
+        }
+      ],
+      "terminal/title/context": [
+        {
+          "command": "reminal.shareForPerson",
+          "when": "reminal.hasTerminals",
+          "group": "reminal@1"
+        },
+        {
+          "command": "reminal.shareForAgent",
+          "when": "reminal.hasTerminals",
+          "group": "reminal@2"
+        },
+        {
+          "command": "reminal.openInFolder",
+          "group": "reminal@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "reminal.openInFolder",
+          "when": "terminalIsOpen"
+        },
+        {
+          "command": "reminal.shareForPerson",
+          "when": "reminal.hasTerminals"
+        },
+        {
+          "command": "reminal.shareForAgent",
+          "when": "reminal.hasTerminals"
+        },
+        {
+          "command": "reminal.showLink",
+          "when": "terminalIsOpen"
+        },
+        {
+          "command": "reminal.goToTerminal",
+          "when": "reminal.hasTerminals"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "reminal",
+      "properties": {
+        "reminal.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Full path to the `reminal` program. Leave empty to find it on your PATH and in the folders the installer uses. Only your user settings can set it, never a workspace's.",
+          "scope": "machine"
+        },
+        "reminal.showLinkOnStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the session's link in a notification when a reminal terminal starts."
+        },
+        "reminal.closeOriginal": {
+          "type": "string",
+          "enum": ["ask", "always", "never"],
+          "default": "ask",
+          "enumDescriptions": [
+            "Ask each time",
+            "Close it without asking. Anything still running in it stops.",
+            "Keep it open"
+          ],
+          "description": "After \"Open reminal in This Folder\", whether to close the terminal you opened it from. Only the folder carries over to the new terminal."
+        },
+        "reminal.statusBar": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also sum up every reminal terminal's status in the status bar (for example \"reminal: 1 needs you\"). Click it to go to the one that needs you."
+        },
+        "reminal.notifyNeedsYou": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification when a reminal terminal starts waiting for you (Needs you), unless you're already looking at it."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "test": "npm run compile && node --test out/test/*.test.js",
+    "vscode:prepublish": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\" && npm run compile",
+    "prepackage": "node -e \"require('fs').copyFileSync('../../LICENSE','LICENSE')\"",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "1.93.0",
+    "@vscode/vsce": "^3.2.0",
+    "ovsx": "^0.10.0",
+    "typescript": "^5.4.0"
+  }
+}

@@ -172,6 +172,9 @@ func ShowInfoDetails(a *session.Active) { printActiveDetails(a) }
 // InfoJSON returns the JSON-serialisable view of a session's connect details.
 // Shared by the single-session and --all JSON paths so the shape stays
 // identical. Exported so cmd/reminal can marshal one or an array of them.
+// Attn and AttnSince are the same attention state `reminal list` shows, so a
+// tool reading this (the VS Code extension) can tell which session needs you
+// without parsing the table; both are absent for a bare shell.
 func InfoJSON(a *session.Active) any {
 	return struct {
 		ID        string    `json:"id"`
@@ -183,6 +186,8 @@ func InfoJSON(a *session.Active) any {
 		Title     string    `json:"title,omitempty"`
 		PID       int       `json:"pid"`
 		StartedAt time.Time `json:"started_at"`
+		Attn      string    `json:"attn,omitempty"`
+		AttnSince time.Time `json:"attn_since,omitzero"`
 	}{
 		ID:        a.ID,
 		Name:      a.Name,
@@ -193,6 +198,8 @@ func InfoJSON(a *session.Active) any {
 		Title:     a.Title,
 		PID:       a.PID,
 		StartedAt: a.StartedAt,
+		Attn:      a.Attn,
+		AttnSince: a.AttnSince,
 	}
 }
 
