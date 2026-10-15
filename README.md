@@ -451,6 +451,32 @@ continue to work.
 
 ---
 
+## Oh, and it's in VS Code and Cursor too
+
+Rather not leave your editor? The reminal extension lives in the terminal panel
+of VS Code, Cursor, Windsurf and VSCodium. Pick **reminal** from the menu beside
+the `+` and that terminal is shared from the moment it opens, QR code and all.
+The cloud button lists every reminal terminal in the window, and a right-click
+on a tab copies a join message for a teammate or an AI agent.
+
+<div align="center">
+<img src="extensions/vscode/media/readme/hero.png" alt="A reminal terminal running tests in VS Code, and the same terminal open on a phone" width="900">
+</div>
+
+If you run coding agents, each tab also shows how its agent is doing, so you
+can tell at a glance which one is working, which is done and which is waiting
+on you.
+
+<div align="center">
+<img src="extensions/vscode/media/readme/agents-window.png" alt="Claude Code waiting for approval in a reminal terminal, with each tab's state and a summary in the status bar" width="900">
+</div>
+
+Install it from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=reminal.reminal)
+or [Open VSX](https://open-vsx.org/extension/reminal/reminal) (Cursor, Windsurf
+and VSCodium), or search for **reminal** in the Extensions view.
+
+---
+
 ## Ready to try it?
 
 ```bash

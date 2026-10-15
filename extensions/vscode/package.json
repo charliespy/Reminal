@@ -178,7 +178,7 @@
     "test": "npm run compile && node --test out/test/*.test.js",
     "vscode:prepublish": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\" && npm run compile",
     "prepackage": "node -e \"require('fs').copyFileSync('../../LICENSE','LICENSE')\"",
-    "package": "vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies --baseContentUrl https://github.com/harshalgajjar/Reminal/blob/HEAD/extensions/vscode --baseImagesUrl https://github.com/harshalgajjar/Reminal/raw/HEAD/extensions/vscode"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
