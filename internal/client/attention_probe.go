@@ -188,6 +188,10 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 	var lastTail string
 	lastChange := time.Now()
 	var progCache foregroundProgCache
+	// The programs whose own hook has spoken in this session (a state
+	// written while that program was in front): one of them started again
+	// says, by its hook, when its turn begins (resolveAttn).
+	hookSpoke := map[string]bool{}
 
 	for {
 		select {
@@ -307,8 +311,11 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// takes a message, ends its turn and looks done; by the program that
 		// runs here, and its own hook, never by any login text on the screen.
 		a.noteHarnessHealth(render, prog, harnessAtWork(hs, now, settledMs))
+		if hs != nil && prog != "" && (fgAt.IsZero() || !hs.TS.Before(fgAt)) {
+			hookSpoke[prog] = true
+		}
 		state, source := resolveAttn(screenState, hs, last, fgAt, idleMs,
-			attnLooksLikePrompt(bottom), attnLooksBusy(bottom), hookTurns[prog])
+			attnLooksLikePrompt(bottom), attnLooksBusy(bottom), hookTurns[prog], hookSpoke[prog])
 		if a.harnessDown() {
 			// It cannot work at all: that is what to report, not what it
 			// looked like it was doing when it took the message.
@@ -632,7 +639,7 @@ func (a *Agent) setAttnState(state string) {
 // notice for another — and each move read as "working", then "done": a turn
 // nobody took, filed for review.
 func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt time.Time, idleMs int64,
-	promptOnScreen, busyOnScreen, turnsByHook bool) (state, source string) {
+	promptOnScreen, busyOnScreen, turnsByHook, spokeHere bool) (state, source string) {
 	state, source = screenState, "screen"
 	switch {
 	case hs == nil:
@@ -641,6 +648,18 @@ func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt t
 		// not said anything yet. A "working" left behind by a turn that died
 		// (a failed login, a crash) held every message for this session until
 		// the TTL ran out.
+		//
+		// Not said anything yet is itself a state, though, for a harness
+		// whose hook marks each turn's start and has spoken in this session
+		// before (spokeHere): it has had no turn. Its screen still moves —
+		// it draws itself as it starts, and repaints at rest — and each move
+		// read as "working", then "done": a turn nobody took, filed for
+		// review, over and over, in a session where a second copy of the
+		// harness was started and left at its prompt. Its first turn comes
+		// with its own "working", or shows on the busy footer (below).
+		if turnsByHook && spokeHere && screenState == "working" {
+			state, source = "done", "screen(no turn yet)"
+		}
 	case hs.State == "working" && time.Since(hs.TS) > session.HookStateTTL:
 		// A turn longer than this would have said something since. A resting
 		// state (done, input) has no such limit: the harness that wrote it is
