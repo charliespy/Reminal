@@ -27,6 +27,12 @@ Person** copies a join link and a `reminal connect` line to send to someone,
 and **Share for an AI Agent** copies instructions another agent can follow to
 join.
 
+That second one lets agents work together. Paste the instructions into a
+second agent's chat and it joins the same live shell, seeing everything the
+first one has run and typing alongside it. One agent can review or test what
+another has built, take over a task partway through, or keep an eye on a long
+job while the first moves on. You can watch it all from your phone.
+
 When a reminal terminal starts, a notification shows its PIN with buttons to
 copy the link or open it in your browser, and the terminal prints the same
 link with a QR code for your phone. **reminal: Show Link for This Terminal**
