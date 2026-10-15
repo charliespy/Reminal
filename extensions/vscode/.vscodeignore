@@ -7,3 +7,4 @@ tsconfig.json
 *.vsix
 PUBLISHING.md
 package-lock.json
+media/readme/**

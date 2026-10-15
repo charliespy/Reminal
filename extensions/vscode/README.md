@@ -10,14 +10,25 @@ a [reminal](https://reminal.app) session, reached with a link and a PIN.
 
 It works in VS Code, Cursor, Windsurf, VSCodium and code-server.
 
+![A reminal terminal running tests in VS Code, and the same terminal open on a phone](media/readme/hero.png)
+
 ## In the terminal panel
 
 Choose **reminal** from the menu beside the `+` and the new terminal is shared
 from the moment it opens. You can also make it your default profile.
 
+When a reminal terminal starts, a notification shows its PIN with buttons to
+copy the link or open it in your browser, and the terminal prints the same
+link with a QR code for your phone. **reminal: Show Link for This Terminal**
+brings it back later.
+
+![A new reminal terminal in VS Code, showing its link and QR code, with the notification to copy the link](media/readme/shell-window.png)
+
 The cloud icon in the panel's title bar lists the reminal terminals in the
 window and what each one is doing, with a shortcut at the bottom to open a new
 one in your current folder.
+
+![The cloud button's list of reminal terminals](media/readme/shell-list.png)
 
 Right-click a terminal tab for three more actions. **Open reminal in This
 Folder** starts a reminal terminal where that one is. VS Code doesn't let an
@@ -27,16 +38,13 @@ Person** copies a join link and a `reminal connect` line to send to someone,
 and **Share for an AI Agent** copies instructions another agent can follow to
 join.
 
+![The right-click menu on a terminal tab, with Share for a Person, Share for an AI Agent and Open reminal in This Folder](media/readme/menu.png)
+
 That second one lets agents work together. Paste the instructions into a
 second agent's chat and it joins the same live shell, seeing everything the
 first one has run and typing alongside it. One agent can review or test what
 another has built, take over a task partway through, or keep an eye on a long
 job while the first moves on. You can watch it all from your phone.
-
-When a reminal terminal starts, a notification shows its PIN with buttons to
-copy the link or open it in your browser, and the terminal prints the same
-link with a QR code for your phone. **reminal: Show Link for This Terminal**
-brings it back later.
 
 ## Know when your agent needs you
 
@@ -45,6 +53,8 @@ it's getting on: `…` while it works, `!` when it's waiting for you and `✓` w
 it's finished. A notification lets you know the moment one is waiting, and
 `reminal.statusBar` adds a summary to the status bar if you'd like one. This
 needs reminal 3.16.13 or later.
+
+![Claude Code waiting for approval in a reminal terminal, with each tab's state and a summary in the status bar](media/readme/agents-window.png)
 
 ## Leave it running
 
