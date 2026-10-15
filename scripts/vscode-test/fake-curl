@@ -1,0 +1,22 @@
+#!/bin/sh
+# Stands in for curl in the install phase. The reminal.app install command
+# gets an installer that puts back the reminal hidden earlier and then, as the
+# real one does, asks a question in the terminal before it finishes.
+case "$*" in
+*install.sh*)
+  # The first run fails, as a download would; run.sh leaves the mark.
+  if [ -e /tmp/install-fails ]; then
+    rm -f /tmp/install-fails
+    echo 'echo "fake-installer: download failed"; exit 1'
+    exit 0
+  fi
+  cat <<'EOS'
+mkdir -p "$HOME/.local/bin" && cp /tmp/reminal-hidden "$HOME/.local/bin/reminal"
+echo "fake-installer: reminal is in place"
+echo "/dev/$(ps -o tty= -p $$ | tr -d " ")" > /tmp/fake-install.tty
+printf 'fake-installer: one more question [Y/n] '; read _ </dev/tty
+echo "fake-installer: done"
+EOS
+;;
+*) exec /usr/bin/curl "$@" ;;
+esac
