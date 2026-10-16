@@ -821,6 +821,12 @@ var attnPromptCues = []string{
 	// that is also the label of its yolo mode, printed in the footer of every
 	// screen, so a session launched with -f read as stuck from its first second.
 	"run this command?", "run (once)", "not in allowlist", "(esc or n)",
+	// Gemini CLI's first screen in a folder it has not seen: whether to trust
+	// it, a choice only the person can make (its options are marked "●", not
+	// "❯", so no cue above matched and the session read as done). By its
+	// question, and by its first choice, which stays in the rows read when
+	// the question has scrolled above them.
+	"do you trust the files in this folder?", "1. trust folder (",
 }
 
 // The screen is read as text: the render carries its styling, and Claude
