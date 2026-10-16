@@ -48,11 +48,23 @@ var harnessLoginNotice = regexp.MustCompile(`(loginexpired|notloggedin|invalidap
 // printed Codex's sign-in menu (a check of Codex's login, 2026-10-14) is not
 // logged out, and was read as one for as long as that output was on screen.
 var harnessLoginScreens = map[string]*regexp.Regexp{
-	"agy":    regexp.MustCompile(`youarecurrentlynotsignedin`),
-	"gemini": regexp.MustCompile(`howwouldyouliketoauthenticate|noauthenticationmethodselected`),
+	"agy": regexp.MustCompile(`youarecurrentlynotsignedin`),
+	// Gemini CLI: no way to sign in chosen yet; its Google sign-in waiting
+	// for the code; its API key dialog; and a key it cannot use (the
+	// service's own words, in the error it prints for the turn — wrapped at
+	// the terminal's width, so by their start).
+	"gemini": regexp.MustCompile(`howwouldyouliketoauthenticate|noauthenticationmethodselected|^[^a-z0-9]*(pleasevisitthefollowingurltoauthorizetheapplication|entertheauthorizationcode|entergeminiapikey)[^a-z0-9]*$|apikeynotvalid\.pleasepass`),
 	"amp":    regexp.MustCompile(`wouldyouliketologintoamp|noapikeyfound\.startingloginflow`),
-	"codex":  regexp.MustCompile(`signinwithchatgpt|provideyourownapikey|incorrectapikeyprovided`),
-	"qwen":   regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey`),
+	// Codex: its sign-in menu, signing in through the browser, and a key it
+	// cannot use.
+	"codex": regexp.MustCompile(`signinwithchatgpt|provideyourownapikey|incorrectapikeyprovided|^[^a-z0-9]*finishsigninginviayourbrowser[^a-z0-9]*$`),
+	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
+	// taller than the rows read, so by its last choice), and the steps of
+	// setting one up.
+	"qwen": regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey|^[^a-z0-9]*(connectaprovider|manuallyconnectalocalserver,proxy,orunsupportedprovider)[^a-z0-9]*$`),
+	// Cursor CLI: its first screen with no login ("Press any key to log
+	// in..." — a key typed there starts signing in), and the sign-in itself.
+	"cursor-agent": regexp.MustCompile(`^[^a-z0-9]*(pressanykeytologin|ifyourbrowserdidn.?topen,clickthislinktologin:?|pressqtoshowaqrcodetologin)`),
 	// pi with no model to run on (no provider logged in) says so on its own
 	// status line, the last on its screen: its context "0" and its model
 	// "unknown" ("0.0%/0 (auto)   unknown"). A message sent it is turned away
@@ -111,6 +123,16 @@ const harnessShortRow = 48
 // rows that have something on them — a sign-in dialog is mostly its own
 // blank rows, and counting those left its heading unread.
 const harnessRows = 12
+
+// harnessRowsFor is how many rows are read for prog: Gemini CLI's input
+// area, its status rows and the banners it keeps above them are taller
+// than that, and its error for a turn sits above them all.
+func harnessRowsFor(prog string) int {
+	if prog == "gemini" {
+		return 20
+	}
+	return harnessRows
+}
 
 const (
 	harnessDownAfter = 2  // ticks the notice must be seen to count
@@ -218,7 +240,7 @@ const harnessTurnProof = 10 * time.Second
 func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 	// The render carries its styling — "\x1b[1mLogin\x1b[m \x1b[1mexpired" —
 	// which would sit between the words; the text is what is read.
-	bad := !atWork && harnessProblemIn(harnessTail(stripANSI(render), harnessRows), prog)
+	bad := !atWork && harnessProblemIn(harnessTail(stripANSI(render), harnessRowsFor(prog)), prog)
 	a.metaMu.Lock()
 	h := &a.harness
 	changed := false
