@@ -86,6 +86,12 @@ func TestARuleThisBuildDoesNotKnowIsRefused(t *testing.T) {
 		{`{sha256:16}`, `{sha256:12}`},
 		{`"keep": 3`, `"keep": 0`},
 		{`"header", "app"`, `"../x", "app"`},
+		{`"header", "app"`, `"Header", "app"`},
+		{`"version": 1`, `"version": 2`},
+		{`"keep": 3`, `"keep": 3, "minify": true`},
+		{`"sw.js"`, `"../sw.js"`},
+		{`"sw.js"`, `"index.html"`},
+		{`"sw.js"`, `"assets/x.js"`},
 	} {
 		if !strings.Contains(string(good), c.from) {
 			t.Fatalf("build.json has no %s to change", c.from)
@@ -100,7 +106,7 @@ func TestARuleThisBuildDoesNotKnowIsRefused(t *testing.T) {
 // it: what build.json copies, the stamped page, its scripts and builds.txt.
 func TestTheViewerInTheTreeRendersAndIsWritten(t *testing.T) {
 	web := filepath.Join("..", "client", "web")
-	out := t.TempDir()
+	out := filepath.Join(t.TempDir(), "not", "yet")
 	if err := Write(web, out); err != nil {
 		t.Fatal(err)
 	}
@@ -139,5 +145,20 @@ func TestOnlyThePageNamesABuild(t *testing.T) {
 				t.Fatalf("%s names a build of %s or builds.txt: stamp it in both builders", f, sc)
 			}
 		}
+	}
+}
+
+// The page is stamped as the bytes it is, whatever they are: what is not
+// UTF-8, a BOM or CRLFs, and a script with $& in it, come out as they went in.
+func TestThePageIsStampedAsItsBytes(t *testing.T) {
+	index := []byte("\xef\xbb\xbf<html>\xe9\xff\r\n<script data-build=\"header\"></script>\r\n<script data-build=\"app\"></script>\r\n")
+	src := map[string][]byte{"header": []byte("a('\xe9')\r\n"), "app": []byte("a('$&$1')\n")}
+	p, err := Render(spec(t), index, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\xef\xbb\xbf<html>\xe9\xff\r\n<script src=\"/assets/" + Name("header", src["header"]) + "\" integrity=\"" + SRI(src["header"]) + "\" crossorigin=\"anonymous\"></script>\r\n<script src=\"/assets/" + Name("app", src["app"]) + "\" integrity=\"" + SRI(src["app"]) + "\" crossorigin=\"anonymous\"></script>\r\n"
+	if string(p.HTML) != want {
+		t.Fatalf("got %q", p.HTML)
 	}
 }

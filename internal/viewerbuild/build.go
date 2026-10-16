@@ -5,13 +5,14 @@
 // internal/client/web/<name>.js, served as assets/<name>.<hash>.js — named by
 // its content, so it can be cached for good — and the page's tag for it
 // stamped with that name and its SRI hash. Nothing it makes is committed: the
-// binary renders the page from what it embeds as it starts, and the Worker's
+// binary renders the page from what it embeds on its first request, and the Worker's
 // copy is built by cloudflare/scripts/build-viewer.mjs at every wrangler run.
 // Both follow internal/client/web/build.json, and a test holds them to the
 // same output byte for byte.
 package viewerbuild
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -28,29 +29,41 @@ import (
 
 // Spec is build.json: the rule both builders follow.
 type Spec struct {
+	Comment  string   `json:"_"`
+	Version  int      `json:"version"`
 	Scripts  []string `json:"scripts"`
 	Name     string   `json:"name"`
 	SRI      string   `json:"sri"`
 	Template string   `json:"template"`
 	Tag      string   `json:"tag"`
 	Keep     int      `json:"keep"`
-	Copy     []string `json:"copy"`
+	// Copy is what is served as it is, each at its path: a file or a
+	// directory of web.
+	Copy []string `json:"copy"`
 }
 
 // The rule this code knows. A build.json saying anything else is refused,
 // never half followed: changing the rule is changing both builders.
 const (
-	knownName = "assets/{script}.{sha256:16}.js"
-	knownSRI  = "sha384"
+	knownVersion = 1
+	knownName    = "assets/{script}.{sha256:16}.js"
+	knownSRI     = "sha384"
 )
 
 // ReadSpec reads and checks build.json.
 func ReadSpec(b []byte) (Spec, error) {
 	var s Spec
-	if err := json.Unmarshal(b, &s); err != nil {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&s); err != nil {
 		return s, fmt.Errorf("viewerbuild: build.json: %w", err)
 	}
+	if d.More() {
+		return s, errors.New("viewerbuild: build.json: more than one value")
+	}
 	switch {
+	case s.Version != knownVersion:
+		return s, fmt.Errorf("viewerbuild: build.json is version %d; this build knows only %d", s.Version, knownVersion)
 	case len(s.Scripts) == 0:
 		return s, errors.New("viewerbuild: build.json names no scripts")
 	case s.Name != knownName:
@@ -65,8 +78,13 @@ func ReadSpec(b []byte) (Spec, error) {
 		return s, errors.New("viewerbuild: build.json keeps no builds")
 	}
 	for _, sc := range s.Scripts {
-		if sc == "" || strings.ContainsAny(sc, "/\\.") {
+		if sc == "" || strings.Trim(sc, "abcdefghijklmnopqrstuvwxyz") != "" {
 			return s, fmt.Errorf("viewerbuild: build.json's script %q is not a plain name", sc)
+		}
+	}
+	for _, c := range s.Copy {
+		if !fs.ValidPath(c) || c == "." || c == "index.html" || c == "assets" || strings.HasPrefix(c, "assets/") {
+			return s, fmt.Errorf("viewerbuild: build.json copies %q, not a path of its own", c)
 		}
 	}
 	return s, nil
@@ -93,27 +111,28 @@ type Page struct {
 	Build string
 }
 
-// Render stamps index (its sources' page) with each script's tag.
+// Render stamps index (its sources' page) with each script's tag. It works
+// on the page's bytes as they are, whatever their encoding.
 func Render(s Spec, index []byte, src map[string][]byte) (Page, error) {
 	p := Page{Assets: map[string][]byte{}}
-	html := string(index)
+	html := bytes.Clone(index)
 	var names []string
 	for _, sc := range s.Scripts {
 		js, ok := src[sc]
 		if !ok {
 			return p, fmt.Errorf("viewerbuild: no %s.js", sc)
 		}
-		marker := strings.ReplaceAll(s.Template, "{script}", sc)
-		if n := strings.Count(html, marker); n != 1 {
+		marker := []byte(strings.ReplaceAll(s.Template, "{script}", sc))
+		if n := bytes.Count(html, marker); n != 1 {
 			return p, fmt.Errorf("viewerbuild: index.html has %d of %s, want exactly 1", n, marker)
 		}
 		name := Name(sc, js)
 		tag := strings.NewReplacer("{name}", name, "{sri}", SRI(js)).Replace(s.Tag)
-		html = strings.Replace(html, marker, tag, 1)
+		html = bytes.Replace(html, marker, []byte(tag), 1)
 		p.Assets["assets/"+name] = js
 		names = append(names, name)
 	}
-	p.HTML = []byte(html)
+	p.HTML = html
 	p.Build = strings.Join(names, " ")
 	return p, nil
 }
@@ -185,6 +204,9 @@ func copyTree(from, to string) error {
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
 		return os.WriteFile(dst, b, 0o644)

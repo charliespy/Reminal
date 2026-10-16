@@ -8,7 +8,9 @@ import (
 	"compress/gzip"
 	"embed"
 	"fmt"
+	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"path"
 	"strconv"
@@ -27,17 +29,98 @@ import (
 // CDNs (TestCSPNamesEveryCDNScriptThePageLoads keeps the list true).
 const viewerCSP = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"
 
+// The page's sources and what build.json copies (a test holds every copy
+// entry embedded).
+//
 //go:embed web/index.html web/build.json web/app.js web/header.js web/reload.js web/sw.js web/manifest.webmanifest web/icons web/vendor
 var webIndex embed.FS
 
-// viewerPage is the page this binary serves, rendered once from the sources
-// it embeds (internal/viewerbuild, by web/build.json): the page and its
-// scripts always come from the same build, so a binary can never serve a
-// page that names a script it does not have.
-var viewerPage = sync.OnceValues(func() (viewerbuild.Page, error) {
-	_, p, err := viewerbuild.FromFS(webIndex, "web")
-	return p, err
+// viewer is the page this binary serves, rendered from the sources it
+// embeds (internal/viewerbuild, by web/build.json) on its first request: the
+// page and its scripts always come from the same build, so a binary can never
+// serve a page that names a script it does not have.
+var viewerBuilt = sync.OnceValue(func() (b struct {
+	spec viewerbuild.Spec
+	page viewerbuild.Page
+	err  error
+}) {
+	b.spec, b.page, b.err = viewerbuild.FromFS(webIndex, "web")
+	return b
 })
+
+func viewer() (viewerbuild.Spec, viewerbuild.Page, error) {
+	b := viewerBuilt()
+	return b.spec, b.page, b.err
+}
+
+func viewerPage() (viewerbuild.Page, error) {
+	_, p, err := viewer()
+	return p, err
+}
+
+// copiedHeaders are the headers of a file build.json copies, beyond its type,
+// as the Worker serves it (cloudflare/public/_headers adds its own).
+var copiedHeaders = map[string]map[string]string{
+	// The page's guard for its own scripts: at a fixed path, unhashed, so it
+	// loads even when the build the page names is gone.
+	"reload.js": {"Cache-Control": "no-cache"},
+	// The phone-alert service worker. Served so the page can register it here
+	// too; subscribing still needs a relay with push keys (the hosted one), and
+	// the page says so rather than failing silently.
+	"sw.js": {"Cache-Control": "no-store, must-revalidate"},
+}
+
+// copiedType is the Content-Type of a file build.json copies.
+func copiedType(name string) string {
+	switch path.Ext(name) {
+	case ".js":
+		return "text/javascript; charset=utf-8"
+	case ".webmanifest":
+		return "application/manifest+json"
+	case ".png":
+		return "image/png"
+	}
+	if t := mime.TypeByExtension(path.Ext(name)); t != "" {
+		return t
+	}
+	return "application/octet-stream"
+}
+
+// serveCopied serves what build.json copies, each at its path — a file, or a
+// directory's files under it — and nothing else of web.
+func serveCopied(mux *http.ServeMux, s viewerbuild.Spec) {
+	serve := func(w http.ResponseWriter, r *http.Request, name string) {
+		if !fs.ValidPath(name) {
+			http.NotFound(w, r)
+			return
+		}
+		data, err := webIndex.ReadFile("web/" + name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		ct := copiedType(name)
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		for k, v := range copiedHeaders[name] {
+			w.Header().Set(k, v)
+		}
+		if strings.HasPrefix(ct, "image/") {
+			_, _ = w.Write(data) // compressed already
+			return
+		}
+		writeEmbedded(w, r, "web/"+name, data)
+	}
+	for _, c := range s.Copy {
+		if st, err := fs.Stat(webIndex, "web/"+c); err == nil && st.IsDir() {
+			mux.HandleFunc("GET /"+c+"/{name...}", func(w http.ResponseWriter, r *http.Request) {
+				serve(w, r, c+"/"+r.PathValue("name"))
+			})
+			continue
+		}
+		mux.HandleFunc("GET /"+c, func(w http.ResponseWriter, r *http.Request) { serve(w, r, c) })
+	}
+}
 
 func RunRelay(port string) error {
 	if port == "" {
@@ -71,55 +154,11 @@ func relayMux() *http.ServeMux {
 	mux.HandleFunc("GET /rv/{code}/{role}", func(w http.ResponseWriter, r *http.Request) {
 		rv.HandleWS(w, r, r.PathValue("code"), r.PathValue("role"))
 	})
-	// The page's guard for its own scripts (web/reload.js): at a fixed path,
-	// unhashed, so it loads even when the build the page names is gone.
-	mux.HandleFunc("GET /reload.js", func(w http.ResponseWriter, r *http.Request) {
-		data, err := webIndex.ReadFile("web/reload.js")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		writeEmbedded(w, r, "web/reload.js", data)
-	})
-	// The phone-alert service worker. Served so the page can register it here
-	// too; subscribing still needs a relay with push keys (the hosted one), and
-	// the page says so rather than failing silently.
-	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) {
-		data, err := webIndex.ReadFile("web/sw.js")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store, must-revalidate")
-		writeEmbedded(w, r, "web/sw.js", data)
-	})
-	// The app manifest and its icons: what lets a browser install the viewer
-	// as an app rather than a bookmark.
-	mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
-		data, err := webIndex.ReadFile("web/manifest.webmanifest")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/manifest+json")
-		writeEmbedded(w, r, "web/manifest.webmanifest", data)
-	})
-	// Scripts the viewer loads from its own origin (the CPace handshake's
-	// ristretto255). path.Base keeps a request inside the directory.
-	mux.HandleFunc("GET /vendor/{name}", func(w http.ResponseWriter, r *http.Request) {
-		name := "web/vendor/" + path.Base(r.PathValue("name"))
-		data, err := webIndex.ReadFile(name)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		writeEmbedded(w, r, name, data)
-	})
+	// What build.json copies, each at its path. A build.json that cannot be
+	// read serves nothing of it; the page says why.
+	if s, _, err := viewer(); err == nil {
+		serveCopied(mux, s)
+	}
 	// The page's own scripts (internal/viewerbuild): named by their content,
 	// so kept for good — a page names exactly the build it was made with,
 	// and a new build is a new name. As the Worker serves them (_headers).
@@ -140,16 +179,8 @@ func relayMux() *http.ServeMux {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		writeEmbedded(w, r, name, data)
 	})
-	mux.HandleFunc("GET /icons/{name}", func(w http.ResponseWriter, r *http.Request) {
-		data, err := webIndex.ReadFile("web/icons/" + path.Base(r.PathValue("name")))
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write(data)
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	// The page, at / alone: any other path is not found, as at the Worker.
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		page, err := viewerPage()
 		if err != nil {
 			http.Error(w, "web UI unavailable", http.StatusInternalServerError)

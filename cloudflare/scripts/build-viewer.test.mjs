@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { build, name, sri, readSpec, MAX_SCRIPT } from "./build-viewer.mjs";
+import { build, name, sri, readSpec, MAX_SCRIPT, MAX_TOTAL, LIVE } from "./build-viewer.mjs";
 
 const SPEC = readFileSync(new URL("../../internal/client/web/build.json", import.meta.url), "utf8");
 
@@ -24,8 +24,10 @@ function web(app = "console.log('one')\n") {
   for (const sub of ["icons", "vendor"]) { mkdirSync(join(d, sub)); writeFileSync(join(d, sub, "x"), "x"); }
   return d;
 }
-const out = () => mkdtempSync(join(tmpdir(), "out-"));
+// out: a new ./public, as the tree has it (_headers alone).
+const out = () => { const d = join(mkdtempSync(join(tmpdir(), "cf-")), "public"); mkdirSync(d); writeFileSync(join(d, "_headers"), "/*\n"); return d; };
 const lineOf = (app) => [name("header", Buffer.from("fit()\n")), name("app", Buffer.from(app))].join(" ");
+const other = "https://live.example";
 
 // A live Worker: its builds.txt and scripts, as files by path.
 function live(files) {
@@ -48,21 +50,37 @@ function liveOf(apps, extra = {}) {
   }
   return live(files);
 }
+const scripts = (o) => readdirSync(join(o, "assets")).filter((f) => f.endsWith(".js")).sort();
 
 test("each script is named by its content and its tag stamped with its SRI", async () => {
   const o = out();
-  const r = await build({ web: web(), out: o });
+  const r = await build({ web: web(), out: o, dev: true });
   const html = readFileSync(join(o, "index.html"), "utf8");
   const js = Buffer.from("console.log('one')\n");
   assert.ok(html.includes(`<script src="/assets/${name("app", js)}" integrity="${sri(js)}" crossorigin="anonymous"></script>`));
   assert.ok(!html.includes("data-build"));
   assert.equal(readFileSync(join(o, "assets", name("app", js)), "utf8"), "console.log('one')\n");
   assert.equal(readFileSync(join(o, "assets", "builds.txt"), "utf8"), r.build + "\n");
-  assert.ok(existsSync(join(o, "sw.js")) && existsSync(join(o, "icons", "x")) && existsSync(join(o, "vendor", "x")));
+  assert.ok(existsSync(join(o, "sw.js")) && existsSync(join(o, "icons", "x")) && existsSync(join(o, "vendor", "x")) && existsSync(join(o, "_headers")));
 });
 
-test("a rule this build does not know is refused", () => {
-  for (const [from, to] of [['"sha384"', '"sha256"'], ["{sha256:16}", "{sha256:12}"], ['"keep": 3', '"keep": 0']]) {
+test("the page is stamped as its bytes, not as text", async () => {
+  const w = web("a('$&$1')\n");
+  writeFileSync(join(w, "index.html"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("<html>"), Buffer.from([0xe9, 0xff]), Buffer.from('\r\n<script data-build="header"></script>\r\n<script data-build="app"></script>\r\n')]));
+  const o = out();
+  await build({ web: w, out: o, dev: true });
+  const html = readFileSync(join(o, "index.html"));
+  assert.deepEqual([...html.subarray(0, 11)], [0xef, 0xbb, 0xbf, ...Buffer.from("<html>"), 0xe9, 0xff]);
+  assert.ok(html.includes(`/assets/${name("app", Buffer.from("a('$&$1')\n"))}"`));
+});
+
+test("a rule or a key this build does not know is refused", () => {
+  for (const [from, to] of [
+    ['"sha384"', '"sha256"'], ["{sha256:16}", "{sha256:12}"], ['"keep": 3', '"keep": 0'],
+    ['"version": 1', '"version": 2'], ['"keep": 3', '"keep": 3, "minify": true'],
+    ['"header", "app"', '"Header", "app"'], ['"sw.js"', '"../sw.js"'], ['"sw.js"', '"index.html"'], ['"sw.js"', '"assets/x.js"'],
+  ]) {
+    assert.ok(SPEC.includes(from), from);
     assert.throws(() => readSpec(SPEC.replace(from, to)), undefined, to);
   }
 });
@@ -70,55 +88,109 @@ test("a rule this build does not know is refused", () => {
 test("a live Worker's newest builds are kept, at most keep, each checked against its name", async () => {
   const o = out();
   const { fetchFn } = liveOf(["v4\n", "v3\n", "v2\n", "v1\n"]);
-  const r = await build({ web: web("v5\n"), out: o, previous: "https://live.example", fetchFn });
+  const r = await build({ web: web("v5\n"), out: o, previous: other, otherOrigin: true, fetchFn });
   // keep 3: this one and the live list's two newest — never v2 nor v1.
   assert.deepEqual(r.kept, [lineOf("v4\n"), lineOf("v3\n")]);
   const listed = readFileSync(join(o, "assets", "builds.txt"), "utf8").trim().split("\n");
   assert.deepEqual(listed, [lineOf("v5\n"), lineOf("v4\n"), lineOf("v3\n")]);
-  const scripts = readdirSync(join(o, "assets")).filter((f) => f.endsWith(".js")).sort();
-  assert.deepEqual(scripts, [...new Set(listed.join(" ").split(" "))].sort());
-  // A later run (wrangler's [build]) keeps what this one fetched.
+  assert.deepEqual(scripts(o), [...new Set(listed.join(" ").split(" "))].sort());
+  // The deploy's [build] after it serves what it kept, for this build.
   const again = await build({ web: web("v5\n"), out: o });
   assert.deepEqual(again.kept, [lineOf("v4\n"), lineOf("v3\n")]);
+  assert.deepEqual(scripts(o), [...new Set(listed.join(" ").split(" "))].sort());
 });
 
 test("the live list's newest three only: a live list of the same build and older ones", async () => {
   const { fetchFn, asked } = liveOf(["v5\n", "v4\n", "v3\n", "v2\n"]);
-  const r = await build({ web: web("v5\n"), out: out(), previous: "https://live.example", fetchFn });
+  const r = await build({ web: web("v5\n"), out: out(), previous: other, otherOrigin: true, fetchFn });
   assert.deepEqual(r.kept, [lineOf("v4\n"), lineOf("v3\n")]);
   assert.ok(!asked.includes("/assets/" + name("app", Buffer.from("v2\n"))), "fetched past the newest three");
+});
+
+// A plain `wrangler deploy` after a wrangler dev of another tree, or with no
+// --previous run at all, deploys nothing that run left behind: it fails.
+test("a deploy's build without a --previous run for this build fails, and never ships what a dev run left", async () => {
+  const o = out();
+  await build({ web: web("/* a branch's app.js */\n"), out: o, dev: true });
+  await assert.rejects(build({ web: web("main\n"), out: o }), /--previous/);
+  const { fetchFn } = liveOf(["v4\n"]);
+  await build({ web: web("v5\n"), out: o, previous: other, otherOrigin: true, fetchFn });
+  // A dev run of a branch, then the deploy's [build] of the tree --previous ran for.
+  await build({ web: web("/* a branch's app.js */\n"), out: o, dev: true });
+  const r = await build({ web: web("v5\n"), out: o });
+  assert.deepEqual(r.kept, [lineOf("v4\n")]);
+  assert.deepEqual(scripts(o), [name("app", Buffer.from("v4\n")), name("app", Buffer.from("v5\n")), name("header", Buffer.from("fit()\n"))].sort());
+  // A tree --previous did not run for.
+  await assert.rejects(build({ web: web("v6\n"), out: o }), /run --previous again/);
+  // --first-deploy keeps nothing, and says so for the [build] after it.
+  const f = out();
+  assert.deepEqual((await build({ web: web("v5\n"), out: f, firstDeploy: true })).kept, []);
+  assert.deepEqual((await build({ web: web("v5\n"), out: f })).kept, []);
+});
+
+test("a kept file that was changed fails the deploy", async () => {
+  const o = out();
+  const { fetchFn } = liveOf(["v4\n"]);
+  await build({ web: web("v5\n"), out: o, previous: other, otherOrigin: true, fetchFn });
+  writeFileSync(join(o + ".kept", "assets", name("app", Buffer.from("v4\n"))), "tampered\n");
+  await assert.rejects(build({ web: web("v5\n"), out: o }), /not the one its name says/);
+});
+
+test("--previous reads only the live Worker, unless --other-origin", async () => {
+  const { fetchFn, asked } = liveOf(["v4\n"]);
+  await assert.rejects(build({ web: web("v5\n"), out: out(), previous: other, fetchFn }), /--other-origin/);
+  assert.deepEqual(asked, []);
+  const r = await build({ web: web("v5\n"), out: out(), previous: LIVE, fetchFn });
+  assert.deepEqual(r.kept, [lineOf("v4\n")]);
+  await assert.rejects(build({ web: web(), out: out(), previous: "http://live.example", otherOrigin: true, fetchFn }), /https/);
+});
+
+test("a live list that is not build.json's scripts in order fails the deploy", async () => {
+  const evil = Buffer.from("document.title='pwned'\n");
+  const h = name("header", Buffer.from("fit()\n"));
+  for (const line of [name("x", evil), `${name("app", evil)} ${h}`, `${h} ${name("app", evil)} ${name("app", evil)}`, `${h}  ${name("app", evil)}`, "../../etc/passwd"]) {
+    const { fetchFn } = live({ "/assets/builds.txt": line + "\n", ["/assets/" + name("x", evil)]: evil, ["/assets/" + name("app", evil)]: evil, ["/assets/" + h]: "fit()\n" });
+    await assert.rejects(build({ web: web(), out: out(), previous: other, otherOrigin: true, fetchFn }), /not one build of header app/, line);
+  }
 });
 
 test("a live script whose content is not its name's fails the deploy", async () => {
   const p = "/assets/" + name("app", Buffer.from("v4\n"));
   const h = "/assets/" + name("header", Buffer.from("fit()\n"));
   const { fetchFn } = live({ "/assets/builds.txt": lineOf("v4\n") + "\n", [h]: "fit()\n", [p]: "something else\n" });
-  await assert.rejects(build({ web: web("v5\n"), out: out(), previous: "https://live.example", fetchFn }), /not the one its name says/);
+  await assert.rejects(build({ web: web("v5\n"), out: out(), previous: other, otherOrigin: true, fetchFn }), /not the one its name says/);
 });
 
-test("a live script past the cap, or a list naming what is not a script, fails the deploy", async () => {
+test("a live script past its cap, or builds past the total, fail the deploy", async () => {
+  const h = name("header", Buffer.from("fit()\n"));
   const big = "x".repeat(MAX_SCRIPT + 1);
   const n = name("app", Buffer.from(big));
-  const { fetchFn } = live({ "/assets/builds.txt": n + "\n", ["/assets/" + n]: big });
-  await assert.rejects(build({ web: web(), out: out(), previous: "https://live.example", fetchFn }), /more than/);
-  const odd = live({ "/assets/builds.txt": "../../etc/passwd\n" });
-  await assert.rejects(build({ web: web(), out: out(), previous: "https://live.example", fetchFn: odd.fetchFn }), /not a script/);
+  const one = live({ "/assets/builds.txt": `${h} ${n}\n`, ["/assets/" + h]: "fit()\n", ["/assets/" + n]: big });
+  await assert.rejects(build({ web: web(), out: out(), previous: other, otherOrigin: true, fetchFn: one.fetchFn }), /more than/);
+  // Two builds, each script under its cap, together past the total.
+  const [h1, a1, h2, a2] = ["h", "a", "g", "b"].map((c) => c.repeat(MAX_SCRIPT - 1));
+  const files = { "/assets/builds.txt": `${name("header", Buffer.from(h1))} ${name("app", Buffer.from(a1))}\n${name("header", Buffer.from(h2))} ${name("app", Buffer.from(a2))}\n` };
+  for (const [sc, v] of [["header", h1], ["app", a1], ["header", h2], ["app", a2]]) files["/assets/" + name(sc, Buffer.from(v))] = v;
+  assert.ok(4 * (MAX_SCRIPT - 1) > MAX_TOTAL);
+  await assert.rejects(build({ web: web(), out: out(), previous: other, otherOrigin: true, fetchFn: live(files).fetchFn }), /builds are more than/);
 });
 
 test("a deploy that cannot read the live builds fails, unless it is the first", async () => {
   const none = live({});
-  await assert.rejects(build({ web: web(), out: out(), previous: "https://live.example", fetchFn: none.fetchFn }), /--first-deploy/);
-  const r = await build({ web: web(), out: out(), previous: "https://live.example", firstDeploy: true, fetchFn: none.fetchFn });
+  await assert.rejects(build({ web: web(), out: out(), previous: other, otherOrigin: true, fetchFn: none.fetchFn }), /--first-deploy/);
+  const r = await build({ web: web(), out: out(), previous: other, otherOrigin: true, firstDeploy: true, fetchFn: none.fetchFn });
   assert.deepEqual(r.kept, []);
-  await assert.rejects(build({ web: web(), out: out(), previous: "http://live.example", fetchFn: none.fetchFn }), /https/);
 });
 
-test("a kept build whose file was changed is dropped, never served", async () => {
+test("each run empties ./public but _headers, so a file no longer built is no longer deployed", async () => {
   const o = out();
-  const { fetchFn } = liveOf(["v4\n"]);
-  await build({ web: web("v5\n"), out: o, previous: "https://live.example", fetchFn });
-  writeFileSync(join(o, "assets", name("app", Buffer.from("v4\n"))), "tampered\n");
-  const r = await build({ web: web("v5\n"), out: o });
-  assert.deepEqual(r.kept, []);
-  assert.ok(!existsSync(join(o, "assets", name("app", Buffer.from("v4\n")))));
+  writeFileSync(join(o, "old.html"), "x");
+  mkdirSync(join(o, "gone"));
+  await build({ web: web(), out: o, dev: true });
+  assert.ok(!existsSync(join(o, "old.html")) && !existsSync(join(o, "gone")) && existsSync(join(o, "_headers")));
+  // Never a directory it did not make.
+  const d = mkdtempSync(join(tmpdir(), "not-"));
+  writeFileSync(join(d, "keep.txt"), "x");
+  await assert.rejects(build({ web: web(), out: d, dev: true }), /not a directory this build made/);
+  assert.ok(existsSync(join(d, "keep.txt")));
 });

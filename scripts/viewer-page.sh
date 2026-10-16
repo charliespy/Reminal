@@ -12,5 +12,5 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$(mktemp -d)
 docker run --rm -v "$ROOT":/r:ro -v "$OUT":/o "${VIEWER_PAGE_IMAGE:-node:22-bookworm-slim}" \
-  node /r/cloudflare/scripts/build-viewer.mjs --web /r/internal/client/web --out /o >&2
+  node /r/cloudflare/scripts/build-viewer.mjs --dev --web /r/internal/client/web --out /o >&2
 echo "$OUT"
