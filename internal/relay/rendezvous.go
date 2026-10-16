@@ -61,6 +61,15 @@ func (z *Rendezvous) HandleWS(w http.ResponseWriter, req *http.Request, code, ro
 		b, _ := json.Marshal(map[string]string{"type": "error", "error": reason})
 		_ = ws.WriteMessage(websocket.TextMessage, b)
 		_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(closeCode, reason), time.Now().Add(time.Second))
+		// Read what the client already sent until it closes too. Closing with
+		// it unread resets the connection, and on Windows the reset discards
+		// the reason above before the client reads it.
+		_ = ws.SetReadDeadline(time.Now().Add(time.Second))
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				break
+			}
+		}
 		_ = ws.Close()
 	}
 
