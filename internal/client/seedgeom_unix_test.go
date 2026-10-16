@@ -25,7 +25,7 @@ func TestInitScreenSeedsGeometryFromPTYOnResume(t *testing.T) {
 		t.Fatalf("setsize: %v", err)
 	}
 
-	a := &Agent{buf: newScrollback(scrollbackBytes), term: ipty.Attach(ptmx)}
+	a := &Agent{buf: newScrollback(scrollbackBytes), term: ipty.Attach(ptmx, 0)}
 	a.initScreen()
 	defer a.stopAttention() // before the PTY's closes above: deferred calls run last-first
 

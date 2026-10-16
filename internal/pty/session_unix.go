@@ -21,6 +21,11 @@ import (
 type Session struct {
 	ptmx *os.File
 	cmd  *exec.Cmd
+	// shell is the shell's pid when this Session took over a PTY from a
+	// hot-restart (cmd is nil then): the shell is still this process's
+	// child, the exec kept the pid, and the old image passed it along.
+	// 0 when it wasn't passed (restarted by an older binary).
+	shell int
 }
 
 func Start(shell string, env ...string) (*Session, error) {
@@ -52,9 +57,10 @@ func Start(shell string, env ...string) (*Session, error) {
 // across Exec and its controlling terminal — the slave side of this
 // PTY — is untouched. cmd is left nil; the new process didn't spawn
 // the shell so there's no Cmd to Wait on. EOF on the master fd
-// signals shell exit instead.
-func Attach(ptmx *os.File) *Session {
-	return &Session{ptmx: ptmx, cmd: nil}
+// signals shell exit instead. shellPid is the shell's pid as the old image
+// knew it, or 0 if it didn't say.
+func Attach(ptmx *os.File, shellPid int) *Session {
+	return &Session{ptmx: ptmx, cmd: nil, shell: shellPid}
 }
 
 func (s *Session) Read(p []byte) (int, error) {
@@ -98,19 +104,32 @@ func (s *Session) Fd() uintptr {
 // Pid returns a PID representing what's running in the session, used to read
 // the live working directory for `reminal list`.
 //
-// When we spawned the shell we have its PID directly. After a hot-restart we
-// inherited the PTY master but not the child, so we fall back to the terminal's
-// foreground process group (TIOCGPGRP on the master) — which also has the nice
-// property of pointing at whatever is running in the foreground (e.g. an editor
-// or `claude`), so the reported cwd tracks that. 0 if neither is available.
+// When we spawned the shell we have its PID directly, and after a hot-restart
+// the old image passes it along (ShellPid). Only when it didn't (restarted by
+// an older binary) do we fall back to the terminal's foreground process group
+// (TIOCGPGRP on the master), which is the shell only while it is at its
+// prompt. 0 if neither is available.
 func (s *Session) Pid() int {
-	if s.cmd != nil && s.cmd.Process != nil {
-		return s.cmd.Process.Pid
+	if pid := s.ShellPid(); pid > 0 {
+		return pid
 	}
 	if s.ptmx != nil {
 		if pgrp, err := unix.IoctlGetInt(int(s.ptmx.Fd()), unix.TIOCGPGRP); err == nil && pgrp > 0 {
 			return pgrp
 		}
+	}
+	return 0
+}
+
+// ShellPid is the session's shell's pid when it is known for certain: we
+// spawned it, or a hot-restart passed it along and it is still running. 0
+// otherwise. Unlike Pid it never guesses, so it is what a restart passes on.
+func (s *Session) ShellPid() int {
+	if s.cmd != nil && s.cmd.Process != nil {
+		return s.cmd.Process.Pid
+	}
+	if s.shell > 0 && unix.Kill(s.shell, 0) == nil {
+		return s.shell
 	}
 	return 0
 }

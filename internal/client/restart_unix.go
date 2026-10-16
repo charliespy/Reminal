@@ -82,6 +82,11 @@ const (
 	// background session came back believing it was foreground: listed as
 	// such, and printing host-terminal chrome at a terminal it doesn't have.
 	envResumeHeadless = "REMINAL_RESUME_HEADLESS"
+	// envResumeShellPID is the shell's pid. The exec keeps it as our child,
+	// but nothing in the new image can tell it from whatever else holds the
+	// terminal: without it, a wrapper script named bash in front (say, one
+	// that starts an agent) read as the shell at its prompt.
+	envResumeShellPID = "REMINAL_RESUME_SHELL_PID"
 )
 
 // LoadResumeState reads REMINAL_RESUME=1 + the surrounding env vars
@@ -111,6 +116,7 @@ func LoadResumeState() (*ResumeState, error) {
 	}
 	startedAtUnix, _ := strconv.ParseInt(os.Getenv(envResumeStartedAt), 10, 64)
 	startedAt := time.Unix(startedAtUnix, 0)
+	shellPid, _ := strconv.Atoi(os.Getenv(envResumeShellPID)) // absent from an older binary: 0
 	if startedAtUnix == 0 {
 		startedAt = time.Now()
 	}
@@ -127,7 +133,7 @@ func LoadResumeState() (*ResumeState, error) {
 		Token:     token,
 		StartedAt: startedAt,
 		Headless:  os.Getenv(envResumeHeadless) == "1",
-		PTY:       pty.Attach(ptyFile),
+		PTY:       pty.Attach(ptyFile, shellPid),
 		Dump:      dump,
 	}, nil
 }
@@ -136,7 +142,7 @@ func scrubUnixResumeEnv() {
 	for _, k := range []string{
 		envResume, envResumeSessionID, envResumePIN, envResumePinHash,
 		envResumeToken, envResumePTYFD, envResumeStartedAt, envResumeHeadless,
-		envResumeScrollback, envResumeScrollbackKey,
+		envResumeScrollback, envResumeScrollbackKey, envResumeShellPID,
 	} {
 		_ = os.Unsetenv(k)
 	}
@@ -218,6 +224,7 @@ func (a *Agent) executeRestart() error {
 		envResumePTYFD+"="+strconv.Itoa(ptyFD),
 		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
 		envResumeHeadless+"="+headlessEnv,
+		envResumeShellPID+"="+strconv.Itoa(a.term.ShellPid()),
 	)
 	env = append(env, dumpEnv...)
 
