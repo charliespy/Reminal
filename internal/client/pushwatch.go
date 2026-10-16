@@ -281,35 +281,25 @@ func runPushWatcher(stop <-chan struct{}) {
 
 // sendBound sends one alert to e's phone with the best token it has: a new
 // one first (kept if the relay takes it, dropped if it is not this
-// machine's), then the phone's token (dropped if the relay no longer takes
-// it), and, while the relay still forwards them, untokened. So a token that
-// is not good, or a clock the relay disagrees with, never costs the phone
-// an alert it would have got without tokens.
+// machine's), then the phone's token. One the relay no longer takes is
+// dropped and that alert is lost: the phone then has no token here, so the
+// page offers Renew alerts on this phone and doctor says so. A phone with
+// none is sent nothing (errPushRenew).
 func sendBound(e pushEntry, m pushMessage) error {
-	fallback := func(err error) bool {
-		return (errors.Is(err, errPushUnbound) || errors.Is(err, errPushClock)) && time.Now().Before(pushUntokenedUntil)
-	}
 	if e.NewToken != "" {
 		err := sendPush(e.Sub, e.NewToken, m)
 		if err == nil {
 			_ = promotePushToken(e.Sub.Endpoint, e.NewToken)
 			return nil
 		}
-		if errors.Is(err, errPushUnbound) {
-			_ = dropNewPushToken(e.Sub.Endpoint, e.NewToken)
-		} else if !errors.Is(err, errPushClock) {
+		if !errors.Is(err, errPushUnbound) {
 			return err
 		}
+		_ = dropNewPushToken(e.Sub.Endpoint, e.NewToken)
 	}
 	err := sendPush(e.Sub, e.Token, m)
-	if e.Token == "" {
-		return err
-	}
 	if errors.Is(err, errPushUnbound) {
 		_ = clearPushToken(e.Sub.Endpoint, e.Token)
-	}
-	if fallback(err) {
-		return sendPush(e.Sub, "", m)
 	}
 	return err
 }

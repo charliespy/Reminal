@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -109,8 +110,7 @@ func TestPushStoreWritersInTwoProcessesLoseNothing(t *testing.T) {
 	}
 }
 
-// reminal doctor's Phone alerts line: phones to renew (before the date, and
-// after it), none counted of an owner removed from this machine, nothing to
+// reminal doctor's Phone alerts line: phones to renew, none counted of an owner removed from this machine, nothing to
 // renew where the relay does not bind alerts (an older one), and a clock
 // the relay would refuse bound alerts for.
 func TestDoctorSaysHowPhoneAlertsStand(t *testing.T) {
@@ -127,8 +127,6 @@ func TestDoctorSaysHowPhoneAlertsStand(t *testing.T) {
 	}))
 	defer srv.Close()
 	t.Setenv("REMINAL_WEB", srv.URL)
-	defer func(d time.Time) { pushUntokenedUntil = d }(pushUntokenedUntil)
-	pushUntokenedUntil = time.Now().Add(30 * 24 * time.Hour)
 	expect := func(name string, want level, words string) {
 		t.Helper()
 		lvl, msg := checkPhoneAlerts()
@@ -144,12 +142,10 @@ func TestDoctorSaysHowPhoneAlertsStand(t *testing.T) {
 	}
 	expect("a removed owner's phone", levelOK, "no phones")
 	_, mine := enrolledPhone(t, "https://fcm.googleapis.com/fcm/send/mine")
-	expect("before the date", levelWarn, "1 phone(s) need alerts renewed before")
+	expect("a phone to renew", levelWarn, "1 phone(s) get no alerts from this machine until renewed")
 	binds = false
 	expect("an older relay", levelOK, "this relay does not bind alerts")
 	binds = true
-	pushUntokenedUntil = time.Now().Add(-time.Hour)
-	expect("after the date", levelWarn, "have not got alerts from this machine since")
 	if err := setPushToken(mine.Endpoint, testPushToken); err != nil {
 		t.Fatal(err)
 	}
@@ -205,5 +201,56 @@ func TestAPhonesAlertsAreThisMachines(t *testing.T) {
 	raw, _ = os.ReadFile(path)
 	if !strings.Contains(string(raw), `"machine": "`+me+`"`) {
 		t.Errorf("not stamped with this machine: %s", raw)
+	}
+}
+
+// A machine whose clock is ten minutes off the relay's: its first alert is
+// refused for its time, and sent again at once on the relay's time as that
+// refusal gives it; the next goes right first, on the time learnt.
+func TestAnAlertFromAMachineWhoseClockIsOffStillGoes(t *testing.T) {
+	isolateHome(t)
+	defer func() { relayClock.Lock(); relayClock.off = 0; relayClock.Unlock() }()
+	ahead := 10 * time.Minute
+	var tries []int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		now := time.Now().Add(ahead)
+		ts := int64(body["ts"].(float64))
+		tries = append(tries, ts-now.Unix())
+		w.Header().Set("Date", now.UTC().Format(http.TimeFormat))
+		if d := now.Unix() - ts; d > 120 || d < -120 {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "time", "code": "clock", "now": now.UnixMilli()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]int{"status": 201})
+	}))
+	defer srv.Close()
+	old := pushURL
+	pushURL = func() string { return srv.URL + "/push" }
+	defer func() { pushURL = old }()
+	sub, _, _ := newTestSub(t, "https://fcm.googleapis.com/fcm/send/x")
+	if err := sendPush(sub, testPushToken, pushMessage{Title: "t"}); err != nil {
+		t.Fatalf("the first alert: %v", err)
+	}
+	if len(tries) != 2 {
+		t.Fatalf("%d tries, want 2 (refused for its time, then on the relay's)", len(tries))
+	}
+	tries = nil
+	if err := sendPush(sub, testPushToken, pushMessage{Title: "t"}); err != nil || len(tries) != 1 {
+		t.Errorf("the next alert: %v, %d tries (want 1)", err, len(tries))
+	}
+	// A relay that keeps refusing the time: said, not sent a third time.
+	ahead = 0
+	relayClock.Lock()
+	relayClock.off = time.Hour
+	relayClock.Unlock()
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "time", "code": "clock"})
+	})
+	if err := sendPush(sub, testPushToken, pushMessage{Title: "t"}); !errors.Is(err, errPushClock) {
+		t.Errorf("a time always refused: %v, want errPushClock", err)
 	}
 }

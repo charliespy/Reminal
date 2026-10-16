@@ -119,7 +119,7 @@ func TestSendPushMapsGone(t *testing.T) {
 		old := pushURL
 		pushURL = func() string { return srv.URL + "/push" }
 		sub, _, _ := newTestSub(t, "https://fcm.googleapis.com/fcm/send/x")
-		err := sendPush(sub, "", pushMessage{Title: "t", Body: "b"})
+		err := sendPush(sub, testPushToken, pushMessage{Title: "t", Body: "b"})
 		pushURL = old
 		srv.Close()
 		switch {

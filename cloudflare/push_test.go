@@ -11,10 +11,10 @@ import (
 // Alerts are bound to the machine that registered them: the token reaches
 // only the phone (sealed to its subscription), and an alert goes through
 // only with that token and a fresh signature by the machine's key — once.
-// Without a token, until UNTOKENED_UNTIL; after it, refused.
+// Without a token: refused ("renew"), in words an older machine logs as they are.
 func TestAlertsAreBoundToTheMachineThatRegisteredThem(t *testing.T) {
 	got := runWorkerTS(t, `
-import { handlePush, handlePushToken, alertSigned, UNTOKENED_UNTIL } from "SRC/push.ts";
+import { handlePush, handlePushToken, alertSigned } from "SRC/push.ts";
 const out = [];
 const say = (k, v) => out.push(k + " " + v);
 const enc = new TextEncoder(), dec = new TextDecoder();
@@ -96,10 +96,9 @@ r = await post("/push", await alert(mine, {}, Date.now() + 1000));
 say("after-refused", r.status);
 // Untokened: as an older machine sends.
 const old = { endpoint, payload: b64(payload) };
-r = await post("/push", old, UNTOKENED_UNTIL - 1000);
-say("untokened-before", r.status);
-r = await post("/push", old, UNTOKENED_UNTIL);
-say("untokened-after", r.status);
+r = await post("/push", old);
+const ub = await r.json();
+say("untokened", r.status + " " + ub.code + " " + /update reminal on this machine to keep phone alerts/.test(ub.error));
 // Asking for tokens: three in ten minutes for one subscription (the two
 // above count), then refused.
 r = await post("/push/token", { ...sub, machine: mine.pub });
@@ -118,14 +117,19 @@ const sp = [];
 for (const e of spellings) sp.push((await post("/push/token", { ...sub, endpoint: e, machine: mine.pub })).status);
 for (const e of spellings) sp.push((await post("/push", { ...(await alert(mine)), endpoint: e })).status);
 say("spellings", sp.join(",") + " sent " + (sent.length - n2));
-// A relay without PUSH_TOKEN_KEY checks no token: a tokened alert goes as an
-// untokened one before the date, and after it the relay says it is not set
-// up (not "unbound", which would make machines drop a good token).
-const keyless = (body, now) => handlePush(new Request("https://live.reminal.app/push", { method: "POST", body: JSON.stringify(body), headers: { "cf-connecting-ip": "198.51.100.1" } }), { ...env, PUSH_TOKEN_KEY: undefined }, now);
-r = await keyless(await alert(mine), UNTOKENED_UNTIL - 1000);
-const kb = r.status;
-r = await keyless(await alert(mine), UNTOKENED_UNTIL);
+// A relay without PUSH_TOKEN_KEY can check no token: it forwards nothing,
+// and says it is not set up (not "unbound", which would make machines drop
+// a good token).
+const keyless = (body) => handlePush(new Request("https://live.reminal.app/push", { method: "POST", body: JSON.stringify(body), headers: { "cf-connecting-ip": "198.51.100.1" } }), { ...env, PUSH_TOKEN_KEY: undefined });
+r = await keyless(await alert(mine));
+const kb = r.status + " " + ((await r.json()).code ?? "-");
+r = await keyless(old);
 say("keyless", kb + " " + r.status + " " + ((await r.json()).code ?? "-"));
+// A time off the relay's: refused with the relay's own, to set the clock by.
+const now0 = Date.now();
+r = await post("/push", await alert(mine, {}, now0 - 600 * 1000), now0);
+const cb = await r.json();
+say("clock", r.status + " " + cb.code + " " + (cb.now === now0));
 console.log(out.join("\n"));
 `)
 	for _, want := range []string{
@@ -139,14 +143,14 @@ console.log(out.join("\n"));
 		"stale 403",
 		"bad-sig 403",
 		"after-refused 200",
-		"untokened-before 200",
-		"untokened-after 403",
+		"untokened 403 renew true",
 		"ask-3 200",
 		"ask-4 429",
 		"ask-other 200",
 		"ask-bad-machine 400",
 		"spellings 400,400,400,400,400,400,400,400 sent 0",
-		"keyless 200 501 -",
+		"keyless 501 - 501 -",
+		"clock 403 clock true",
 	} {
 		if !strings.Contains(got, want+"\n") && !strings.HasSuffix(strings.TrimSpace(got), want) {
 			t.Errorf("want %q in:\n%s", want, got)

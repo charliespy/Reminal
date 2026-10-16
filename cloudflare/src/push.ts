@@ -31,10 +31,10 @@ export interface PushEnv extends LimiterEnv {
 // carries the token and a fresh signature by that machine's key over what
 // it sends. The relay keeps nothing: the token is a MAC over what it binds.
 //
-// Alerts without a token (a machine on an older reminal, or a phone that
-// subscribed before tokens) are forwarded until UNTOKENED_UNTIL; after it,
-// refused, and the page offers to renew them.
-export const UNTOKENED_UNTIL = Date.UTC(2026, 11, 15);
+// An alert without a token (a machine on an older reminal, or a phone that
+// subscribed before tokens) is refused ("renew"), in words an older
+// machine's log carries as they are: update reminal, and renew alerts from
+// the phone, which the page then offers.
 // A token asked for one subscription: few, so asking cannot be used to
 // buzz someone's phone (each ask shows a notification on it).
 const PER_TOKEN_ASK = { calls: 3, period: 600 };
@@ -157,7 +157,7 @@ async function hmac(env: PushEnv, msg: string): Promise<string> {
 
 // tokenFor binds an alert subscription to the machine that may send to it.
 // Its issued-at is in it, so a later rule can retire old ones.
-async function tokenFor(env: PushEnv, endpoint: string, machine: string, iat: number): Promise<string> {
+export async function tokenFor(env: PushEnv, endpoint: string, machine: string, iat: number): Promise<string> {
   return "v1." + iat + "." + (await hmac(env, "reminal-push-token\n" + endpoint + "\n" + machine + "\n" + iat));
 }
 
@@ -280,7 +280,9 @@ export async function handlePushToken(request: Request, env: PushEnv): Promise<R
 // token, machine, ts, sig}
 // Answers {status} — the push service's own status — so the machine can tell
 // "delivered" from "this phone is gone, forget it" (404/410). Without a
-// token (until UNTOKENED_UNTIL): forwarded as before.
+// token: refused ("renew"). An alert whose time is off is refused with the
+// relay's own time (now, ms), so the machine can set its offset and send
+// it again.
 export async function handlePush(request: Request, env: PushEnv, nowMs = Date.now()): Promise<Response> {
   if (request.method !== "POST") return json({ error: "POST only" }, 405);
   if (!env.VAPID_PUBLIC || !env.VAPID_PRIVATE_JWK) return json({ error: "alerts are not set up on this relay" }, 501);
@@ -307,36 +309,34 @@ export async function handlePush(request: Request, env: PushEnv, nowMs = Date.no
   // Checked before anything is counted: an alert that is not the machine's
   // spends none of its subscription's allowance.
   const nowSec = Math.floor(now / 1000);
-  // A relay without PUSH_TOKEN_KEY (not set up yet) checks no token, and
-  // takes the alert as an untokened one.
-  if (req.token !== undefined && env.PUSH_TOKEN_KEY) {
-    const machine = machineKey(req.machine);
-    const ts = typeof req.ts === "number" && Number.isInteger(req.ts) ? req.ts : NaN;
-    if (!machine || !(await tokenGood(env, req.token, ep.href, machine.b64, nowSec))) {
-      return json({ error: "this alert is not bound to this machine; turn alerts on again from the phone", code: "unbound" }, 403);
-    }
-    if (!(Math.abs(nowSec - ts) <= SIG_FRESH)) return json({ error: "this alert's time is off; check this machine's clock", code: "clock" }, 403);
-    let sig: Uint8Array<ArrayBuffer>;
-    try {
-      sig = b64ToBytes(String(req.sig));
-    } catch {
-      return json({ error: "bad signature", code: "unbound" }, 403);
-    }
-    const key = await crypto.subtle.importKey("raw", machine.bytes, { name: "Ed25519" }, false, ["verify"]);
-    const signed = alertSigned(ep.href, hex(await crypto.subtle.digest("SHA-256", payload)), ts);
-    if (sig.length !== 64 || !(await crypto.subtle.verify({ name: "Ed25519" }, key, sig, enc.encode(signed)))) {
-      return json({ error: "bad signature", code: "unbound" }, 403);
-    }
-    // Once: the same signed alert sent again is refused for as long as its
-    // time would pass. Keyed on what was signed, not on the signature's bytes.
-    if (!(await within(env, "push-sig", sigsSeen, b64url(await crypto.subtle.digest("SHA-256", enc.encode(signed))), { calls: 1, period: 2 * SIG_FRESH }))) {
-      return json({ error: "this alert was already sent" }, 409);
-    }
-  } else if (now >= UNTOKENED_UNTIL) {
-    // A relay without PUSH_TOKEN_KEY can check no token: it says so, rather
-    // than calling a good token unbound (machines drop an unbound one).
-    if (!env.PUSH_TOKEN_KEY) return json({ error: "alerts are not set up on this relay" }, 501);
-    return json({ error: "alerts to this phone must be renewed: open reminal on it and turn them on again", code: "renew" }, 403);
+  // A relay without PUSH_TOKEN_KEY can check no token, so it forwards
+  // nothing — and says it is not set up, never that a token is unbound
+  // (machines drop an unbound one).
+  if (!env.PUSH_TOKEN_KEY) return json({ error: "alerts are not set up on this relay" }, 501);
+  if (req.token === undefined) {
+    return json({ error: "phone alerts now need an up-to-date reminal: update reminal on this machine to keep phone alerts, then renew them from the phone", code: "renew" }, 403);
+  }
+  const machine = machineKey(req.machine);
+  const ts = typeof req.ts === "number" && Number.isInteger(req.ts) ? req.ts : NaN;
+  if (!machine || !(await tokenGood(env, req.token, ep.href, machine.b64, nowSec))) {
+    return json({ error: "this alert is not bound to this machine; turn alerts on again from the phone", code: "unbound" }, 403);
+  }
+  if (!(Math.abs(nowSec - ts) <= SIG_FRESH)) return json({ error: "this alert's time is off this relay's", code: "clock", now }, 403);
+  let sig: Uint8Array<ArrayBuffer>;
+  try {
+    sig = b64ToBytes(String(req.sig));
+  } catch {
+    return json({ error: "bad signature", code: "unbound" }, 403);
+  }
+  const key = await crypto.subtle.importKey("raw", machine.bytes, { name: "Ed25519" }, false, ["verify"]);
+  const signed = alertSigned(ep.href, hex(await crypto.subtle.digest("SHA-256", payload)), ts);
+  if (sig.length !== 64 || !(await crypto.subtle.verify({ name: "Ed25519" }, key, sig, enc.encode(signed)))) {
+    return json({ error: "bad signature", code: "unbound" }, 403);
+  }
+  // Once: the same signed alert sent again is refused for as long as its
+  // time would pass. Keyed on what was signed, not on the signature's bytes.
+  if (!(await within(env, "push-sig", sigsSeen, b64url(await crypto.subtle.digest("SHA-256", enc.encode(signed))), { calls: 1, period: 2 * SIG_FRESH }))) {
+    return json({ error: "this alert was already sent" }, 409);
   }
   const caller = addressGroup(request.headers.get("cf-connecting-ip") ?? "");
   if (!(await within(env, "push-caller", callers, caller, PER_CALLER)) ||

@@ -90,13 +90,23 @@ await page.evaluate(async ([KEY, OLD]) => {
   await withOwnedMachines(m => { for (const k of [KEY, OLD]) m[k].alertsSynced = alertWantKey(prefs, m[k]); });
 }, [KEY, OLD]);
 
-// Turned on before tokens: the sheet offers to renew it — only for the
-// machine that takes a token.
+// Turned on before tokens: as soon as such a machine answers (the Machines
+// panel), the page says so, sheet closed, with one tap to renew.
+await page.evaluate(async ([KEY, OLD]) => { const st = await loadOwnedMachines(); await checkAlertRenewFor(KEY, st[KEY]); await checkAlertRenewFor(OLD, st[OLD]); }, [KEY, OLD]);
+const bar = await page.evaluate(() => { const el = document.getElementById('alerts-renew'); return el ? { hidden: el.hidden, text: el.textContent } : null; });
+check(bar && !bar.hidden && /from box need renewing on this device/.test(bar.text) && /Renew alerts on this phone/.test(bar.text) && !/oldbox/.test(bar.text),
+  'the Machines panel asks to renew, sheet closed, for the machine that takes a token', JSON.stringify(bar));
+await page.evaluate(() => document.querySelector('#alerts-renew button').click());
+for (let i = 0; i < 40 && !asked.length; i++) await new Promise(r => setTimeout(r, 100));
+check(asked.length === 1 && asked[0].machine === std(KEY), 'its one tap asks the token for that machine', JSON.stringify(asked));
+asked.length = 0;
+
+// The sheet offers it too — only for the machine that takes a token.
 await page.evaluate(() => openAlerts());
 await page.waitForFunction(() => !!document.querySelector('#al-renew'), null, { timeout: 15000 }).catch(() => {});
 const renewText = await page.evaluate(() => (document.querySelector('.al-renew') || {}).textContent || '');
-check(/box/.test(renewText) && !/oldbox/.test(renewText) && /Renew alerts on this phone/.test(renewText) && /15 Dec 2026|Dec 15, 2026/.test(renewText),
-  'Renew alerts on this phone, for the machine that takes a token, with the date they stop', JSON.stringify(renewText));
+check(/box/.test(renewText) && !/oldbox/.test(renewText) && /Renew alerts on this phone/.test(renewText) && /no alerts from it/.test(renewText),
+  'Renew alerts on this phone, for the machine that takes a token, saying it gets none until then', JSON.stringify(renewText));
 await page.click('#al-renew');
 await page.waitForFunction(() => /Renewing/.test((document.querySelector('.al-msg') || {}).textContent || ''), null, { timeout: 10000 }).catch(() => {});
 check(asked.length === 1 && asked[0].machine === std(KEY) && asked[0].endpoint === 'https://fcm.googleapis.com/fcm/send/phone' && asked[0].p256dh && asked[0].auth,
@@ -109,7 +119,7 @@ const ops = await page.evaluate(() => __ops.filter(o => o.op === 'token'));
 check(ops.length === 1 && ops[0].k === KEY && ops[0].token === TOKEN, 'the kept token is handed to its machine', JSON.stringify(ops));
 check((await page.evaluate(async () => (await (await caches.open('reminal-alert-tokens')).keys()).length)) === 0, 'and no longer kept', 'still kept');
 await page.waitForFunction(() => !document.querySelector('#al-renew'), null, { timeout: 10000 }).catch(() => {});
-check(!(await page.evaluate(() => !!document.querySelector('#al-renew'))), 'Renew goes once the machine has it', 'still offered');
+check(!(await page.evaluate(() => !!document.querySelector('#al-renew'))) && (await page.evaluate(() => document.getElementById('alerts-renew').hidden)), 'Renew goes (sheet and panel) once the machine has it', 'still offered');
 
 // A token its machine refuses (alerts off there) is dropped, not handed on
 // again each time; one that did not reach the machine is kept for later.

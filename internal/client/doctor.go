@@ -89,11 +89,13 @@ func allChecks(currentVersion string) []check {
 }
 
 // checkPhoneAlerts says how this machine's phone alerts stand: phones whose
-// alerts are not yet bound to it (forwarded until pushUntokenedUntil, then
-// not, until each phone renews them — unless the relay is one that does not
-// bind alerts at all, an older self-hosted one), and a clock far enough off
-// the relay's that it refuses bound alerts. Phones of owners removed from
-// this machine are not counted: they get nothing from it anyway.
+// alerts have no token here (turned on before alerts were bound to their
+// machine, or whose token the relay no longer takes) get none until each
+// renews them — unless the relay is one that does not bind alerts at all
+// (an older self-hosted one); and a clock far off the relay's (alerts are
+// sent on the relay's time, so this is said, not a failure). Phones of
+// owners removed from this machine are not counted: they get nothing from
+// it anyway.
 func checkPhoneAlerts() (level, string) {
 	n := pushSubsToRenew()
 	if n < 0 {
@@ -103,17 +105,12 @@ func checkPhoneAlerts() (level, string) {
 	var notes []string
 	lvl := levelOK
 	if n > 0 && binds {
-		phones := fmt.Sprintf("%d phone(s)", n)
 		lvl = levelWarn
-		if time.Now().Before(pushUntokenedUntil) {
-			notes = append(notes, fmt.Sprintf("%s need alerts renewed before %s: open reminal on each and tap Renew alerts on this phone", phones, pushUntokenedUntil.Format("2 Jan 2006")))
-		} else {
-			notes = append(notes, fmt.Sprintf("%s have not got alerts from this machine since %s: open reminal on each and turn alerts on again", phones, pushUntokenedUntil.Format("2 Jan 2006")))
-		}
+		notes = append(notes, fmt.Sprintf("%d phone(s) get no alerts from this machine until renewed: open reminal on each and tap Renew alerts on this phone", n))
 	}
 	if skew > pushClockSlack || skew < -pushClockSlack {
 		lvl = levelWarn
-		notes = append(notes, fmt.Sprintf("this machine's clock is %s off the relay's, so the relay refuses its bound alerts: set the clock right", skew.Round(time.Second).Abs()))
+		notes = append(notes, fmt.Sprintf("this machine's clock is %s off the relay's (its alerts are sent on the relay's time; set the clock right all the same)", skew.Round(time.Second).Abs()))
 	}
 	if len(notes) == 0 {
 		if n > 0 {

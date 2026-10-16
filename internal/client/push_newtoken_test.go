@@ -10,16 +10,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
-// After the date the relay stops forwarding untokened alerts, a new token
-// the relay refuses still costs the phone nothing: that alert goes with the
-// phone's working token, which stays; the refused one is dropped.
-func TestAfterTheGraceARefusedNewTokenStillDelivers(t *testing.T) {
+// The relay forwards no untokened alert, so a new token it refuses must
+// cost the phone nothing: that alert goes with the phone's working token,
+// which stays; the refused one is dropped.
+func TestARefusedNewTokenStillDelivers(t *testing.T) {
 	isolateHome(t)
-	defer func(d time.Time) { pushUntokenedUntil = d }(pushUntokenedUntil)
-	pushUntokenedUntil = time.Now().Add(-time.Hour)
 	sub, _, _ := newTestSub(t, "https://fcm.googleapis.com/fcm/send/a")
 	if err := upsertPushSub(base64.StdEncoding.EncodeToString(make([]byte, 32)), sub, defaultPushRules()); err != nil {
 		t.Fatal(err)

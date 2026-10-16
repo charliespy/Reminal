@@ -170,26 +170,38 @@ console.log(out.join("\n"));
 // one NAT) has room for 600 a minute.
 func TestAnAlertIsCountedPerCallerAndSubscription(t *testing.T) {
 	got := runWorkerTS(t, `
-import { handlePush } from "SRC/push.ts";
+import { handlePush, tokenFor, alertSigned } from "SRC/push.ts";
 const out = [];
 const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
 const jwk = JSON.stringify(await crypto.subtle.exportKey("jwk", kp.privateKey));
-const payload = btoa(String.fromCharCode(...new Uint8Array(120)));
-const body = JSON.stringify({ endpoint: "https://fcm.googleapis.com/fcm/send/abc", payload });
+const payloadBytes = new Uint8Array(120);
+const payload = btoa(String.fromCharCode(...payloadBytes));
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+const sum = hex(await crypto.subtle.digest("SHA-256", payloadBytes));
+// Alerts as a machine sends them: bound (token) and signed, each once.
+const mk = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+const machine = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey("raw", mk.publicKey))));
+const KEY = "k".repeat(48);
+let n = 0;
+const bound = async (endpoint) => {
+  const ts = Math.floor(Date.now() / 1000) - (n++ % 100);
+  const token = await tokenFor({ PUSH_TOKEN_KEY: KEY }, endpoint, machine, ts);
+  const sig = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, mk.privateKey, new TextEncoder().encode(alertSigned(endpoint, sum, ts))))));
+  return JSON.stringify({ endpoint, payload, token, machine, ts, sig });
+};
 const sent = [];
 globalThis.fetch = async (u) => { sent.push(String(u)); return new Response(null, { status: 201 }); };
 for (const deny of ["push-caller:", "push-endpoint:", "none"]) {
   const asked = [];
-  const env = { VAPID_PUBLIC: "x", VAPID_PRIVATE_JWK: jwk, LIMITER: { idFromName: (n) => n, get: (n) => ({ fetch: async () => { asked.push(n); return new Response(JSON.stringify({ success: !n.startsWith(deny) })); } }) } };
-  const r = await handlePush(new Request("https://live.reminal.app/push", { method: "POST", body, headers: { "cf-connecting-ip": "203.0.113.9" } }), env);
-  out.push(deny + " " + r.status + " sent " + sent.length + " asked " + asked.map((a) => a.split(":")[0]).join(","));
+  const env = { VAPID_PUBLIC: "x", VAPID_PRIVATE_JWK: jwk, PUSH_TOKEN_KEY: KEY, LIMITER: { idFromName: (n) => n, get: (n) => ({ fetch: async () => { asked.push(n); return new Response(JSON.stringify({ success: !n.startsWith(deny) })); } }) } };
+  const r = await handlePush(new Request("https://live.reminal.app/push", { method: "POST", body: await bound("https://fcm.googleapis.com/fcm/send/abc"), headers: { "cf-connecting-ip": "203.0.113.9" } }), env);
+  out.push(deny + " " + r.status + " sent " + sent.length + " asked " + asked.map((a) => a.split(":")[0]).filter((a) => a !== "push-sig").join(","));
 }
 // no limiter bound: one address, 600 alerts a minute to as many subscriptions
-const solo = { VAPID_PUBLIC: "x", VAPID_PRIVATE_JWK: jwk };
+const solo = { VAPID_PUBLIC: "x", VAPID_PRIVATE_JWK: jwk, PUSH_TOKEN_KEY: KEY };
 let ok = 0, last = 0;
 for (let i = 0; i < 601; i++) {
-  const b = JSON.stringify({ endpoint: "https://fcm.googleapis.com/fcm/send/s" + i, payload });
-  last = (await handlePush(new Request("https://live.reminal.app/push", { method: "POST", body: b, headers: { "cf-connecting-ip": "198.51.100.8" } }), solo)).status;
+  last = (await handlePush(new Request("https://live.reminal.app/push", { method: "POST", body: await bound("https://fcm.googleapis.com/fcm/send/s" + i), headers: { "cf-connecting-ip": "198.51.100.8" } }), solo)).status;
   if (last !== 429) ok++;
 }
 out.push("one address " + ok + " then " + last);

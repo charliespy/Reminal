@@ -76,8 +76,8 @@ type pushEntry struct {
 	// Token binds this phone's alerts to this machine: the relay sent it to
 	// the phone, and the phone's page handed it here (op "token"). Sent with
 	// each alert, with this machine's signature over it. "" for a phone that
-	// subscribed before tokens: its alerts go untokened until
-	// pushUntokenedUntil, and the page offers to renew it.
+	// subscribed before tokens, or whose token the relay no longer takes: it
+	// is sent nothing until it renews (the page offers to).
 	Token string `json:"token,omitempty"`
 	// NewToken is one handed on that no alert has used yet. It is tried
 	// first, becomes Token once the relay takes an alert with it, and is
@@ -85,10 +85,6 @@ type pushEntry struct {
 	// a token that is not the relay's never costs the phone its alerts.
 	NewToken string `json:"new_token,omitempty"`
 }
-
-// pushUntokenedUntil is when the relay stops forwarding alerts without a
-// token (cloudflare/src/push.ts's UNTOKENED_UNTIL: the same moment).
-var pushUntokenedUntil = time.Date(2026, time.December, 15, 0, 0, 0, 0, time.UTC)
 
 // pushTokenShape is a token as the relay makes it; anything else is refused
 // before it is stored.
