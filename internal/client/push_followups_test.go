@@ -7,11 +7,13 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -154,4 +156,54 @@ func TestDoctorSaysHowPhoneAlertsStand(t *testing.T) {
 	expect("renewed", levelOK, "none to renew")
 	skew = 5 * time.Minute
 	expect("a clock off", levelWarn, "clock is 5m")
+}
+
+// push.json's phones are this machine's: a copy of its home that comes up
+// as another machine (another key — a clone) has none, and each phone asks
+// that machine again; the same machine (a wake, a restore) keeps them. A
+// file from before the machine was recorded is kept, and stamped.
+func TestAPhonesAlertsAreThisMachines(t *testing.T) {
+	home := isolateHome(t)
+	sub, _, _ := newTestSub(t, "https://fcm.googleapis.com/fcm/send/a")
+	if err := upsertPushSub("dev", sub, defaultPushRules()); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".reminal", "push.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subs, _ := loadPushSubs(); len(subs) != 1 {
+		t.Fatalf("the same machine: %d phones, want 1", len(subs))
+	}
+	// The same home under another machine key: none.
+	keyPath, _ := machineKeyPath()
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if subs, _ := loadPushSubs(); len(subs) != 0 {
+		t.Errorf("another machine (another key) has %d of this one's phones", len(subs))
+	}
+	if n := pushSubsToRenew(); n != -1 {
+		t.Errorf("doctor counts %d phones on another machine", n)
+	}
+	// A file written before the machine was recorded: kept, and stamped.
+	var f map[string]any
+	_ = json.Unmarshal(raw, &f)
+	delete(f, "machine")
+	old, _ := json.Marshal(f)
+	if err := os.WriteFile(path, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if subs, _ := loadPushSubs(); len(subs) != 1 {
+		t.Fatalf("an older file: %d phones, want 1", len(subs))
+	}
+	if err := updatePushSubs(func(s []pushEntry) []pushEntry { return s }); err != nil {
+		t.Fatal(err)
+	}
+	me, _ := thisMachine()
+	raw, _ = os.ReadFile(path)
+	if !strings.Contains(string(raw), `"machine": "`+me+`"`) {
+		t.Errorf("not stamped with this machine: %s", raw)
+	}
 }

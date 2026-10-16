@@ -196,6 +196,22 @@ func untokenedPushSubs() int {
 type pushFile struct {
 	Version int         `json:"version"`
 	Subs    []pushEntry `json:"subs"`
+	// Machine is this machine's public key (MachinePub) when the file was
+	// written: the phones are this machine's, not its files'. A copy of the
+	// home that comes up as another machine (another key) reads as having
+	// no phones, whatever made the copy, and each phone asks that machine
+	// again; one that comes back as the same machine keeps them. "" in a
+	// file written before this: kept, and stamped at its next write.
+	Machine string `json:"machine,omitempty"`
+}
+
+// thisMachine is this machine's key as push.json records it.
+func thisMachine() (string, error) {
+	pub, err := MachinePub()
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(pub), nil
 }
 
 // pushStoreMu serialises read-modify-write of push.json within a process,
@@ -231,6 +247,15 @@ func loadPushSubs() ([]pushEntry, error) {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return nil, err
 	}
+	if f.Machine != "" {
+		me, err := thisMachine()
+		if err != nil {
+			return nil, err
+		}
+		if f.Machine != me {
+			return nil, nil // another machine's phones
+		}
+	}
 	return f.Subs, nil
 }
 
@@ -242,7 +267,11 @@ func savePushSubs(subs []pushEntry) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(pushFile{Version: 1, Subs: subs}, "", "  ")
+	me, err := thisMachine()
+	if err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(pushFile{Version: 1, Subs: subs, Machine: me}, "", "  ")
 	if err != nil {
 		return err
 	}
