@@ -66,3 +66,33 @@ func TestRendezvousPairsOnceByCode(t *testing.T) {
 		t.Fatalf("a spent code was offered again: %q", got)
 	}
 }
+
+// A paste sends its first message as soon as it connects. Turned away (a
+// spent or unknown code), it must still read why: the relay may not close
+// with that message unread, or the reset that follows drops the reason
+// before the paste reads it (Windows does).
+func TestRendezvousRejectIsReadable(t *testing.T) {
+	z := NewRendezvous()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /rv/{code}/{role}", func(w http.ResponseWriter, r *http.Request) {
+		z.HandleWS(w, r, r.PathValue("code"), r.PathValue("role"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	for i := 0; i < 20; i++ {
+		c, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/rv/NOSOURCE/paste", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.WriteMessage(websocket.TextMessage, []byte(`{"type":"pake_init","data":"`+strings.Repeat("A", 2000)+`"}`)); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(150 * time.Millisecond) // the relay has answered and closed by now
+		_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		_, b, err := c.ReadMessage()
+		c.Close()
+		if err != nil || !strings.Contains(string(b), "too old or invalid") {
+			t.Fatalf("try %d: the reason was lost: %q, %v", i, b, err)
+		}
+	}
+}
