@@ -121,6 +121,12 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		// login menu, then, a way picked, its sign-in link.
 		"claude":             " Claude Code can be used with your Claude subscription or billed based on API usage through your\n Console account.\n\n Select login method:\n\n ❯ 1. Claude account with subscription · Pro, Max, Team, or Enterprise\n   2. Anthropic Console account · API usage billing\n   3. 3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI",
 		"claude, signing in": " Browser didn't open? Use the url below to sign in (c to copy)\n\n https://claude.com/cai/oauth/authorize?code=true&client_id=x&response_type=code\n\n\n Paste code here if prompted >",
+		// Claude Code 2.1.296, 47 columns wide, just after its first way was
+		// picked: the spinner before the link.
+		"claude, opening the browser": "Welcome to Claude Code v2.1.296\n\n ✢ Opening browser to sign in…",
+		// The link's heading wrapped beside "(c to copy)", drawn before the
+		// rest of the step.
+		"claude, signing in narrow": " Browser didn't open? Use the url     (c to \n below to sign in                     copy)\nhttps://claude.com/cai/oauth/authorize?code=tru\ne&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5",
 		"agy": " Welcome to the Antigravity CLI. You are currently not signed in.\n Select login method:\n" +
 			" > 1. Google OAuth\n   2. Use a Google Cloud project\n   ↑/↓ Navigate · enter Select",
 		// As they are drawn: a dialog is mostly its own blank rows.
@@ -137,6 +143,14 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 			"│   ● 1. Sign in with Google                                                   │\n" +
 			"│     2. Use Gemini API Key                                                    │\n" +
 			"│   (Use Enter to select)                                                      │",
+		// pi 0.73.1 with no provider logged in, 47 columns wide (a cloud
+		// machine's): its editor, then its status line.
+		"pi": "───────────────────────────────────────────────\n" +
+			"\n───────────────────────────────────────────────\n/work\n0.0%/0 (auto)                           unknown",
+		// And a message sent to it, turned away.
+		"pi, turned away": " Error: No API key found for the selected      \n model.                                        \n" +
+			" Use /login to log into a provider via OAuth   \n or API key. See:                              \n" +
+			"───────────────────────────────────────────────\n\n───────────────────────────────────────────────\n/work",
 		"amp":                "No API key found. Starting login flow...\nWould you like to log in to Amp? [(y)es, (n)o]: ",
 		"codex":              "  Sign in with ChatGPT to use Codex as part of your paid plan\n  › 1. Sign in with ChatGPT\n    2. Provide your own API key",
 		"codex, turned away": "■ unexpected status 401 Unauthorized: Incorrect API key provided:\nkey at https://platform.openai.com/account/api-keys.",
@@ -338,5 +352,43 @@ func TestASessionSeenAtWorkIsNotLoggedOut(t *testing.T) {
 	a.noteHarnessHealth(loggedOutScreen, "claude", true)
 	if a.harnessDown() {
 		t.Fatal("seen at work, still logged out")
+	}
+}
+
+// Claude Code logged out, its first way to sign in picked (a line typed into
+// its login menu and its Enter): the spinner while it opens a browser is
+// still logged out. Read as anything else for ~3 s, its logged-out state
+// cleared, and it was taken for an agent at work, then done.
+func TestClaudeSignInSpinnerKeepsItLoggedOut(t *testing.T) {
+	menu := " Select login method:\n ❯ 1. Claude account with subscription · Pro,\n      Max, Team, or Enterprise\n   2. Anthropic Console account · API usage\n      billing"
+	spinner := "Welcome to Claude Code v2.1.296\n\n ✳ Opening browser to sign in…"
+	a := &Agent{}
+	for i := 0; i < harnessDownAfter; i++ {
+		a.noteHarnessHealth(menu, "claude", false)
+	}
+	if !a.harnessDown() {
+		t.Fatal("the login menu was not read as logged out")
+	}
+	for i := 0; i < 2*harnessUpAfter; i++ {
+		a.noteHarnessHealth(spinner, "claude", false)
+	}
+	if !a.harnessDown() {
+		t.Fatal("while it opens a browser to sign in, it was no longer read as logged out")
+	}
+}
+
+// pi with a model is not logged out: its status line names the model and its
+// context, and its conversation may quote its own words about logins.
+func TestPiWithAModelIsNotLoggedOut(t *testing.T) {
+	for _, ok := range []string{
+		"────────────────────────────────────────────────────────────────────────────────\n\n" +
+			"────────────────────────────────────────────────────────────────────────────────\n/tmp\n" +
+			"↑5 ↓3 0.0%/128k (auto)                                                    mock-1",
+		" The user saw \"Error: No API key found for the selected model.\" in their app.\n/tmp\n0.4%/128k (auto)   mock-1",
+		"0.0%/0 (auto)   unknown is what the status line said",
+	} {
+		if harnessProblemIn(harnessTail(ok, harnessRows), "pi") {
+			t.Errorf("pi with a model read as logged out:\n%s", ok)
+		}
 	}
 }
