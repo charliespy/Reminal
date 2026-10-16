@@ -287,10 +287,13 @@ func deliverPush(e pushEntry, m pushMessage) {
 		return
 	}
 	m.URL = "/"
-	err := sendPush(e.Sub, m)
+	err := sendPush(e.Sub, e.Token, m)
 	if errors.Is(err, errPushGone) {
 		_ = removePushSub(e.Sub.Endpoint)
 		return
+	}
+	if errors.Is(err, errPushUnbound) {
+		_ = clearPushToken(e.Sub.Endpoint, e.Token)
 	}
 	if err != nil {
 		log.Printf("alert not delivered: %v", err)

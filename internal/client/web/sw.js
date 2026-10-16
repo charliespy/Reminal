@@ -1,5 +1,5 @@
-// reminal service worker: phone alerts only. It caches nothing and intercepts
-// no requests, so the page always loads fresh from the network exactly as it
+// reminal service worker: phone alerts only. It intercepts no requests (it
+// keeps one thing: an alerts token for the page, below), so the page always loads fresh from the network exactly as it
 // did before this file existed. Its one job is to show the alerts a machine
 // you own sends (CPU, battery, charger) when the page is not open.
 //
@@ -10,9 +10,24 @@
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
+// The relay's own message, when alerts are turned on for a machine: the
+// token that binds them to it. Kept for the page (it may be closed by the
+// time this comes), which hands it to that machine; and shown, plainly.
+const ALERT_TOKENS = 'reminal-alert-tokens';
+function alertsOn(e, d) {
+  e.waitUntil((async () => {
+    if (/^[A-Za-z0-9+/]{43}=$/.test(d.machine) && /^v1\.\d{1,12}\.[A-Za-z0-9_-]{43}$/.test(d.token)) {
+      try { await (await caches.open(ALERT_TOKENS)).put('/alert-token/' + encodeURIComponent(d.machine), new Response(d.token)); } catch (_) {}
+      for (const w of await self.clients.matchAll({ type: 'window', includeUncontrolled: true })) w.postMessage({ type: 'alert-token' });
+    }
+    await self.registration.showNotification('reminal', { body: 'Alerts are on for this device.', tag: 'alerts-on:' + String(d.machine).slice(0, 60), data: { url: '/', at: 0 } });
+  })());
+}
+
 self.addEventListener('push', (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data ? e.data.text() : '' }; }
+  if (d && d.kind === 'alerts-on') return alertsOn(e, d);
   const title = String(d.title || 'reminal').slice(0, 80);
   const body = String(d.body || '').slice(0, 300);
   // A same-origin path only: the message came from a machine, and a machine

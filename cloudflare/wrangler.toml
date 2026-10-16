@@ -90,4 +90,9 @@ TUNNEL_SUFFIX = "reminal.app"
 # the VAPID_PRIVATE_JWK secret (`wrangler secret put VAPID_PRIVATE_JWK`).
 # Changing this pair invalidates every browser's alert subscription, so treat
 # it like the signing cert: generate once, keep.
+# Alerts are bound to the machine that registered them by a token made with
+# the PUSH_TOKEN_KEY secret (`wrangler secret put PUSH_TOKEN_KEY`, any long
+# random string; src/push.ts). Without it, no tokens are given out and
+# alerts go untokened until UNTOKENED_UNTIL. Changing it asks every phone to
+# renew its alerts.
 VAPID_PUBLIC = "BLCthPsa5_VDrbVEMtDk6NUXowUbqY8n2hetWbpzjg-hR6-FC-nWC85emykddL6mqTx3P1jfaewicVW5237_YC4"

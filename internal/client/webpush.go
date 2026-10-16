@@ -8,6 +8,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
@@ -147,6 +148,11 @@ type pushMessage struct {
 // correct response is to forget it.
 var errPushGone = errors.New("push subscription is gone")
 
+// errPushUnbound: the relay did not take this alert's token or signature as
+// this machine's (a token that is not, or no longer, good). The token is
+// dropped, so the phone's page offers to renew it.
+var errPushUnbound = errors.New("this phone's alerts are not bound to this machine; renew them from the phone")
+
 var pushHTTP = &http.Client{Timeout: 20 * time.Second}
 
 // pushURL is where sealed messages are handed to the relay. A var so tests can
@@ -154,7 +160,16 @@ var pushHTTP = &http.Client{Timeout: 20 * time.Second}
 var pushURL = func() string { return config.WebURL() + "/push" }
 
 // sendPush seals msg for sub and hands it to the relay to sign and forward.
-func sendPush(sub pushSub, msg pushMessage) error {
+// alertSigned is what a machine signs for one alert (the relay's
+// alertSigned, cloudflare/src/push.ts).
+func alertSigned(endpoint string, payloadSum []byte, ts int64) string {
+	return fmt.Sprintf("reminal-push\n%s\n%x\n%d", endpoint, payloadSum, ts)
+}
+
+// sendPush sends one alert. With the phone's token (pushEntry.Token), it is
+// signed by this machine's key over where it goes, what it is and when —
+// what the relay checks the token against; without one, as before.
+func sendPush(sub pushSub, token string, msg pushMessage) error {
 	pt, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -163,12 +178,24 @@ func sendPush(sub pushSub, msg pushMessage) error {
 	if err != nil {
 		return err
 	}
-	body, _ := json.Marshal(map[string]any{
+	call := map[string]any{
 		"endpoint": sub.Endpoint,
 		"payload":  base64.StdEncoding.EncodeToString(sealed),
 		"ttl":      3600,
 		"urgency":  "high",
-	})
+	}
+	if token != "" {
+		key, err := loadOrCreateMachineKey()
+		if err != nil {
+			return err
+		}
+		ts := time.Now().Unix()
+		sum := sha256.Sum256(sealed)
+		call["token"], call["ts"] = token, ts
+		call["machine"] = base64.StdEncoding.EncodeToString(key.Public().(ed25519.PublicKey))
+		call["sig"] = base64.StdEncoding.EncodeToString(ed25519.Sign(key, []byte(alertSigned(sub.Endpoint, sum[:], ts))))
+	}
+	body, _ := json.Marshal(call)
 	req, err := http.NewRequest(http.MethodPost, pushURL(), bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -182,8 +209,12 @@ func sendPush(sub pushSub, msg pushMessage) error {
 	var out struct {
 		Status int    `json:"status"`
 		Error  string `json:"error"`
+		Code   string `json:"code"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&out)
+	if resp.StatusCode == http.StatusForbidden && out.Code == "unbound" && token != "" {
+		return errPushUnbound
+	}
 	if resp.StatusCode != http.StatusOK {
 		if out.Error != "" {
 			return fmt.Errorf("relay refused the alert: %s", out.Error)

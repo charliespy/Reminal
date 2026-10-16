@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,67 @@ type pushEntry struct {
 	Sub       pushSub   `json:"sub"`
 	Rules     pushRules `json:"rules"`
 	Added     time.Time `json:"added"`
+	// Token binds this phone's alerts to this machine: the relay sent it to
+	// the phone, and the phone's page handed it here (op "token"). Sent with
+	// each alert, with this machine's signature over it. "" for a phone that
+	// subscribed before tokens: its alerts go untokened until
+	// pushUntokenedUntil, and the page offers to renew it.
+	Token string `json:"token,omitempty"`
+}
+
+// pushUntokenedUntil is when the relay stops forwarding alerts without a
+// token (cloudflare/src/push.ts's UNTOKENED_UNTIL: the same moment).
+var pushUntokenedUntil = time.Date(2026, time.December, 15, 0, 0, 0, 0, time.UTC)
+
+// pushTokenShape is a token as the relay makes it; anything else is refused
+// before it is stored.
+var pushTokenShape = regexp.MustCompile(`^v1\.[0-9]{1,12}\.[A-Za-z0-9_-]{43}$`)
+
+// setPushToken keeps the token the phone was sent for this machine.
+func setPushToken(endpoint, token string) error {
+	if !pushTokenShape.MatchString(token) {
+		return errors.New("not an alerts token")
+	}
+	found := false
+	err := updatePushSubs(func(subs []pushEntry) []pushEntry {
+		for i := range subs {
+			if subs[i].Sub.Endpoint == endpoint {
+				subs[i].Token, found = token, true
+			}
+		}
+		return subs
+	})
+	if err == nil && !found {
+		err = errors.New("this phone has no alerts on this machine")
+	}
+	return err
+}
+
+// clearPushToken drops a phone's token the relay no longer takes — only that
+// one, so a newer token handed on meanwhile stays.
+func clearPushToken(endpoint, token string) error {
+	return updatePushSubs(func(subs []pushEntry) []pushEntry {
+		for i := range subs {
+			if subs[i].Sub.Endpoint == endpoint && subs[i].Token == token {
+				subs[i].Token = ""
+			}
+		}
+		return subs
+	})
+}
+
+// untokenedPushSubs is how many phones still get untokened alerts.
+func untokenedPushSubs() int {
+	pushStoreMu.Lock()
+	defer pushStoreMu.Unlock()
+	subs, _ := loadPushSubs()
+	n := 0
+	for _, s := range subs {
+		if s.Token == "" {
+			n++
+		}
+	}
+	return n
 }
 
 type pushFile struct {
