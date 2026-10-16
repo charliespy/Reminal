@@ -669,6 +669,9 @@ type DirResponse struct {
 	// while discharging, to full while charging. 0 means the OS declined to
 	// estimate, which it does for a minute or two after any power change.
 	BatteryMins int `json:"battery_mins,omitempty"`
+	// RetryMS: the request was over this machine's allowance; asked again
+	// after this many ms, it is answered.
+	RetryMS int `json:"retry_ms,omitempty"`
 }
 
 // DirPush is one phone's standing with one machine's alerts. Rules is the

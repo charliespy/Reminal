@@ -277,6 +277,11 @@ func (a *Agent) servesOnThisChannel(t protocol.MessageType) bool {
 // process, so a runaway client must not be able to turn that into a storm.
 type dirLimits struct {
 	hshake, query, spawn, rename, restart, refuse *tokenBucket
+	// busy is the allowance for saying "busy, come back in N ms" to a
+	// request over its own: a decrypt and a short line, so every request an
+	// owner makes is answered — never left to time out and read as the
+	// machine being offline — while a flood past even this is not.
+	busy *tokenBucket
 }
 
 func newDirLimits() *dirLimits {
@@ -291,6 +296,7 @@ func newDirLimits() *dirLimits {
 		// Saying "not this build" costs a decrypt and a short line. Its own
 		// allowance so it neither starves the others nor is starved by them.
 		refuse: newTokenBucket(8, 4),
+		busy:   newTokenBucket(64, 32),
 	}
 }
 
@@ -309,10 +315,21 @@ const (
 // Never the PIN-guess bucket — a signed owner proof is not a PIN guess, and
 // charging it there let a few reconnects lock an owner out of their machine.
 func (a *Agent) allowOwnerHandshake() bool {
+	ok, _ := a.takeOwnerHandshake()
+	return ok
+}
+
+// takeOwnerHandshake is allowOwnerHandshake, and when it refuses, how long
+// the device is asked to wait (own_busy's retry_ms): from the machine
+// channel's bucket, or a session's fixed pace.
+func (a *Agent) takeOwnerHandshake() (bool, time.Duration) {
 	if a.dirLimits != nil {
-		return a.dirLimits.hshake.allow(time.Now())
+		return a.dirLimits.hshake.take(time.Now())
 	}
-	return a.allowOwnerVerify(time.Now())
+	if a.allowOwnerVerify(time.Now()) {
+		return true, 0
+	}
+	return false, ownerBusyRetry
 }
 
 // refundOwnerHandshake returns the token allowOwnerHandshake took, to whichever
@@ -329,21 +346,63 @@ func (a *Agent) refundOwnerHandshake() {
 // allowDir applies the machine channel's limits. A session agent (no limits
 // object) answers freely: its viewers hold its key, which is the gate there.
 func (a *Agent) allowDir(act dirAction) bool {
+	ok, _ := a.takeDir(act)
+	return ok
+}
+
+// takeDir is allowDir, and when it refuses, how long until that action's
+// allowance has room again.
+func (a *Agent) takeDir(act dirAction) (bool, time.Duration) {
 	if a.dirLimits == nil {
-		return true
+		return true, 0
 	}
 	now := time.Now()
 	switch act {
 	case dirActQuery:
-		return a.dirLimits.query.allow(now)
+		return a.dirLimits.query.take(now)
 	case dirActSpawn:
-		return a.dirLimits.spawn.allow(now)
+		return a.dirLimits.spawn.take(now)
 	case dirActRestart:
-		return a.dirLimits.restart.allow(now)
+		return a.dirLimits.restart.take(now)
 	case dirActRefuse:
-		return a.dirLimits.refuse.allow(now)
+		return a.dirLimits.refuse.take(now)
 	default:
-		return a.dirLimits.rename.allow(now)
+		return a.dirLimits.rename.take(now)
+	}
+}
+
+// dirBusyText is what a request over its allowance is told, with retry_ms.
+const dirBusyText = "this machine is busy; it asks to be asked again shortly"
+
+// dirBusy answers a request over its allowance: its own reply type, its
+// req_id, and retry_ms — how long until it would be taken. Only a request
+// that decrypts under the channel key is answered (the relay can see one go
+// by, not author one), and only within the busy allowance.
+func (a *Agent) dirBusy(conn *websocket.Conn, typ protocol.MessageType, data string, retry time.Duration) {
+	if a.dirLimits != nil && !a.dirLimits.busy.allow(time.Now()) {
+		return
+	}
+	var req struct {
+		ReqID string `json:"req_id"`
+	}
+	// A plain listing carries nothing to decrypt (and no id): answered as
+	// one. Anything else must decrypt.
+	if !(typ == protocol.TypeDirQuery && data == "") && !a.decryptDir(data, &req) {
+		return
+	}
+	ms := int(retry / time.Millisecond)
+	if ms < 1 {
+		ms = 1
+	}
+	switch typ {
+	case protocol.TypeDirQuery:
+		// No sessions list (null), so a page that knows nothing of retry_ms
+		// skips it rather than taking it for a machine with no sessions.
+		a.sendWindowMsg(conn, protocol.TypeDirResp, protocol.DirResponse{ReqID: req.ReqID, Tagged: true, RetryMS: ms})
+	case protocol.TypeDirIntegrate:
+		a.sendWindowMsg(conn, typ, dirIntegrateAck{ReqID: req.ReqID, Error: dirBusyText, RetryMS: ms})
+	default: // new session, rename, revoke, kill: their replies share these fields
+		a.sendWindowMsg(conn, typ, dirAck{ReqID: req.ReqID, Error: dirBusyText, RetryMS: ms})
 	}
 }
 
@@ -351,7 +410,8 @@ func (a *Agent) allowDir(act dirAction) bool {
 // battery, and — on request — a scrollback search, a transcript, or keys
 // typed into a session.
 func (a *Agent) handleDirQuery(conn *websocket.Conn, data string) {
-	if !a.allowDir(dirActQuery) {
+	if ok, wait := a.takeDir(dirActQuery); !ok {
+		a.dirBusy(conn, protocol.TypeDirQuery, data, wait)
 		return
 	}
 	resp := LocalDirectory()
@@ -394,6 +454,9 @@ type dirAck struct {
 	ReqID string `json:"req_id,omitempty"`
 	OK    bool   `json:"ok,omitempty"`
 	Error string `json:"error,omitempty"`
+	// RetryMS: over this machine's allowance for it — asked again after this
+	// many ms, it is taken (dirBusy).
+	RetryMS int `json:"retry_ms,omitempty"`
 	// Unsupported marks a request this build does not answer, as opposed to
 	// one that was tried and failed. Without it such a request got no reply
 	// at all, and the caller could only wait out its timeout and guess
@@ -416,7 +479,8 @@ func (a *Agent) decryptDir(data string, into any) bool {
 }
 
 func (a *Agent) handleDirRename(conn *websocket.Conn, data string) {
-	if !a.allowDir(dirActRename) {
+	if ok, wait := a.takeDir(dirActRename); !ok {
+		a.dirBusy(conn, protocol.TypeDirRename, data, wait)
 		return
 	}
 	var req struct {
@@ -437,7 +501,8 @@ func (a *Agent) handleDirRename(conn *websocket.Conn, data string) {
 }
 
 func (a *Agent) handleDirRevokeSelf(conn *websocket.Conn, data string) {
-	if !a.allowDir(dirActRename) {
+	if ok, wait := a.takeDir(dirActRename); !ok {
+		a.dirBusy(conn, protocol.TypeDirRevokeSelf, data, wait)
 		return
 	}
 	var req struct {
@@ -479,7 +544,8 @@ func (a *Agent) handleDirRevokeSelf(conn *websocket.Conn, data string) {
 }
 
 func (a *Agent) handleDirKill(conn *websocket.Conn, data string) {
-	if !a.allowDir(dirActRename) {
+	if ok, wait := a.takeDir(dirActRename); !ok {
+		a.dirBusy(conn, protocol.TypeDirKill, data, wait)
 		return
 	}
 	var req struct {

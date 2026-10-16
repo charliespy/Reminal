@@ -4020,11 +4020,11 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 	// is said out loud. A device that hears nothing at all is one we refused;
 	// a device that hears "busy" knows to come back, which is what an owner
 	// needs and what a stranger would learn by waiting anyway.
-	if !a.allowOwnerHandshake() {
+	if ok, wait := a.takeOwnerHandshake(); !ok {
 		_ = a.writeMsg(conn, protocol.Message{
 			Type:    protocol.TypeOwnerBusy,
 			ExID:    msg.ExID,
-			RetryMS: int(ownerBusyRetry / time.Millisecond),
+			RetryMS: max(1, int(wait/time.Millisecond)),
 		})
 		return
 	}

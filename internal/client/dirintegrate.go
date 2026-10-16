@@ -32,6 +32,8 @@ type dirIntegrateAck struct {
 	// the user would have seen running it by hand.
 	Output    string                       `json:"output,omitempty"`
 	Harnesses []protocol.IntegrationStatus `json:"harnesses,omitempty"`
+	// RetryMS: over this machine's allowance; asked again after it, taken.
+	RetryMS int `json:"retry_ms,omitempty"`
 }
 
 // integrateName bounds what an owner may ask to set up: a binary name as
@@ -91,8 +93,8 @@ func (a *Agent) handleDirIntegrate(conn *websocket.Conn, data string) {
 	if req.Apply != "" {
 		act = dirActSpawn
 	}
-	if !a.allowDir(act) {
-		ack.Error = "too many requests; try again in a moment"
+	if ok, wait := a.takeDir(act); !ok {
+		ack.Error, ack.RetryMS = dirBusyText, max(1, int(wait/time.Millisecond))
 		reply()
 		return
 	}

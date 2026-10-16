@@ -69,10 +69,18 @@ type UpgradeStep struct {
 // progress is therefore success-shaped, not an error.
 func UpgradeOnMachine(machinePub ed25519.PublicKey, onStep func(UpgradeStep)) (UpgradeStep, error) {
 	var last UpgradeStep
-	conn, box, err := dialDirectoryOwner(machinePub, DirectoryTimeout)
+	type dialed struct {
+		conn *dirConn
+		box  *crypto.Box
+	}
+	d, err := withDirBusy(func() (dialed, error) {
+		c, b, err := dialDirectoryOwner(machinePub, DirectoryTimeout)
+		return dialed{c, b}, err
+	})
 	if err != nil {
 		return last, err
 	}
+	conn, box := d.conn, d.box
 	defer conn.Close()
 
 	// The host verifies this against the channel it arrived on.

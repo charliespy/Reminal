@@ -120,8 +120,8 @@ func TestDirIntegrateChecksAreCachedAndRefusalsAreSaid(t *testing.T) {
 		t.Fatalf("five checks in a burst ran integrate %d times, want 1", runs)
 	}
 	a.dirLimits.query = newTokenBucket(0, 0)
-	if got := captureDirReply(t, a, box, enc); got.OK || !strings.Contains(got.Error, "too many") {
-		t.Fatalf("a refused check should say so: %+v", got)
+	if got := captureDirReply(t, a, box, enc); got.OK || got.Error != dirBusyText || got.RetryMS != int(dirBusyMaxWait/time.Millisecond) {
+		t.Fatalf("a refused check should say so, and when to ask again: %+v", got)
 	}
 }
 

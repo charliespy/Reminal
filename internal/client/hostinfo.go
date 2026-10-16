@@ -100,7 +100,8 @@ func (a *Agent) handleNewSession(conn *websocket.Conn, data string) {
 	if a.box == nil {
 		return
 	}
-	if !a.allowDir(dirActSpawn) {
+	if ok, wait := a.takeDir(dirActSpawn); !ok {
+		a.dirBusy(conn, protocol.TypeNewSession, data, wait)
 		return
 	}
 	// The request must decrypt under the session key: a message the relay
