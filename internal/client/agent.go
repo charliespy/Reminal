@@ -119,8 +119,12 @@ type Agent struct {
 	integrate func(args []string) ([]byte, error)
 	// dirLimits rate-limits the machine channel's actions (machine mode only).
 	dirLimits *dirLimits
-	buf       *scrollback
-	term      *pty.Session
+	// dirUnanswered counts requests over even the busy allowance: the only
+	// ones the machine channel leaves unanswered (dirBusy).
+	dirUnanswered atomic.Int64
+
+	buf  *scrollback
+	term *pty.Session
 	// restoring: this agent is bringing a session back after its machine
 	// restarted — its identity is the old one, its shell is new. restoreRun
 	// resumes the agent that was running; restoreSeq is the scrollback last

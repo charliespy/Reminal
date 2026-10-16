@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"reminal/internal/protocol"
 )
 
 // A bucket that refuses says how long until it would take one: what a
@@ -34,8 +36,14 @@ func TestABucketSaysWhenItWouldTakeOne(t *testing.T) {
 // Two clients hammering one machine — two tabs, two browsers, two shells —
 // past its allowance for queries and for new sessions: every request is
 // answered (busy, then taken when asked again at the time it gave), none
-// read as the machine being unreachable, and every session asked for is
-// started.
+// read as the machine being unreachable, none left unanswered by the
+// machine, and every session asked for is started.
+//
+// Nothing here is timed: on a loaded runner one answer can take longer than
+// a call's usual DirectoryTimeout, and that is slowness, not a request
+// dropped. Each call is given hammerAbort, a cap only for a run that has
+// hung; what is checked is the events — every call returned with its
+// answer, and the machine's own count of requests it left unanswered is 0.
 func TestTwoClientsHammeringOneMachineAreAllAnswered(t *testing.T) {
 	isolateHome(t)
 	startTestRelay(t)
@@ -62,13 +70,16 @@ func TestTwoClientsHammeringOneMachineAreAllAnswered(t *testing.T) {
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() { _ = agent.RunMachine(stop) }()
-	deadline := time.Now().Add(10 * time.Second)
+	// Up once the relay knows the channel: until then it answers that
+	// nothing serves it, and the question is asked again.
+	deadline := time.Now().Add(hammerAbort)
 	for {
-		if _, qerr := QueryDirectory(machinePub, DirectoryTimeout); qerr == nil {
+		_, qerr := QueryDirectory(machinePub, hammerAbort)
+		if qerr == nil {
 			break
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("the machine never came up")
+		if !errors.Is(qerr, ErrDirUnreachable) || time.Now().After(deadline) {
+			t.Fatalf("the machine never came up: %v", qerr)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -83,7 +94,7 @@ func TestTwoClientsHammeringOneMachineAreAllAnswered(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if _, err := QueryDirectory(machinePub, DirectoryTimeout); err != nil {
+				if _, err := QueryDirectory(machinePub, hammerAbort); err != nil {
 					fail(err)
 				}
 			}()
@@ -92,7 +103,7 @@ func TestTwoClientsHammeringOneMachineAreAllAnswered(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if _, err := SpawnOnMachine(machinePub, "s", "", DirectoryTimeout); err != nil {
+				if _, err := SpawnOnMachine(machinePub, "s", "", hammerAbort); err != nil {
 					fail(err)
 				}
 			}()
@@ -106,10 +117,17 @@ func TestTwoClientsHammeringOneMachineAreAllAnswered(t *testing.T) {
 			t.Errorf("a request failed: %v", err)
 		}
 	}
+	if n := agent.dirUnanswered.Load(); n != 0 {
+		t.Errorf("the machine left %d requests unanswered (over even its busy allowance)", n)
+	}
 	if n := spawned.Load(); n != clients*spawns {
 		t.Errorf("%d sessions started, want %d", n, clients*spawns)
 	}
 }
+
+// hammerAbort ends a hammering test that has hung; it is not how long an
+// answer may take.
+const hammerAbort = 2 * time.Minute
 
 // own_busy travels in the clear, so its retry_ms could say anything: a call
 // waits what a busy answer asks, but never past dirBusyMaxWait.
@@ -122,5 +140,16 @@ func TestABusyWaitIsCapped(t *testing.T) {
 		if !errors.As(busyAfter(c.ms), &busy) || busy.Wait != c.want {
 			t.Errorf("busyAfter(%d) waits %v, want %v", c.ms, busy.Wait, c.want)
 		}
+	}
+}
+
+// The count the hammering test reads is the real one: a request over even
+// the busy allowance is left unanswered, and counted.
+func TestARequestOverTheBusyAllowanceIsCounted(t *testing.T) {
+	a := &Agent{dirLimits: newDirLimits()}
+	a.dirLimits.busy = newTokenBucket(0, 0) // spent, and never refilled
+	a.dirBusy(nil, protocol.TypeDirQuery, "", time.Second)
+	if n := a.dirUnanswered.Load(); n != 1 {
+		t.Errorf("unanswered = %d, want 1", n)
 	}
 }
