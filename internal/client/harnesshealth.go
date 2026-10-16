@@ -48,11 +48,23 @@ var harnessLoginNotice = regexp.MustCompile(`(loginexpired|notloggedin|invalidap
 // printed Codex's sign-in menu (a check of Codex's login, 2026-10-14) is not
 // logged out, and was read as one for as long as that output was on screen.
 var harnessLoginScreens = map[string]*regexp.Regexp{
-	"agy":    regexp.MustCompile(`youarecurrentlynotsignedin`),
-	"gemini": regexp.MustCompile(`howwouldyouliketoauthenticate|noauthenticationmethodselected`),
+	"agy": regexp.MustCompile(`youarecurrentlynotsignedin`),
+	// Gemini CLI: no way to sign in chosen yet; its Google sign-in waiting
+	// for the code; its API key dialog; and a key it cannot use (the
+	// service's own words, in the error it prints for the turn — wrapped at
+	// the terminal's width, so by their start).
+	"gemini": regexp.MustCompile(`howwouldyouliketoauthenticate|noauthenticationmethodselected|^[^a-z0-9]*(pleasevisitthefollowingurltoauthorizetheapplication|entertheauthorizationcode|entergeminiapikey)[^a-z0-9]*$|apikeynotvalid\.pleasepass`),
 	"amp":    regexp.MustCompile(`wouldyouliketologintoamp|noapikeyfound\.startingloginflow`),
-	"codex":  regexp.MustCompile(`signinwithchatgpt|provideyourownapikey|incorrectapikeyprovided`),
-	"qwen":   regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey`),
+	// Codex: its sign-in menu, signing in through the browser, and a key it
+	// cannot use.
+	"codex": regexp.MustCompile(`signinwithchatgpt|provideyourownapikey|incorrectapikeyprovided|^[^a-z0-9]*finishsigninginviayourbrowser[^a-z0-9]*$`),
+	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
+	// taller than the rows read, so by its last choice), and the steps of
+	// setting one up.
+	"qwen": regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey|^[^a-z0-9]*(connectaprovider|manuallyconnectalocalserver,proxy,orunsupportedprovider)[^a-z0-9]*$`),
+	// Cursor CLI: its first screen with no login ("Press any key to log
+	// in..." — a key typed there starts signing in), and the sign-in itself.
+	"cursor-agent": regexp.MustCompile(`^[^a-z0-9]*(pressanykeytologin|ifyourbrowserdidn.?topen,clickthislinktologin:?|pressqtoshowaqrcodetologin)`),
 	// pi with no model to run on (no provider logged in) says so on its own
 	// status line, the last on its screen: its context "0" and its model
 	// "unknown" ("0.0%/0 (auto)   unknown"). A message sent it is turned away
@@ -112,16 +124,37 @@ const harnessShortRow = 48
 // blank rows, and counting those left its heading unread.
 const harnessRows = 12
 
+// harnessRowsFor is how many rows are read for prog: Gemini CLI's input
+// area, its status rows and the banners it keeps above them are taller
+// than that, and its error for a turn sits above them all.
+func harnessRowsFor(prog string) int {
+	if prog == "gemini" {
+		return 20
+	}
+	return harnessRows
+}
+
 const (
-	harnessDownAfter = 2  // ticks the notice must be seen to count
-	harnessUpAfter   = 10 // ticks it must be gone to clear (~3 s)
+	harnessDownAfter = 2  // reads the notice must be seen in to count
+	harnessUpAfter   = 10 // reads it must be gone from to clear…
+	// …or this long, whichever comes first: the screen is read when it may
+	// have changed, so an agent that comes up from its sign-in and then sits
+	// still at its prompt gives a few reads, not ten — and was left "logged
+	// out", its mail held, for good.
+	harnessUpFor = 3 * time.Second
 )
+
+// harnessNow is the clock the health state is kept by (tests set it).
+var harnessNow = time.Now
 
 // harnessHealth is the debounced state; guarded by Agent.metaMu.
 type harnessHealth struct {
 	down       bool
 	seen, gone int
 	since      time.Time
+	// When the notice was first seen in this run of reads, and when it was
+	// first gone: what the next read is timed by (harnessReadAt).
+	seenAt, goneAt time.Time
 }
 
 // harnessTail is the last n rows of a screen that have anything on them.
@@ -218,7 +251,8 @@ const harnessTurnProof = 10 * time.Second
 func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 	// The render carries its styling — "\x1b[1mLogin\x1b[m \x1b[1mexpired" —
 	// which would sit between the words; the text is what is read.
-	bad := !atWork && harnessProblemIn(harnessTail(stripANSI(render), harnessRows), prog)
+	bad := !atWork && harnessProblemIn(harnessTail(stripANSI(render), harnessRowsFor(prog)), prog)
+	now := harnessNow()
 	a.metaMu.Lock()
 	h := &a.harness
 	changed := false
@@ -226,13 +260,19 @@ func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 		// Seen at work: logged in, now.
 		h.down, h.seen, h.gone, changed = false, 0, 0, true
 	} else if bad {
+		if h.seen == 0 {
+			h.seenAt = now
+		}
 		h.gone = 0
 		if h.seen++; !h.down && h.seen >= harnessDownAfter {
-			h.down, h.since, changed = true, time.Now(), true
+			h.down, h.since, changed = true, now, true
 		}
 	} else {
+		if h.gone == 0 {
+			h.goneAt = now
+		}
 		h.seen = 0
-		if h.gone++; h.down && h.gone >= harnessUpAfter {
+		if h.gone++; h.down && (h.gone >= harnessUpAfter || now.Sub(h.goneAt) >= harnessUpFor) {
 			h.down, changed = false, true
 		}
 	}
@@ -242,6 +282,23 @@ func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 		// Logged in again: the next tick's screen reading decides the state.
 		a.setAttnState("")
 	}
+}
+
+// harnessReadAt is when the screen should be read again for the health
+// state to settle, whatever else the screen does: a notice seen once is
+// confirmed a read later, and one gone from a logged-out screen clears at
+// harnessUpFor. Zero when nothing waits on a read.
+func (a *Agent) harnessReadAt() time.Time {
+	a.metaMu.Lock()
+	defer a.metaMu.Unlock()
+	h := &a.harness
+	switch {
+	case !h.down && h.seen > 0:
+		return h.seenAt.Add(attnInterval)
+	case h.down && h.gone > 0:
+		return h.goneAt.Add(harnessUpFor)
+	}
+	return time.Time{}
 }
 
 // harnessDown reports whether the agent here is logged out.

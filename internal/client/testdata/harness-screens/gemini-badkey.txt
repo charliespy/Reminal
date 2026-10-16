@@ -1,0 +1,40 @@
+   ▝▜▄    █▌     █▙▟  ▐█▝█▛▐█ ▐█ ▐█▝█▖█▌ █▌
+  ▗▟▀     ▜▙ ▝█▛ █▌▝ ▖▐█   ▐█ ▐█ ▐█ ▝██▌ █▌
+ ▝▀        ▀▀▀▀▘▝▀▀▀▀▘▀▀▘  ▀▀▘▀▀▘▀▀▘ ▝▀▀▝▀▀
+
+ Gemini CLI v0.62.0
+
+
+
+Tips for getting started:
+1. Create GEMINI.md files to customize your interactions
+2. /help for more information
+3. Ask coding questions, edit code or run commands
+4. Be specific for the best results
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Gemini CLI update available! 0.62.0 → 0.64.0                                                                         │
+│ Please run npm install -g @google/gemini-cli@latest to update                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                                                      │
+│ Enter Gemini API Key                                                                                                 │
+│                                                                                                                      │
+│ Please enter your Gemini API key. It will be securely stored in your system keychain.                                │
+│ You can get an API key from https://aistudio.google.com/app/apikey                                                   │
+│                                                                                                                      │
+│ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
+│ │ AIzaBADKEY000000000000000000000000000                                                                            │ │
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ │
+│                                                                                                                      │
+│ Existing API key detected (GEMINI_API_KEY). Select "Gemini API Key" option to use it.                                │
+│                                                                                                                      │
+│ (Press Enter to submit, Esc to cancel, Ctrl+C to clear stored key)                                                   │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+

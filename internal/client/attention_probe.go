@@ -322,7 +322,13 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 			state, source = harnessLoggedOut, "screen(login)"
 		}
 		a.setAttnState(state)
-		if next, ok := attnNextRead(now, lastChange, last, hs, fgPgrpSeen == 0 && a.term != nil); ok {
+		next, ok := attnNextRead(now, lastChange, last, hs, fgPgrpSeen == 0 && a.term != nil)
+		// And when the login state waits on a read to settle (harnessReadAt):
+		// a screen that has gone still must still clear it.
+		if t := a.harnessReadAt(); t.After(now) && (!ok || t.Before(next)) {
+			next, ok = t.Add(time.Millisecond), true
+		}
+		if ok {
 			at(next)
 		}
 

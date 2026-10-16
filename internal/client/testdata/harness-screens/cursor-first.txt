@@ -1,0 +1,40 @@
+ Signing in
+ If your browser didn't open, click this link to log in:
+
+https://cursor.com/loginDeepControl?challenge=iv_Kq_nUQt-C631k7jG5wn2U0cFhAH3hSzt5KEZQ9aM&uuid=38136f22-bc2b-419f-8097-f
+dcd1bbeaf98&mode=login&redirectTarget=cli&supportsSelectedTeamLogin=true
+
+ Press q to show a QR code to log in from another device
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

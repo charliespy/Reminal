@@ -1,0 +1,23 @@
+  \\"locale\\": \\"en-US\\",\\n        \\"message\\": \\"API key not valid. Please pass
+  a valid API key.\\"\\n      }\\n    ]\\n  }\\n}\\n","code":400,"status":"Bad
+  Request"}}]
+
+
+ℹ This request failed. Press F12 for diagnostics, or run /settings and change
+  "Error Verbosity" to full for full details.
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Gemini CLI update available! 0.62.0 → 0.64.0                                 │
+│ Please run npm install -g @google/gemini-cli@latest to update                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+
+                                                                ? for shortcuts
+────────────────────────────────────────────────────────────────────────────────
+ Shift+Tab to accept edits
+
+ >   Type your message or @path/to/file
+
+ workspace (/directory)                    sandbox                       /model
+ ~/work                                    no sandbox                      Auto

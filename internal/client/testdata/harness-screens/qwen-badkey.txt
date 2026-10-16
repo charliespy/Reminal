@@ -1,0 +1,40 @@
+  ●︎ Auto mode enabled.
+       An LLM classifier evaluates each tool call — safe actions auto-approve,
+       risky ones are blocked. Exit: Shift+Tab or /approval-mode default.
+  ●︎ Extensions changed on disk. Run /reload-plugins to apply updates.
+  ●︎ Update successful! The new version will be used on your next run.
+  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │                                                                                                  │
+  │ Alibaba ModelStudio · Access Method                                                              │
+  │                                                                                                  │
+  │ › Coding Plan                                                                                    │
+  │   For individual developers · Weekly quota included                                              │
+  │                                                                                                  │
+  │   Token Plan                                                                                     │
+  │   For teams and companies · Usage-based billing with dedicated endpoint                          │
+  │                                                                                                  │
+  │   Standard API Key                                                                               │
+  │   Connect with an existing ModelStudio API key                                                   │
+  │                                                                                                  │
+  │ Enter to select, ↑↓ to navigate, Esc to go back                                                  │
+  │                                                                                                  │
+  └──────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
