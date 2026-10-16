@@ -123,3 +123,21 @@ func TestTheViewerInTheTreeRendersAndIsWritten(t *testing.T) {
 		}
 	}
 }
+
+// Nothing but the page names a build: the service worker caches nothing and
+// names no script by its hash, nor builds.txt, so it never needs stamping.
+// If it ever does, it must be stamped here and in build-viewer.mjs alike
+// (and the parity test then covers it, as it covers every built file).
+func TestOnlyThePageNamesABuild(t *testing.T) {
+	for _, f := range []string{"sw.js", "reload.js", "manifest.webmanifest"} {
+		b, err := os.ReadFile(filepath.Join("..", "client", "web", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, sc := range spec(t).Scripts {
+			if strings.Contains(string(b), "/assets/"+sc+".") || strings.Contains(string(b), "builds.txt") {
+				t.Fatalf("%s names a build of %s or builds.txt: stamp it in both builders", f, sc)
+			}
+		}
+	}
+}

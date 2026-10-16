@@ -27,7 +27,7 @@ import (
 // CDNs (TestCSPNamesEveryCDNScriptThePageLoads keeps the list true).
 const viewerCSP = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"
 
-//go:embed web/index.html web/build.json web/app.js web/header.js web/sw.js web/manifest.webmanifest web/icons web/vendor
+//go:embed web/index.html web/build.json web/app.js web/header.js web/reload.js web/sw.js web/manifest.webmanifest web/icons web/vendor
 var webIndex embed.FS
 
 // viewerPage is the page this binary serves, rendered once from the sources
@@ -70,6 +70,19 @@ func relayMux() *http.ServeMux {
 	rv := relay.NewRendezvous()
 	mux.HandleFunc("GET /rv/{code}/{role}", func(w http.ResponseWriter, r *http.Request) {
 		rv.HandleWS(w, r, r.PathValue("code"), r.PathValue("role"))
+	})
+	// The page's guard for its own scripts (web/reload.js): at a fixed path,
+	// unhashed, so it loads even when the build the page names is gone.
+	mux.HandleFunc("GET /reload.js", func(w http.ResponseWriter, r *http.Request) {
+		data, err := webIndex.ReadFile("web/reload.js")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		writeEmbedded(w, r, "web/reload.js", data)
 	})
 	// The phone-alert service worker. Served so the page can register it here
 	// too; subscribing still needs a relay with push keys (the hosted one), and

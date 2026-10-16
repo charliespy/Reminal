@@ -19,6 +19,7 @@ function web(app = "console.log('one')\n") {
   writeFileSync(join(d, "header.js"), "fit()\n");
   writeFileSync(join(d, "app.js"), app);
   writeFileSync(join(d, "sw.js"), "// sw\n");
+  writeFileSync(join(d, "reload.js"), "// guard\n");
   writeFileSync(join(d, "manifest.webmanifest"), "{}");
   for (const sub of ["icons", "vendor"]) { mkdirSync(join(d, sub)); writeFileSync(join(d, sub, "x"), "x"); }
   return d;

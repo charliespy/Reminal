@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +76,26 @@ func TestAcceptsGzip(t *testing.T) {
 		if got := acceptsGzip(h); got != want {
 			t.Errorf("acceptsGzip(%q) = %v, want %v", h, got, want)
 		}
+	}
+}
+
+// The page's guard for its own scripts is served at its fixed path, as the
+// script it is: it must load even when the build the page names is gone.
+func TestTheRelayServesThePagesScriptGuard(t *testing.T) {
+	srv := httptest.NewServer(relayMux())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/reload.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	want, _ := webIndex.ReadFile("web/reload.js")
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/javascript") || string(body) != string(want) {
+		t.Fatalf("/reload.js: %d %q, %d bytes", resp.StatusCode, resp.Header.Get("Content-Type"), len(body))
+	}
+	page, _ := viewerPage()
+	if !strings.Contains(string(page.HTML), `<script src="/reload.js"></script>`) {
+		t.Fatal("the page does not load its script guard")
 	}
 }
