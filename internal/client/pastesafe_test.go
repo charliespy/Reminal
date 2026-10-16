@@ -347,7 +347,7 @@ func TestTunnelEndsWhenExposeIsGone(t *testing.T) {
 	r, w, _ := os.Pipe()
 	defer r.Close()
 	ended = false
-	tn = &Tunnel{sessionID: "ABCDEFGH", port: 3000, handshakeFD: int(w.Fd()), webURL: "http://127.0.0.1:1"}
+	tn = &Tunnel{sessionID: "ABCDEFGH", port: 3000, handshakeFD: handshakeFDOf(t, w), webURL: "http://127.0.0.1:1"}
 	tn.abandon = func() { ended = true }
 	tn.writeHandshake()
 	if ended {
