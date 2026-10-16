@@ -163,5 +163,25 @@ const out = [];
   out.push(`TEST 5  after owner connects to ${A} and ${B}: same machine ${r.same}, same as an unseen session ${r.unseen}   ${ok ? 'PASS' : 'FAIL'}`);
   await ctx.close();
 }
+// ---- TEST 6: with the session already there, the status asks only for the PIN ----
+{
+  const ctx = await b.newContext({ ...devices['Pixel 7'] });
+  const p = await ctx.newPage();
+  const status = () => p.evaluate(() => document.getElementById('status').textContent);
+  await p.goto(`${BASE}/?s=${A}`, { waitUntil: 'domcontentloaded' });
+  await p.waitForTimeout(1500);
+  const linked = await status();
+  await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+  const blank = await status();
+  await p.fill('#session-input', A);
+  const typed = await status();
+  await p.fill('#session-input', '');
+  const cleared = await status();
+  const ok = linked === 'Enter the PIN' && blank === 'Session + PIN required' &&
+    typed === 'Enter the PIN' && cleared === 'Session + PIN required';
+  if (!ok) process.exitCode = 1;
+  out.push(`TEST 6  status: link with session "${linked}", blank "${blank}", session typed "${typed}", cleared "${cleared}"   ${ok ? 'PASS' : 'FAIL'}`);
+  await ctx.close();
+}
 console.log(out.join('\n'));
 await b.close();

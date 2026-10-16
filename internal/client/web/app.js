@@ -5503,6 +5503,17 @@
       statusEl.textContent = text;
       statusEl.className = cls || '';
     }
+    // Before any connect, what is still to type: the session and its PIN,
+    // or, the session there already, only the PIN. Once a connect has said
+    // something of its own, that stays.
+    const STATUS_IDLE = ['Session + PIN required', 'Enter the PIN'];
+    const idleStatus = () => {
+      if (!STATUS_IDLE.includes(statusEl.textContent) || statusEl.className) return;
+      statusEl.textContent = sessionInput.value.trim() && !pinInput.value.trim() ? 'Enter the PIN' : 'Session + PIN required';
+    };
+    sessionInput.addEventListener('input', idleStatus);
+    pinInput.addEventListener('input', idleStatus);
+    idleStatus();
 
     function showOverlay(text) {
       overlayText.textContent = text;

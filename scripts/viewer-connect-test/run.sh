@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Drives the real viewer, served by a real relay, against two real sessions in
-# a container — the three things that made a connect hang or hand out a PIN
-# that cannot work:
+# a container — what made a connect hang, hand out a PIN that cannot work,
+# or say the wrong thing:
 #
 #   1. one PIN handshake per connect, not two (two spent the agent's PIN allowance
 #      twice per connect, and it refills one per 10s)
@@ -11,6 +11,8 @@
 #      handshake or into what Share hands out
 #   4. keys typed while a PIN-free switch reads the owner key run in the
 #      session being joined, and only there
+#   5. two sessions on one machine are known to be on one machine
+#   6. with the session already filled in, the status asks only for the PIN
 #
 # Needs docker; the browser runs in a Playwright container. Nothing here
 # touches the host's reminal.
