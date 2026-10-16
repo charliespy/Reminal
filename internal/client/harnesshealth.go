@@ -53,6 +53,13 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 	"amp":    regexp.MustCompile(`wouldyouliketologintoamp|noapikeyfound\.startingloginflow`),
 	"codex":  regexp.MustCompile(`signinwithchatgpt|provideyourownapikey|incorrectapikeyprovided`),
 	"qwen":   regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey`),
+	// pi with no model to run on (no provider logged in) says so on its own
+	// status line, the last on its screen: its context "0" and its model
+	// "unknown" ("0.0%/0 (auto)   unknown"). A message sent it is turned away
+	// with "Error: No API key found for the selected model." Its startup
+	// warning ("No models available. Use /login …") sits above its editor,
+	// out of the rows read, and stays there after a /login, so it is not used.
+	"pi": regexp.MustCompile(`^\d+(\.\d+)?%/0(\([a-z]+\))?unknown$|^[^a-z0-9]*error:noapikeyfoundfortheselected`),
 	// Claude Code's own login menu (a fresh machine shows it before anything
 	// else), and its sign-in step once a way is picked: "Opening browser to
 	// sign in…" under a spinner first, then the link. Its own rows, from

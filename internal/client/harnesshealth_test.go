@@ -143,6 +143,14 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 			"│   ● 1. Sign in with Google                                                   │\n" +
 			"│     2. Use Gemini API Key                                                    │\n" +
 			"│   (Use Enter to select)                                                      │",
+		// pi 0.73.1 with no provider logged in, 47 columns wide (a cloud
+		// machine's): its editor, then its status line.
+		"pi": "───────────────────────────────────────────────\n" +
+			"\n───────────────────────────────────────────────\n/work\n0.0%/0 (auto)                           unknown",
+		// And a message sent to it, turned away.
+		"pi, turned away": " Error: No API key found for the selected      \n model.                                        \n" +
+			" Use /login to log into a provider via OAuth   \n or API key. See:                              \n" +
+			"───────────────────────────────────────────────\n\n───────────────────────────────────────────────\n/work",
 		"amp":                "No API key found. Starting login flow...\nWould you like to log in to Amp? [(y)es, (n)o]: ",
 		"codex":              "  Sign in with ChatGPT to use Codex as part of your paid plan\n  › 1. Sign in with ChatGPT\n    2. Provide your own API key",
 		"codex, turned away": "■ unexpected status 401 Unauthorized: Incorrect API key provided:\nkey at https://platform.openai.com/account/api-keys.",
@@ -366,5 +374,21 @@ func TestClaudeSignInSpinnerKeepsItLoggedOut(t *testing.T) {
 	}
 	if !a.harnessDown() {
 		t.Fatal("while it opens a browser to sign in, it was no longer read as logged out")
+	}
+}
+
+// pi with a model is not logged out: its status line names the model and its
+// context, and its conversation may quote its own words about logins.
+func TestPiWithAModelIsNotLoggedOut(t *testing.T) {
+	for _, ok := range []string{
+		"────────────────────────────────────────────────────────────────────────────────\n\n" +
+			"────────────────────────────────────────────────────────────────────────────────\n/tmp\n" +
+			"↑5 ↓3 0.0%/128k (auto)                                                    mock-1",
+		" The user saw \"Error: No API key found for the selected model.\" in their app.\n/tmp\n0.4%/128k (auto)   mock-1",
+		"0.0%/0 (auto)   unknown is what the status line said",
+	} {
+		if harnessProblemIn(harnessTail(ok, harnessRows), "pi") {
+			t.Errorf("pi with a model read as logged out:\n%s", ok)
+		}
 	}
 }
