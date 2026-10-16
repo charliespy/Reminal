@@ -18,10 +18,13 @@ import (
 // removed owner's phone go quiet. It is bound to the op and the endpoint, so
 // a proof for "read my rules" cannot be replayed as "unsubscribe".
 type pushReq struct {
-	Op    string     `json:"op"` // get | set | remove | test
+	Op    string     `json:"op"` // get | set | remove | test | token
 	Sub   pushSub    `json:"sub"`
 	Rules *pushRules `json:"rules,omitempty"`
 	Proof ownerProof `json:"proof"`
+	// Token (op "token"): the one the relay sent this phone for this
+	// machine, handed on by its page.
+	Token string `json:"token,omitempty"`
 	// ReqID is echoed back so the page can tell ITS answer from the answers
 	// to other viewers' queries, which every viewer on the channel receives.
 	ReqID string `json:"req_id,omitempty"`
@@ -31,7 +34,7 @@ func pushAction(op, endpoint string) string { return "push:" + op + ":" + endpoi
 
 // applyLocalPush answers one phone-alert request on this machine.
 func (a *Agent) applyLocalPush(resp *protocol.DirResponse, q *pushReq) {
-	out := &protocol.DirPush{ReqID: q.ReqID}
+	out := &protocol.DirPush{ReqID: q.ReqID, Tokens: true}
 	resp.Push = out
 	if err := validPushSub(q.Sub); err != nil {
 		out.Error = err.Error()
@@ -57,10 +60,20 @@ func (a *Agent) applyLocalPush(resp *protocol.DirResponse, q *pushReq) {
 			out.Error = "could not save: " + err.Error()
 			return
 		}
+	case "token":
+		if err := setPushToken(q.Sub.Endpoint, q.Token); err != nil {
+			out.Error = err.Error()
+			return
+		}
 	case "test":
 		// Synchronous, so the page can say "sent" or say why not — the whole
-		// point of the button is finding out whether the path works.
-		err := sendPush(q.Sub, pushMessage{
+		// point of the button is finding out whether the path works. As the
+		// watcher sends: with the phone's token, if it has one here.
+		e, ok := findPushSub(q.Sub.Endpoint)
+		if !ok {
+			e = pushEntry{Sub: q.Sub}
+		}
+		err := sendBound(e, pushMessage{
 			Title: pushHostLabel(),
 			Body:  "Test alert — this machine can reach this device.",
 			Tag:   "test", URL: "/",
@@ -77,6 +90,7 @@ func (a *Agent) applyLocalPush(resp *protocol.DirResponse, q *pushReq) {
 	}
 	if e, ok := findPushSub(q.Sub.Endpoint); ok {
 		out.Subscribed = true
+		out.Tokened = e.Token != "" || e.NewToken != ""
 		out.Rules, _ = json.Marshal(e.Rules)
 	} else {
 		out.Rules, _ = json.Marshal(defaultPushRules())

@@ -679,5 +679,12 @@ type DirPush struct {
 	Subscribed bool            `json:"subscribed"`
 	Rules      json.RawMessage `json:"rules,omitempty"`
 	TestSent   bool            `json:"test_sent,omitempty"`
-	Error      string          `json:"error,omitempty"`
+	// Tokened: this phone's alerts here are bound to this machine (it has
+	// the token the relay sent the phone). Subscribed without it, the page
+	// offers to renew them.
+	Tokened bool `json:"tokened,omitempty"`
+	// Tokens: this machine takes an alerts token (op "token"); an older one
+	// says nothing of tokens, and is not asked to renew.
+	Tokens bool   `json:"tokens,omitempty"`
+	Error  string `json:"error,omitempty"`
 }

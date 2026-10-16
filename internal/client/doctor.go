@@ -84,7 +84,23 @@ func allChecks(currentVersion string) []check {
 		{"At-rest key", checkAtRestKey},
 		{"Owner key", checkOwnerKey},
 		{"Window notes", checkWindowNotes},
+		{"Phone alerts", checkPhoneAlerts},
 	}
+}
+
+// checkPhoneAlerts says when phones subscribed here still get alerts that
+// are not bound to this machine: forwarded until pushUntokenedUntil, then
+// not, until each phone turns them on again.
+func checkPhoneAlerts() (level, string) {
+	n := untokenedPushSubs()
+	if n == 0 {
+		return levelOK, "none to renew"
+	}
+	phones := fmt.Sprintf("%d phone(s)", n)
+	if time.Now().Before(pushUntokenedUntil) {
+		return levelWarn, fmt.Sprintf("%s need alerts renewed before %s: open reminal on each and tap Renew alerts", phones, pushUntokenedUntil.Format("2 Jan 2006"))
+	}
+	return levelFail, phones + " no longer get alerts from this machine: open reminal on each and turn alerts on again"
 }
 
 // checkOwnerKey reports how this device's owner identity is kept.

@@ -279,6 +279,41 @@ func runPushWatcher(stop <-chan struct{}) {
 	}
 }
 
+// sendBound sends one alert to e's phone with the best token it has: a new
+// one first (kept if the relay takes it, dropped if it is not this
+// machine's), then the phone's token (dropped if the relay no longer takes
+// it), and, while the relay still forwards them, untokened. So a token that
+// is not good, or a clock the relay disagrees with, never costs the phone
+// an alert it would have got without tokens.
+func sendBound(e pushEntry, m pushMessage) error {
+	fallback := func(err error) bool {
+		return (errors.Is(err, errPushUnbound) || errors.Is(err, errPushClock)) && time.Now().Before(pushUntokenedUntil)
+	}
+	if e.NewToken != "" {
+		err := sendPush(e.Sub, e.NewToken, m)
+		if err == nil {
+			_ = promotePushToken(e.Sub.Endpoint, e.NewToken)
+			return nil
+		}
+		if errors.Is(err, errPushUnbound) {
+			_ = dropNewPushToken(e.Sub.Endpoint, e.NewToken)
+		} else if !errors.Is(err, errPushClock) {
+			return err
+		}
+	}
+	err := sendPush(e.Sub, e.Token, m)
+	if e.Token == "" {
+		return err
+	}
+	if errors.Is(err, errPushUnbound) {
+		_ = clearPushToken(e.Sub.Endpoint, e.Token)
+	}
+	if fallback(err) {
+		return sendPush(e.Sub, "", m)
+	}
+	return err
+}
+
 // deliverPush sends one alert, and forgets the subscription if the phone is
 // gone or its owner has been removed from this machine.
 func deliverPush(e pushEntry, m pushMessage) {
@@ -287,7 +322,7 @@ func deliverPush(e pushEntry, m pushMessage) {
 		return
 	}
 	m.URL = "/"
-	err := sendPush(e.Sub, m)
+	err := sendBound(e, m)
 	if errors.Is(err, errPushGone) {
 		_ = removePushSub(e.Sub.Endpoint)
 		return

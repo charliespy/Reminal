@@ -1,6 +1,6 @@
 import { SessionRoom } from "./session";
 import { RendezvousRoom } from "./rendezvous";
-import { handlePush, handlePushKey, type PushEnv } from "./push";
+import { handlePush, handlePushKey, handlePushToken, type PushEnv } from "./push";
 import { RateLimiter, allow, inIsolate, type LimiterEnv } from "./limiter";
 import { addressGroup } from "./session";
 
@@ -241,6 +241,7 @@ export default {
     // which returned above.
     if (url.pathname === "/push/key") return handlePushKey(env);
     if (url.pathname === "/push") return handlePush(request, env);
+    if (url.pathname === "/push/token") return handlePushToken(request, env);
 
     // Version beacon: the online, maintainer-controlled critical-upgrade switch.
     // Clients fetch this during their ≤24h version check; if their version is

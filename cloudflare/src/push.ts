@@ -18,7 +18,31 @@ export interface PushEnv extends LimiterEnv {
   VAPID_PUBLIC?: string;
   // The matching private key as a JWK (JSON string). A secret, never a var.
   VAPID_PRIVATE_JWK?: string;
+  // The key an alert's token is made with (HMAC-SHA256; any long random
+  // string). A secret: `wrangler secret put PUSH_TOKEN_KEY`.
+  PUSH_TOKEN_KEY?: string;
 }
+
+// Alerts are bound to the machine that registered them. A phone's page asks
+// for a token for (its subscription, the machine it is turning alerts on
+// for); the relay sends that token to the phone itself, sealed to the
+// subscription's keys, in a notification the phone shows — so only the
+// phone can read it, and it hands it to the machine. Each alert then
+// carries the token and a fresh signature by that machine's key over what
+// it sends. The relay keeps nothing: the token is a MAC over what it binds.
+//
+// Alerts without a token (a machine on an older reminal, or a phone that
+// subscribed before tokens) are forwarded until UNTOKENED_UNTIL; after it,
+// refused, and the page offers to renew them.
+export const UNTOKENED_UNTIL = Date.UTC(2026, 11, 15);
+// A token asked for one subscription: few, so asking cannot be used to
+// buzz someone's phone (each ask shows a notification on it).
+const PER_TOKEN_ASK = { calls: 3, period: 600 };
+// An alert's signature is good this many seconds either side of the
+// relay's clock, and only once.
+const SIG_FRESH = 120;
+const tokenAsks = new Map<string, number[]>();
+const sigsSeen = new Map<string, number[]>();
 
 // Only the real push services. Without this the endpoint would make the
 // Worker an open HTTP proxy for anyone willing to POST to it.
@@ -38,6 +62,10 @@ function allowedEndpoint(raw: unknown): URL | null {
     return null;
   }
   if (u.protocol !== "https:" || u.port !== "") return null;
+  // One spelling per subscription, as the browser gave it: the limits and
+  // the token are keyed on it, so another spelling of the same endpoint
+  // (a case, a default port, a query or a fragment) is not let through.
+  if (u.search !== "" || u.hash !== "" || raw !== u.href) return null;
   return PUSH_HOSTS.some((re) => re.test(u.hostname)) ? u : null;
 }
 
@@ -55,6 +83,10 @@ const PER_ENDPOINT = { calls: 20, period: 60 };
 const callers = new Map<string, number[]>();
 const endpoints = new Map<string, number[]>();
 
+// Where the RateLimiter can't be asked (an outage), each isolate counts its
+// own: deliberately not failing closed, so a blip drops no real alerts. For
+// the once-check on an alert's signature that means a replay to another
+// isolate during an outage gets through, at worst one alert shown twice.
 async function within(env: LimiterEnv, scope: string, counts: Map<string, number[]>, key: string, lim: { calls: number; period: number }): Promise<boolean> {
   const c = await allow(env, scope, key, lim.calls, lim.period);
   return c === true || (c === null && inIsolate(counts, key, lim.calls, lim.period));
@@ -100,6 +132,82 @@ async function vapidJWT(env: PushEnv, audience: string, nowSec: number): Promise
   return jwt;
 }
 
+const enc = new TextEncoder();
+
+// A machine's ed25519 public key, as the page and the machine send it
+// (base64 or base64url), in one spelling for the MAC: standard base64.
+function machineKey(raw: unknown): { b64: string; bytes: Uint8Array<ArrayBuffer> } | null {
+  if (typeof raw !== "string" || raw.length > 64) return null;
+  let bytes: Uint8Array<ArrayBuffer>;
+  try {
+    bytes = b64ToBytes(raw);
+  } catch {
+    return null;
+  }
+  if (bytes.length !== 32) return null;
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return { b64: btoa(s), bytes };
+}
+
+async function hmac(env: PushEnv, msg: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", enc.encode(env.PUSH_TOKEN_KEY as string), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return b64url(await crypto.subtle.sign("HMAC", key, enc.encode(msg)));
+}
+
+// tokenFor binds an alert subscription to the machine that may send to it.
+// Its issued-at is in it, so a later rule can retire old ones.
+async function tokenFor(env: PushEnv, endpoint: string, machine: string, iat: number): Promise<string> {
+  return "v1." + iat + "." + (await hmac(env, "reminal-push-token\n" + endpoint + "\n" + machine + "\n" + iat));
+}
+
+async function tokenGood(env: PushEnv, token: unknown, endpoint: string, machine: string, nowSec: number): Promise<boolean> {
+  if (typeof token !== "string") return false;
+  const m = /^v1\.(\d{1,12})\.([A-Za-z0-9_-]{43})$/.exec(token);
+  if (!m || Number(m[1]) > nowSec + SIG_FRESH) return false;
+  const want = await tokenFor(env, endpoint, machine, Number(m[1]));
+  // Compared whole, as bytes of equal length, without stopping early.
+  const a = enc.encode(want), b = enc.encode(token);
+  if (a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+  return d === 0;
+}
+
+// What a machine signs for one alert: where it goes, what it is, and when.
+export function alertSigned(endpoint: string, payloadSha256Hex: string, ts: number): string {
+  return "reminal-push\n" + endpoint + "\n" + payloadSha256Hex + "\n" + ts;
+}
+
+function hex(buf: ArrayBuffer): string {
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// RFC 8291 (aes128gcm): a message sealed to one subscription's keys, as a
+// machine seals its alerts (webpush.go's sealPush).
+export async function sealTo(p256dh: Uint8Array<ArrayBuffer>, auth: Uint8Array<ArrayBuffer>, plaintext: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
+  const ua = await crypto.subtle.importKey("raw", p256dh, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const as = (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])) as CryptoKeyPair;
+  const asPub = new Uint8Array(await crypto.subtle.exportKey("raw", as.publicKey) as ArrayBuffer);
+  const ecdh = await crypto.subtle.deriveBits({ name: "ECDH", public: ua }, as.privateKey, 256);
+  const hkdf = async (salt: Uint8Array<ArrayBuffer>, ikm: ArrayBuffer, info: Uint8Array<ArrayBuffer>, n: number) =>
+    crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt, info }, await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]), n * 8);
+  const cat = (...parts: Uint8Array[]) => {
+    const out = new Uint8Array(new ArrayBuffer(parts.reduce((n, p) => n + p.length, 0)));
+    let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  };
+  const ikm = await hkdf(auth, ecdh, cat(enc.encode("WebPush: info\0"), p256dh, asPub), 32);
+  const salt = crypto.getRandomValues(new Uint8Array(new ArrayBuffer(16)));
+  const cek = await hkdf(salt, ikm, enc.encode("Content-Encoding: aes128gcm\0"), 16);
+  const nonce = await hkdf(salt, ikm, enc.encode("Content-Encoding: nonce\0"), 12);
+  const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, cat(plaintext, new Uint8Array([2]))));
+  const rs = new Uint8Array([0, 0, 16, 0]); // 4096
+  return cat(salt, rs, new Uint8Array([asPub.length]), asPub, ct);
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -113,13 +221,70 @@ export function handlePushKey(env: PushEnv): Response {
   return json({ key: env.VAPID_PUBLIC });
 }
 
-// POST /push {endpoint, payload (base64 aes128gcm), ttl?, urgency?}
+// POST /push/token {endpoint, p256dh, auth, machine}: a token binding this
+// subscription to that machine, sent to the subscription itself — sealed, in
+// a notification its phone shows (the service worker hands the token to the
+// page, and the page to the machine). Answers {status}, the push service's.
+export async function handlePushToken(request: Request, env: PushEnv): Promise<Response> {
+  if (request.method !== "POST") return json({ error: "POST only" }, 405);
+  if (!env.VAPID_PUBLIC || !env.VAPID_PRIVATE_JWK || !env.PUSH_TOKEN_KEY) return json({ error: "alerts are not set up on this relay" }, 501);
+  let req: { endpoint?: unknown; p256dh?: unknown; auth?: unknown; machine?: unknown };
+  try {
+    req = await request.json();
+  } catch {
+    return json({ error: "bad request" }, 400);
+  }
+  const ep = allowedEndpoint(req.endpoint);
+  if (!ep) return json({ error: "not a known push service" }, 400);
+  const machine = machineKey(req.machine);
+  if (!machine) return json({ error: "not a machine's key" }, 400);
+  let p256dh: Uint8Array<ArrayBuffer>, auth: Uint8Array<ArrayBuffer>;
+  try {
+    p256dh = b64ToBytes(String(req.p256dh));
+    auth = b64ToBytes(String(req.auth));
+  } catch {
+    return json({ error: "bad subscription keys" }, 400);
+  }
+  if (p256dh.length !== 65 || p256dh[0] !== 4 || auth.length !== 16) return json({ error: "bad subscription keys" }, 400);
+  const endpoint = ep.href;
+  const caller = addressGroup(request.headers.get("cf-connecting-ip") ?? "");
+  if (!(await within(env, "push-caller", callers, caller, PER_CALLER)) ||
+    !(await within(env, "push-token", tokenAsks, endpoint, PER_TOKEN_ASK))) {
+    return json({ error: "too many requests; try again in a few minutes" }, 429);
+  }
+  const now = Date.now();
+  const token = await tokenFor(env, endpoint, machine.b64, Math.floor(now / 1000));
+  let sealed: Uint8Array<ArrayBuffer>;
+  try {
+    sealed = await sealTo(p256dh, auth, enc.encode(JSON.stringify({ kind: "alerts-on", machine: machine.b64, token, at: now })));
+  } catch {
+    return json({ error: "bad subscription keys" }, 400);
+  }
+  const jwt = await vapidJWT(env, ep.origin, Math.floor(now / 1000));
+  const res = await fetch(ep.href, {
+    method: "POST",
+    headers: {
+      TTL: "600",
+      Urgency: "normal",
+      "Content-Encoding": "aes128gcm",
+      "Content-Type": "application/octet-stream",
+      Authorization: `vapid t=${jwt}, k=${env.VAPID_PUBLIC}`,
+    },
+    body: sealed,
+  });
+  await res.body?.cancel();
+  return json({ status: res.status });
+}
+
+// POST /push {endpoint, payload (base64 aes128gcm), ttl?, urgency?,
+// token, machine, ts, sig}
 // Answers {status} — the push service's own status — so the machine can tell
-// "delivered" from "this phone is gone, forget it" (404/410).
-export async function handlePush(request: Request, env: PushEnv): Promise<Response> {
+// "delivered" from "this phone is gone, forget it" (404/410). Without a
+// token (until UNTOKENED_UNTIL): forwarded as before.
+export async function handlePush(request: Request, env: PushEnv, nowMs = Date.now()): Promise<Response> {
   if (request.method !== "POST") return json({ error: "POST only" }, 405);
   if (!env.VAPID_PUBLIC || !env.VAPID_PRIVATE_JWK) return json({ error: "alerts are not set up on this relay" }, 501);
-  let req: { endpoint?: unknown; payload?: unknown; ttl?: unknown; urgency?: unknown };
+  let req: { endpoint?: unknown; payload?: unknown; ttl?: unknown; urgency?: unknown; token?: unknown; machine?: unknown; ts?: unknown; sig?: unknown };
   try {
     req = await request.json();
   } catch {
@@ -138,7 +303,41 @@ export async function handlePush(request: Request, env: PushEnv): Promise<Respon
   // (86) plus the GCM tag (16) plus the record delimiter (1): anything shorter
   // cannot be a sealed message.
   if (payload.length > 4096 || payload.length < 103) return json({ error: "payload size" }, 400);
-  const now = Date.now();
+  const now = nowMs;
+  // Checked before anything is counted: an alert that is not the machine's
+  // spends none of its subscription's allowance.
+  const nowSec = Math.floor(now / 1000);
+  // A relay without PUSH_TOKEN_KEY (not set up yet) checks no token, and
+  // takes the alert as an untokened one.
+  if (req.token !== undefined && env.PUSH_TOKEN_KEY) {
+    const machine = machineKey(req.machine);
+    const ts = typeof req.ts === "number" && Number.isInteger(req.ts) ? req.ts : NaN;
+    if (!machine || !(await tokenGood(env, req.token, ep.href, machine.b64, nowSec))) {
+      return json({ error: "this alert is not bound to this machine; turn alerts on again from the phone", code: "unbound" }, 403);
+    }
+    if (!(Math.abs(nowSec - ts) <= SIG_FRESH)) return json({ error: "this alert's time is off; check this machine's clock", code: "clock" }, 403);
+    let sig: Uint8Array<ArrayBuffer>;
+    try {
+      sig = b64ToBytes(String(req.sig));
+    } catch {
+      return json({ error: "bad signature", code: "unbound" }, 403);
+    }
+    const key = await crypto.subtle.importKey("raw", machine.bytes, { name: "Ed25519" }, false, ["verify"]);
+    const signed = alertSigned(ep.href, hex(await crypto.subtle.digest("SHA-256", payload)), ts);
+    if (sig.length !== 64 || !(await crypto.subtle.verify({ name: "Ed25519" }, key, sig, enc.encode(signed)))) {
+      return json({ error: "bad signature", code: "unbound" }, 403);
+    }
+    // Once: the same signed alert sent again is refused for as long as its
+    // time would pass. Keyed on what was signed, not on the signature's bytes.
+    if (!(await within(env, "push-sig", sigsSeen, b64url(await crypto.subtle.digest("SHA-256", enc.encode(signed))), { calls: 1, period: 2 * SIG_FRESH }))) {
+      return json({ error: "this alert was already sent" }, 409);
+    }
+  } else if (now >= UNTOKENED_UNTIL) {
+    // A relay without PUSH_TOKEN_KEY can check no token: it says so, rather
+    // than calling a good token unbound (machines drop an unbound one).
+    if (!env.PUSH_TOKEN_KEY) return json({ error: "alerts are not set up on this relay" }, 501);
+    return json({ error: "alerts to this phone must be renewed: open reminal on it and turn them on again", code: "renew" }, 403);
+  }
   const caller = addressGroup(request.headers.get("cf-connecting-ip") ?? "");
   if (!(await within(env, "push-caller", callers, caller, PER_CALLER)) ||
     !(await within(env, "push-endpoint", endpoints, ep.href, PER_ENDPOINT))) {
@@ -147,7 +346,7 @@ export async function handlePush(request: Request, env: PushEnv): Promise<Respon
 
   const ttl = typeof req.ttl === "number" && req.ttl >= 0 && req.ttl <= 86400 ? Math.floor(req.ttl) : 3600;
   const urgency = ["very-low", "low", "normal", "high"].includes(req.urgency as string) ? (req.urgency as string) : "normal";
-  const jwt = await vapidJWT(env, ep.origin, Math.floor(now / 1000));
+  const jwt = await vapidJWT(env, ep.origin, nowSec);
   const res = await fetch(ep.href, {
     method: "POST",
     headers: {

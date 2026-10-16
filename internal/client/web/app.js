@@ -990,11 +990,79 @@
       const j = s.toJSON();
       return { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth };
     }
-    async function pushCall(b64, op, sub, rules) {
-      const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { push: { op, sub, rules }, timeout: op === 'test' ? 30000 : 10000 });
+    async function pushCall(b64, op, sub, rules, token) {
+      const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { push: { op, sub, rules, token }, timeout: op === 'test' ? 30000 : 10000 });
       if (!r || !r.push) throw new Error('needs-upgrade');
-      if (r.push.error) throw new Error(r.push.error);
+      if (r.push.error) throw Object.assign(new Error(r.push.error), { answered: true });
       return r.push;
+    }
+
+    // Alerts are bound to the machine they are turned on for. The relay sends
+    // this phone a token for (this subscription, that machine) in a
+    // notification, "Alerts are on"; the service worker keeps it for the page
+    // (sw.js), and the page hands it to that machine (op "token"). A machine
+    // that has none for this phone (it was turned on before) says so
+    // (tokened false), and the sheet offers Renew alerts on this phone.
+    const ALERT_TOKENS = 'reminal-alert-tokens';
+    // When the relay stops forwarding alerts without a token (push.ts's
+    // UNTOKENED_UNTIL).
+    const ALERTS_UNTOKENED_UNTIL = Date.UTC(2026, 11, 15);
+    async function askAlertToken(b64, sub) {
+      const r = await fetch('/push/token', { method: 'POST', cache: 'no-store', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth, machine: b64URLToStd(b64) }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'The relay could not renew alerts');
+    }
+    // The tokens the service worker kept, each handed to its machine.
+    let alertTokensBusy = null;
+    function deliverAlertTokens() {
+      if (alertTokensBusy) return alertTokensBusy;
+      alertTokensBusy = (async () => {
+        let c;
+        try { c = await caches.open(ALERT_TOKENS); } catch (_) { return; }
+        const { store } = await sortedAlertMachines();
+        const sub = alerts.sub || await pushSubscription(false).catch(() => null);
+        if (!sub) return;
+        for (const req of await c.keys()) {
+          const machine = decodeURIComponent(new URL(req.url).pathname.split('/').pop() || '');
+          const b64 = Object.keys(store).find(k => b64URLToStd(k) === machine);
+          const token = await (await c.match(req)).text();
+          if (!b64) { await c.delete(req); continue; }
+          try { await pushCall(b64, 'token', sub, undefined, token); await c.delete(req); }
+          // Refused by the machine (alerts off there, not its owner): it will
+          // not take it later either. Not reached: tried again the next time
+          // the page or the sheet opens.
+          catch (e) { if (e && e.answered) await c.delete(req); }
+        }
+        if (alerts.open) await checkAlertTokens();
+      })().finally(() => { alertTokensBusy = null; });
+      return alertTokensBusy;
+    }
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.type === 'alert-token') deliverAlertTokens(); });
+    }
+    // Which machines this phone's alerts are on without a token, by asking
+    // each that is on (only while the sheet is open).
+    async function checkAlertTokens() {
+      const prefs = alertPrefsCache || await loadAlertPrefs();
+      const { store, keys } = await sortedAlertMachines();
+      if (!alerts.sub) { alerts.renew = []; return; }
+      const renew = [];
+      await Promise.all(keys.filter(k => alertMachineOn(prefs, store[k])).map(async k => {
+        try { const r = await pushCall(k, 'get', alerts.sub); if (r.subscribed && r.tokens && !r.tokened) renew.push(k); } catch (_) {}
+      }));
+      alerts.renew = renew;
+      if (alerts.open) paintAlerts();
+    }
+    async function alertsRenew() {
+      if (alerts.busy || !alerts.sub) return;
+      alerts.busy = true; paintAlerts();
+      let failed = '';
+      for (const k of alerts.renew || []) {
+        try { await askAlertToken(k, alerts.sub); } catch (e) { failed = (e && e.message) || 'that did not work'; }
+      }
+      alerts.busy = false;
+      alertsSay(failed ? 'err' : 'ok', failed || 'Renewing — a notification “Alerts are on” arrives on this device for each machine.');
     }
 
     // The rules a machine runs: its own when customised, the defaults otherwise.
@@ -1033,8 +1101,12 @@
       if (!sub) return setAlertRow(b64, 'off');
       setAlertRow(b64, 'saving');
       try {
-        if (want) await pushCall(b64, 'set', sub, alertRulesFor(prefs, rec));
-        else await pushCall(b64, 'remove', sub);
+        if (want) {
+          const r = await pushCall(b64, 'set', sub, alertRulesFor(prefs, rec));
+          // Bound to this machine from the start (a machine too old for it
+          // says nothing of tokens).
+          if (r.tokens && !r.tokened) askAlertToken(b64, sub).catch(() => {});
+        } else await pushCall(b64, 'remove', sub);
         await withOwnedMachines(m => { if (!m[b64]) return false; m[b64].alertsSynced = key; delete m[b64].alertsNeedsUpdate; });
         return setAlertRow(b64, want ? 'on' : 'off');
       } catch (e) {
@@ -1232,6 +1304,8 @@
         alerts.view = 'on'; alerts.detail = focusB64 || '';
         paintAlerts();
         await syncAllAlerts({ retryOld: true });
+        await deliverAlertTokens();
+        await checkAlertTokens();
       } else {
         alerts.view = 'off';
         paintAlerts();
@@ -1408,7 +1482,13 @@
             + alertSwitch('data-machine="' + escHTML(k) + '"', !rec.alertsOff, 'Alerts for ' + machineLabel(rec, k))
             + '<span class="al-chev">' + aIcon('right', 16) + '</span></div>';
         }
-        h += '</div>' + alertMsgHTML();
+        h += '</div>';
+        if ((a.renew || []).length) {
+          h += '<div class="al-renew"><div class="al-text">Alerts on this device need renewing for ' + escHTML((a.renew || []).map(k => machineLabel(store[k] || {}, k)).join(', '))
+            + ' — they stop after ' + new Date(ALERTS_UNTOKENED_UNTIL).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) + ' otherwise.</div>'
+            + '<button class="al-btn" id="al-renew"' + (a.busy ? ' disabled' : '') + '>' + aIcon('bell', 15) + '<span>Renew alerts on this phone</span></button></div>';
+        }
+        h += alertMsgHTML();
         h += '<div class="al-foot"><button class="al-btn" id="al-test"' + (a.busy ? ' disabled' : '') + '>' + aIcon('send', 15) + '<span>Send a test</span></button>'
           + '<button class="al-btn quiet" id="al-off"' + (a.busy ? ' disabled' : '') + '>' + aIcon('belloff', 15) + '<span>Turn all off</span></button></div>';
       }
@@ -1427,6 +1507,7 @@
       bind('al-test', () => alertsSendTest(null));
       bind('al-test-one', () => alertsSendTest(machine));
       bind('al-off', alertsTurnOffAll);
+      bind('al-renew', alertsRenew);
 
       // Rules save themselves after a short pause, so stepping a chip twice is
       // one update per machine, not two. In a machine's view they edit that
