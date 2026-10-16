@@ -100,9 +100,19 @@ func (a *Agent) notify(format string, args ...any) {
 // recordActive writes this agent's session record — for a session. The
 // machine channel has no record: it is reached through the directory, not
 // listed in it.
+// It writes nothing once the session is paused (stopped sharing): its record
+// is gone on purpose then.
 func (a *Agent) recordActive(viewers int) {
 	if a.machine {
 		return
+	}
+	a.recordMu.Lock()
+	defer a.recordMu.Unlock()
+	if a.paused.Load() {
+		return
+	}
+	if a.afterPausedCheck != nil {
+		a.afterPausedCheck()
 	}
 	_ = session.WriteActive(a.activeRecord(viewers))
 }
