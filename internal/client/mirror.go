@@ -679,6 +679,8 @@ type lineLogger struct {
 	// outside the lock. The capture helper's logger uses it to spot the
 	// stuck-replayd failure (see replayd_heal.go).
 	onLine func(string)
+	// out is where the lines go; nil is our stderr.
+	out io.Writer
 }
 
 func (l *lineLogger) Write(p []byte) (int, error) {
@@ -686,7 +688,11 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	for _, c := range p {
 		if c == '\n' {
-			fmt.Fprintf(os.Stderr, "%s%s\n", l.prefix, l.buf)
+			out := l.out
+			if out == nil {
+				out = os.Stderr
+			}
+			fmt.Fprintf(out, "%s%s\n", l.prefix, l.buf)
 			if l.onLine != nil {
 				lines = append(lines, string(l.buf))
 			}

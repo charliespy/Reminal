@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -35,12 +36,49 @@ func lidDimStatePath() string {
 	return filepath.Join(home, ".reminal", "liddim-brightness")
 }
 
-// lidDimLog carries the dimmer's lines (lid shut and open, what it dimmed and
-// restored, with the values and the time) to our stderr, which for the daemon
-// is ~/.reminal/daemon.log.
-var lidDimLog = &lineLogger{prefix: "reminal: liddim: "}
+// lidDimLog is where the dimmer's lines go (lid shut and open, what it dimmed
+// and restored, with the values and the time). The daemon's stderr is
+// ~/.reminal/daemon.log, so it keeps them there. A session's stderr is the
+// terminal it runs in, which must never see them: a session that stands in for
+// a missing daemon writes them to ~/.reminal/liddim.log instead.
+func lidDimLog(isDaemon bool) io.Writer {
+	if isDaemon {
+		return &lineLogger{prefix: "reminal: liddim: "}
+	}
+	return &lineLogger{prefix: "reminal: liddim: ", out: &appendFile{path: lidDimLogPath()}}
+}
+
+func lidDimLogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".reminal", "liddim.log")
+}
+
+// appendFile appends to the file at path, opened on the first write. With no
+// path, or one that cannot be opened, the lines are dropped.
+type appendFile struct {
+	path string
+	once sync.Once
+	f    *os.File
+}
+
+func (a *appendFile) Write(p []byte) (int, error) {
+	a.once.Do(func() {
+		if a.path != "" {
+			a.f, _ = os.OpenFile(a.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+		}
+	})
+	if a.f == nil {
+		return len(p), nil
+	}
+	return a.f.Write(p)
+}
 
 type lidDimmer struct {
+	// log takes the helper's output (lidDimLog).
+	log   io.Writer
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
 	done  chan struct{}
@@ -79,7 +117,7 @@ func (l *lidDimmer) ensure() {
 		return
 	}
 	cmd := helperCommand(helper, "liddim", state)
-	cmd.Stdout = lidDimLog
+	cmd.Stdout = l.log
 	stdin, err := cmd.StdinPipe() // lifeline: EOF tells it to restore and exit
 	if err != nil {
 		return
@@ -93,14 +131,23 @@ func (l *lidDimmer) ensure() {
 	l.cmd, l.stdin, l.done = cmd, stdin, done
 }
 
-// stop ends the dimmer, giving it the time to put the brightness back first.
-// With none running, a brightness a killed dimmer left behind is put back by
-// a short run that sees EOF at once.
+// stop ends the dimmer, giving it the time to put the brightness back first,
+// and then puts back a brightness a killed dimmer left in the state file.
+// Only the census owner calls it: the state file is the owner's, and while a
+// live dimmer elsewhere has the screen dark behind a shut lid, the record is
+// that dimmer's and putting it back would light the screen under the lid.
 func (l *lidDimmer) stop() {
+	l.yield()
+	if !l.off {
+		restoreLeftover(l.log)
+	}
+}
+
+// yield ends a dimmer of our own, if there is one, and touches nothing else.
+// It is what a process that does not own the census calls: the owner's dimmer
+// and its state file are not ours.
+func (l *lidDimmer) yield() {
 	if l.cmd == nil {
-		if !l.off {
-			restoreLeftover()
-		}
 		return
 	}
 	_ = l.stdin.Close()
@@ -109,9 +156,6 @@ func (l *lidDimmer) stop() {
 	}
 	waitOrKill(l.cmd, l.done)
 	l.cmd, l.stdin, l.done = nil, nil, nil
-	// However it ended (restored and exited, killed after the grace, or died
-	// to a signal earlier), a record it left is put back now.
-	restoreLeftover()
 }
 
 // stoppedProcess reports whether pid is stopped (SIGSTOP, SIGTSTP): alive,
@@ -127,7 +171,7 @@ const sstop = 4
 // restoreLeftover puts back a brightness that a dimmer killed with the lid
 // shut left in the state file: a short run whose stdin is /dev/null restores
 // and exits at once.
-func restoreLeftover() {
+func restoreLeftover(log io.Writer) {
 	state := lidDimStatePath()
 	if state == "" {
 		return
@@ -140,7 +184,7 @@ func restoreLeftover() {
 		return
 	}
 	cmd := helperCommand(helper, "liddim", state)
-	cmd.Stdout = lidDimLog
+	cmd.Stdout = log
 	if err := cmd.Start(); err != nil {
 		return
 	}
