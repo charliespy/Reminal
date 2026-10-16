@@ -334,6 +334,13 @@ type Agent struct {
 	// reconnect loop stops trying to reach the relay and the local shell
 	// keeps running on the host terminal as a plain interactive session.
 	paused atomic.Bool
+	// recordMu makes "not paused, so write the record" one step against
+	// pause's "paused, so clear it": without it a write that checked just
+	// before a pause lands just after it, and the stopped session's record
+	// is back, listed as sharing.
+	recordMu sync.Mutex
+	// afterPausedCheck, for tests, runs between that check and the write.
+	afterPausedCheck func()
 
 	// restarting marks a Windows hot restart in flight: the session record on
 	// disk belongs to the SUCCESSOR process now, so this (old) agent's exit
@@ -2184,10 +2191,13 @@ func (a *Agent) broadcastNotice(text string) {
 // reconnect loop stops trying. The PTY pumps keep running, so the host
 // terminal continues working as a plain local shell.
 func (a *Agent) pause() {
+	a.recordMu.Lock()
 	if !a.paused.CompareAndSwap(false, true) {
+		a.recordMu.Unlock()
 		return // already paused
 	}
 	_ = session.ClearActiveIfOwn(a.sessionID, os.Getpid())
+	a.recordMu.Unlock()
 	_ = session.ClearHookState(a.sessionID)
 	_ = session.ClearRestore(a.sessionID) // stopped on purpose: not to come back
 	a.currentConnMu.Lock()
