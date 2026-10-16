@@ -46,8 +46,13 @@ type dirBusyError struct{ Wait time.Duration }
 
 func (e *dirBusyError) Error() string { return "the machine is busy; asked again shortly" }
 
+// dirBusyMaxWait caps a wait a "busy" asks for. own_busy travels in the
+// clear, so its retry_ms is the relay's to write: whatever it says, a call
+// waits no longer than this before asking again.
+const dirBusyMaxWait = 60 * time.Second
+
 func busyAfter(ms int) error {
-	return &dirBusyError{Wait: time.Duration(max(1, ms)) * time.Millisecond}
+	return &dirBusyError{Wait: min(time.Duration(max(1, ms))*time.Millisecond, dirBusyMaxWait)}
 }
 
 // dirBusyTries bounds how many times one call is asked again of a machine

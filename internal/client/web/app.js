@@ -3955,7 +3955,11 @@
         }
       }
     }
-    const dirBusy = ms => Object.assign(new Error('the machine is busy'), { busyMs: Math.max(1, Number(ms) || 1) });
+    // own_busy travels in the clear (the relay could write its retry_ms):
+    // no wait longer than a minute, whatever it says.
+    const DIR_BUSY_MAX_MS = 60000;
+    const dirBusyMs = ms => Math.min(DIR_BUSY_MAX_MS, Math.max(1, Number(ms) || 1));
+    const dirBusy = ms => Object.assign(new Error('the machine is busy'), { busyMs: dirBusyMs(ms) });
     async function queryDirectoryOnce(machinePubU8, opts) {
       opts = opts || {};
       const dk = await loadDeviceKeyPair();
@@ -5120,7 +5124,7 @@
             if (msg.type === 'own_busy' && msg.ex_id === att.exID) {
               clearTimeout(timer);
               warmClose(w);
-              w.retryAt = Date.now() + Math.max(1, Number(msg.retry_ms) || 1);
+              w.retryAt = Date.now() + dirBusyMs(msg.retry_ms);
               return;
             }
             if (msg.type !== 'own_resp' || msg.ex_id !== att.exID) return;
@@ -5158,7 +5162,7 @@
             // id), it is asked again when the machine says; another owner's
             // is not this one's to act on.
             if (resp && resp.retry_ms) {
-              if (!resp.req_id && w.inflight) setTimeout(() => { if (w.sock === sock) { w.inflight = false; warmSend(b64, w); } }, resp.retry_ms);
+              if (!resp.req_id && w.inflight) setTimeout(() => { if (w.sock === sock) { w.inflight = false; warmSend(b64, w); } }, dirBusyMs(resp.retry_ms));
               return;
             }
             w.inflight = false;

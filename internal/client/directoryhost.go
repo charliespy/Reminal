@@ -257,7 +257,10 @@ func (tb *tokenBucket) take(now time.Time) (bool, time.Duration) {
 	}
 	tb.last = now
 	if tb.tokens < 1 {
-		return false, time.Duration(math.Ceil((1-tb.tokens)/tb.perSec*1000)) * time.Millisecond
+		if tb.perSec <= 0 {
+			return false, dirBusyMaxWait // never refills: asked the longest wait
+		}
+		return false, min(time.Duration(math.Ceil((1-tb.tokens)/tb.perSec*1000))*time.Millisecond, dirBusyMaxWait)
 	}
 	tb.tokens--
 	return true, 0

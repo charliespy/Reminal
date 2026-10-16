@@ -110,3 +110,17 @@ func TestTwoClientsHammeringOneMachineAreAllAnswered(t *testing.T) {
 		t.Errorf("%d sessions started, want %d", n, clients*spawns)
 	}
 }
+
+// own_busy travels in the clear, so its retry_ms could say anything: a call
+// waits what a busy answer asks, but never past dirBusyMaxWait.
+func TestABusyWaitIsCapped(t *testing.T) {
+	for _, c := range []struct {
+		ms   int
+		want time.Duration
+	}{{0, time.Millisecond}, {250, 250 * time.Millisecond}, {1<<31 - 1, dirBusyMaxWait}} {
+		var busy *dirBusyError
+		if !errors.As(busyAfter(c.ms), &busy) || busy.Wait != c.want {
+			t.Errorf("busyAfter(%d) waits %v, want %v", c.ms, busy.Wait, c.want)
+		}
+	}
+}
