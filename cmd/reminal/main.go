@@ -2174,6 +2174,15 @@ func runList(args []string) error {
 		if verbose {
 			fmt.Printf("  %s  %s\n",
 				strings.Repeat(" ", nameW), cDim(a.OpenURL+"  ·  PIN "+a.PIN))
+		} else if a.IsPort() && a.OpenURL != "" {
+			// A shared port is reached by its link, so the list shows it, whole
+			// (never truncated: it's there to be copied). The PIN stays in
+			// `reminal info <port>` and -v, as it does for shells.
+			indent := strings.Repeat(" ", nameW)
+			if narrow {
+				indent = "" // a phone has no width to spare before a long link
+			}
+			fmt.Printf("  %s  %s\n", indent, a.OpenURL)
 		}
 	}
 	fmt.Println()
