@@ -827,6 +827,13 @@ var attnPromptCues = []string{
 	// question, and by its first choice, which stays in the rows read when
 	// the question has scrolled above them.
 	"do you trust the files in this folder?", "1. trust folder (",
+	// Claude Code's first screen on a machine it has not run on: its theme
+	// picker ("Let's get started. Choose the text style…"), a choice only the
+	// person can make. Its options sit above a dashed preview, so the only
+	// row under that last rule is the preview's own footer, matched by its
+	// hint: shown by the theme picker alone (its /theme command's too, which
+	// asks the same of the person), whether the highlighting is on or off.
+	"(ctrl+t to disable)", "(ctrl+t to enable)",
 }
 
 // The screen is read as text: the render carries its styling, and Claude
