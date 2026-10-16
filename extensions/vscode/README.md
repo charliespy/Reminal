@@ -46,6 +46,25 @@ first one has run and typing alongside it. One agent can review or test what
 another has built, take over a task partway through, or keep an eye on a long
 job while the first moves on. You can watch it all from your phone.
 
+## Copy files to another machine
+
+Right-click a file or folder in the Explorer and choose **reminal Copy** to
+get a one-time code. On the other machine, right-click the folder it should
+go in and choose **reminal Paste…**, or run `reminal paste <code>` in any
+terminal. The two machines don't need to be on the same network, the code
+works once and only for an hour, and a folder arrives just as it was when you
+copied it. Something whose name starts with a dot, such as `.ssh`, is pasted
+as `pasted-.ssh`, so it never lands as a hidden file or folder.
+
+## Share a port
+
+The cloud button's list also shows the ports you're sharing with
+`reminal expose`, ready to copy the link, open it or stop sharing.
+**Share a Port…** at the bottom of the list shares another one, such as your
+dev server, at a public address that asks for a PIN.
+
+Copying folders and the ports in the list need reminal 3.17.0 or later.
+
 ## Know when your agent needs you
 
 When an agent such as Claude Code runs in a reminal terminal, its tab shows how
@@ -81,8 +100,8 @@ everything as you left it. Send the link and PIN to a colleague and you're pair
 programming in the same shell, with no account needed.
 
 `reminal expose 3000` publishes a local web server at a public address guarded
-by a PIN. `reminal copy` and `reminal paste` move a file between two machines
-with a one-time code. `reminal machines` lists every computer you own and
+by a PIN. `reminal copy` and `reminal paste` move a file or folder between two
+machines with a one-time code. `reminal machines` lists every computer you own and
 what's running on each, and `reminal integrate` gives Claude Code, Codex,
 Cursor, Gemini and other agents an MCP server for reading and typing into your
 sessions.

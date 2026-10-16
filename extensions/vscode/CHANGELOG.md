@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0
+
+- reminal Copy and reminal Paste in the Explorer's right-click menu: copy a
+  file or folder, and paste it on another machine with a one-time code.
+- The cloud button's list shows the ports you share with reminal, with Copy
+  link, Open in browser and Stop sharing, and Share a Port to share another.
+- Choosing reminal from the + menu no longer shows another terminal for a
+  moment before the new one.
+
 ## 0.1.1
 
 - A clearer store listing, and a few words on what else reminal can do.

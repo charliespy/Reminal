@@ -12,7 +12,11 @@ import {
   SessionInfo,
   Status,
   findReminal,
+  isPort,
+  isWebLink,
   listSessions,
+  plainText,
+  queryAll,
   querySessions,
   statusOf,
   summary,
@@ -20,10 +24,12 @@ import {
 } from "./reminal";
 import { shareAgentText, shareHumanText } from "./share";
 import { TabOrder } from "./tabs";
+import { PortItem, SHARE_PORT_ITEM, copyItem, pasteHere, portActions, portItems, sharePort } from "./transfer";
 
 const PROFILE_ID = "reminal.terminal";
 const TERMINAL_NAME = "reminal";
 const POLL_MS = 3000;
+const PID_WAIT_MS = 2000;
 
 // The session each reminal terminal turned out to be, once known. A Map, not
 // a WeakMap, because the status bar walks it; closed terminals are removed.
@@ -178,6 +184,7 @@ function cwdOf(t: vscode.Terminal | undefined): string | undefined {
 
 function isReminalTerminal(t: vscode.Terminal, bin: string | undefined): boolean {
   const opts = t.creationOptions as vscode.TerminalOptions;
+  if (opts?.hideFromUser || t.name === PLACEHOLDER_NAME) return false; // the profile's placeholder
   return ours.has(t) || (!!bin && opts?.shellPath === bin);
 }
 
@@ -192,7 +199,7 @@ async function showLink(s: SessionInfo, intro?: string): Promise<void> {
     await vscode.env.clipboard.writeText(s.join_url);
     vscode.window.setStatusBarMessage("reminal link copied", 3000);
   } else if (choice === "Open in browser") {
-    vscode.env.openExternal(vscode.Uri.parse(s.join_url));
+    if (isWebLink(s.join_url)) vscode.env.openExternal(vscode.Uri.parse(s.join_url));
   }
 }
 
@@ -272,7 +279,7 @@ function label(t: vscode.Terminal, s: SessionInfo): string {
 // plain is a folder or terminal name as it goes into a notification, which
 // reads [text](target) as a link: without the brackets it stays just text.
 function plain(s: string): string {
-  return s.replace(/[[\]]/g, "");
+  return plainText(s, 500);
 }
 
 function statusFor(t: vscode.Terminal): Status | undefined {
@@ -465,7 +472,9 @@ const hostStart = Date.now() - process.uptime() * 1000;
 async function adoptFrom(list: SessionInfo[], which: (t: vscode.Terminal) => boolean): Promise<void> {
   for (const t of vscode.window.terminals) {
     if (sessions.has(t) || tracking.has(t) || !which(t)) continue;
-    const pid = await t.processId;
+    // A terminal whose process never started never reports a pid; waiting on
+    // it would hold up every poll after this one.
+    const pid = await Promise.race([t.processId, new Promise<undefined>((r) => setTimeout(() => r(undefined), PID_WAIT_MS))]);
     const s = pid ? list.find((x) => x.pid === pid) : undefined;
     // Closed while its pid was awaited: its close has been handled already.
     if (!s || !vscode.window.terminals.includes(t) || sessions.has(t)) continue;
@@ -588,10 +597,11 @@ async function share(arg: unknown, audience: Audience): Promise<void> {
 }
 
 // The title-bar cloud button lists this window's reminal terminals, in the
-// order they were opened, with each one's state, and ends with a row that
-// opens a new one in the active terminal's folder. It always does the same thing; sharing stays in
-// the tab's right-click menu.
-type ListItem = vscode.QuickPickItem & { t?: vscode.Terminal; open?: boolean };
+// order they were opened, with each one's state, then the ports reminal is
+// sharing on this machine, and ends with rows that open a new terminal in the
+// active terminal's folder and share another port. Sharing a terminal stays
+// in its tab's right-click menu.
+type ListItem = PortItem & { t?: vscode.Terminal; open?: boolean };
 
 async function cloudButton(): Promise<void> {
   const active = vscode.window.activeTerminal;
@@ -605,13 +615,55 @@ async function cloudButton(): Promise<void> {
       const state = stopped.has(t) ? "Not sharing" : st ? STATUS_LABEL[st] : "Shell";
       return { t, label: `$(cloud) ${label(t, s)}`, description: `${state} · ${s.id.toUpperCase()}` };
     });
+  const terminals = items.length;
+  // Ports are machine-wide and may be shared from anywhere, so they are
+  // asked for now rather than taken from the poll, which runs only while a
+  // reminal terminal is open.
+  const all = bin ? await queryAll(bin) : undefined;
+  items.push(...portItems((all ?? []).filter(isPort)));
   if (items.length) items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
-  items.push({ label: "$(add) New reminal Terminal Here", open: true });
+  items.push({ label: "$(add) New reminal Terminal Here", open: true }, SHARE_PORT_ITEM);
   const pick = await vscode.window.showQuickPick(items, {
-    placeHolder: items.length > 1 ? "reminal terminals in this window" : "No reminal terminals open yet",
+    placeHolder: terminals ? "reminal terminals in this window" : "No reminal terminals open yet",
   });
   if (pick?.open) openReminal(cwdOf(active));
+  else if (pick?.sharePort) {
+    if (bin) await sharePort(deps);
+    else void notInstalled();
+  } else if (pick?.port) await portActions(deps, pick.port);
   else pick?.t?.show();
+}
+
+// deps is what transfer.ts needs from here: the reminal program, or the
+// not-installed message when there is none.
+const deps = {
+  binary: (): string | undefined => {
+    const bin = resolveBinary();
+    if (!bin) void notInstalled();
+    return bin;
+  },
+};
+
+// The editor makes the last terminal in its list the active one as soon as a
+// profile provider returns, before the terminal the profile describes exists,
+// so for a moment another terminal shows. The reminal profile therefore opens
+// the reminal terminal itself and waits until the editor has it, then returns
+// a placeholder that is hidden and ends at once.
+const PLACEHOLDER_NAME = "reminal (opening)";
+
+// It runs `reminal version`, which prints and exits, and a window reload
+// doesn't bring it back.
+function placeholder(bin: string): vscode.TerminalOptions {
+  return { name: PLACEHOLDER_NAME, shellPath: bin, shellArgs: ["version"], env: CLEAN_ENV, hideFromUser: true, isTransient: true };
+}
+
+async function openFromProfile(bin: string): Promise<vscode.TerminalProfile> {
+  const t = vscode.window.createTerminal(terminalOptions(bin));
+  ours.add(t);
+  t.show();
+  void track(t, bin, true);
+  await Promise.race([t.processId, new Promise((r) => setTimeout(r, 5000))]);
+  return new vscode.TerminalProfile(placeholder(bin));
 }
 
 export function activate(ctx: vscode.ExtensionContext): void {
@@ -631,12 +683,12 @@ export function activate(ctx: vscode.ExtensionContext): void {
           // terminal that would only fail to start.
           throw new Error("reminal is not installed");
         }
-        // The terminal it opens is tracked in onDidOpenTerminal below.
-        return new vscode.TerminalProfile(terminalOptions(bin));
+        return openFromProfile(bin);
       },
     }),
     vscode.window.onDidOpenTerminal((t) => {
       known = [...tabbed()];
+      if ((t.creationOptions as vscode.TerminalOptions).hideFromUser) return;
       const bin = resolveBinary();
       if (!ours.has(t) && bin && isReminalTerminal(t, bin)) {
         ours.add(t);
@@ -662,6 +714,9 @@ export function activate(ctx: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("reminal.shareForAgent", (arg: unknown) => share(arg, "agent")),
     vscode.commands.registerCommand("reminal.openInFolder", openInFolder),
     vscode.commands.registerCommand("reminal.goToTerminal", goToTerminal),
+    vscode.commands.registerCommand("reminal.copyItem", (arg: unknown, many: unknown) => copyItem(deps, arg, many)),
+    vscode.commands.registerCommand("reminal.pasteHere", (arg: unknown) => pasteHere(deps, arg)),
+    vscode.commands.registerCommand("reminal.sharePort", () => (resolveBinary() ? sharePort(deps) : notInstalled())),
     vscode.commands.registerCommand("reminal.showLink", async (arg: unknown) => {
       const t = terminalArg(arg);
       const s = t && sessions.get(t);

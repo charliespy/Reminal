@@ -36,3 +36,25 @@ func TestInfoJSONAttn(t *testing.T) {
 		t.Fatalf("a bare shell should carry no attn fields: %s", b)
 	}
 }
+
+// A `reminal expose` forward says so, with its port; a shell's record reads as
+// it always has, with neither field.
+func TestInfoJSONKind(t *testing.T) {
+	b, _ := json.Marshal(InfoJSON(&session.Active{ID: "PORT2345", PIN: "123456", OpenURL: "https://port-x.example/", Kind: session.KindPort, Port: 3000}))
+	var got struct {
+		Kind string `json:"kind"`
+		Port int    `json:"port"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != "port" || got.Port != 3000 {
+		t.Fatalf("forward: kind %q port %d (%s)", got.Kind, got.Port, b)
+	}
+	for _, kind := range []string{"", "shell"} {
+		b, _ = json.Marshal(InfoJSON(&session.Active{ID: "ABCD2345", PIN: "123456", OpenURL: "http://r/", Kind: kind}))
+		if strings.Contains(string(b), `"kind"`) || strings.Contains(string(b), `"port"`) {
+			t.Fatalf("shell (kind %q) should carry no kind or port: %s", kind, b)
+		}
+	}
+}

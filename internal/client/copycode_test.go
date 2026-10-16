@@ -62,7 +62,7 @@ func TestSameRoutingHalfDifferentSecretHalfFails(t *testing.T) {
 
 	srcConn, pasteConn := newMemPair()
 	srcErr := make(chan error, 1)
-	go func() { srcErr <- runSource(srcConn, "ABCDEFGHJK", srcFile) }()
+	go func() { srcErr <- runSource(srcConn, "ABCDEFGHJK", srcFile, "") }()
 
 	// Bounded: if the second half ever stopped mattering, the two ends would
 	// agree and the transfer would carry on — this must report that, not hang.

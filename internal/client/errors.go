@@ -127,6 +127,10 @@ func classify(err error) string {
 		return "Relay host not found — DNS lookup failed. Are you offline?"
 	case strings.Contains(raw, "bad handshake"):
 		return "Relay rejected the connection — the session may have ended or moved."
+	case strings.Contains(raw, "unknown authority"):
+		// Typical of a slim container image with no CA bundle, as well as of
+		// a proxy that re-signs traffic.
+		return "The relay's certificate isn't trusted here: this system may be missing its CA certificates (the ca-certificates package), or a proxy is intercepting traffic."
 	case strings.Contains(raw, "tls"), strings.Contains(raw, "x509"):
 		return "TLS handshake failed — clock skew or a corporate proxy may be intercepting traffic."
 	case strings.Contains(raw, "use of closed"):
