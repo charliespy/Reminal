@@ -4,11 +4,13 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The viewer turns text in the terminal into links it will open. Only
@@ -41,7 +43,16 @@ out['https://example.com/a'] = found('open https://example.com/a now');
 out['http://example.com'] = found('http://example.com');
 process.stdout.write(JSON.stringify(out));
 `
-	out, err := exec.Command(node, "-e", js).CombinedOutput()
+	// A cap on node, so one that hangs fails this test, not the package's
+	// whole run at its time limit.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node, "-e", js)
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("node did not finish in 30 s\n%s", out)
+	}
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, out)
 	}
