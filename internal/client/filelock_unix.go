@@ -56,6 +56,27 @@ func tryLockFile(name string) (f *os.File, held bool, err error) {
 	return f, true, nil
 }
 
+// lockFile claims name, waiting while another process holds it: for a
+// short read-modify-write that must not be skipped (push.json).
+func lockFile(name string) (*os.File, error) {
+	path, err := lockFilePath(name)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
 // unlockFile releases the lock (closing the fd also drops it, but unlock
 // explicitly so takeover doesn't wait on GC finalizing the file).
 func unlockFile(f *os.File) {

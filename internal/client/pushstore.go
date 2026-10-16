@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"reminal/internal/atomicfile"
 )
 
 // The phones that asked this machine for alerts, and what each one wants to
@@ -74,8 +76,8 @@ type pushEntry struct {
 	// Token binds this phone's alerts to this machine: the relay sent it to
 	// the phone, and the phone's page handed it here (op "token"). Sent with
 	// each alert, with this machine's signature over it. "" for a phone that
-	// subscribed before tokens: its alerts go untokened until
-	// pushUntokenedUntil, and the page offers to renew it.
+	// subscribed before tokens, or whose token the relay no longer takes: it
+	// is sent nothing until it renews (the page offers to).
 	Token string `json:"token,omitempty"`
 	// NewToken is one handed on that no alert has used yet. It is tried
 	// first, becomes Token once the relay takes an alert with it, and is
@@ -83,10 +85,6 @@ type pushEntry struct {
 	// a token that is not the relay's never costs the phone its alerts.
 	NewToken string `json:"new_token,omitempty"`
 }
-
-// pushUntokenedUntil is when the relay stops forwarding alerts without a
-// token (cloudflare/src/push.ts's UNTOKENED_UNTIL: the same moment).
-var pushUntokenedUntil = time.Date(2026, time.December, 15, 0, 0, 0, 0, time.UTC)
 
 // pushTokenShape is a token as the relay makes it; anything else is refused
 // before it is stored.
@@ -155,6 +153,28 @@ func dropNewPushToken(endpoint, token string) error {
 	})
 }
 
+// pushSubsToRenew is how many phones of owners still enrolled here get
+// untokened alerts; -1 when no phone gets alerts from this machine.
+func pushSubsToRenew() int {
+	pushStoreMu.Lock()
+	subs, _ := loadPushSubs()
+	pushStoreMu.Unlock()
+	n, any := 0, false
+	for _, s := range subs {
+		if !s.stillOwner() {
+			continue
+		}
+		any = true
+		if s.Token == "" && s.NewToken == "" {
+			n++
+		}
+	}
+	if !any {
+		return -1
+	}
+	return n
+}
+
 // untokenedPushSubs is how many phones still get untokened alerts.
 func untokenedPushSubs() int {
 	pushStoreMu.Lock()
@@ -172,13 +192,32 @@ func untokenedPushSubs() int {
 type pushFile struct {
 	Version int         `json:"version"`
 	Subs    []pushEntry `json:"subs"`
+	// Machine is this machine's public key (MachinePub) when the file was
+	// written: the phones are this machine's, not its files'. A copy of the
+	// home that comes up as another machine (another key) reads as having
+	// no phones, whatever made the copy, and each phone asks that machine
+	// again; one that comes back as the same machine keeps them. "" in a
+	// file written before this: kept, and stamped at its next write.
+	Machine string `json:"machine,omitempty"`
 }
 
-// pushStoreMu serialises read-modify-write of push.json within a process.
-// Across processes the write is an atomic rename, and the only writers are
-// the directory host (on an owner's request) and the watcher (pruning a dead
-// subscription), so the last write winning is acceptable.
+// thisMachine is this machine's key as push.json records it.
+func thisMachine() (string, error) {
+	pub, err := MachinePub()
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(pub), nil
+}
+
+// pushStoreMu serialises read-modify-write of push.json within a process,
+// and pushStoreLock across processes: a phone's token written by one while
+// another rewrites the file for a dead subscription must not be lost (its
+// alerts would stop once untokened ones do). Each write is whole
+// (atomicfile): a crash leaves the old file or the new one.
 var pushStoreMu sync.Mutex
+
+const pushStoreLock = "push.lock"
 
 func pushStorePath() (string, error) {
 	dir, err := reminalDir()
@@ -204,6 +243,15 @@ func loadPushSubs() ([]pushEntry, error) {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return nil, err
 	}
+	if f.Machine != "" {
+		me, err := thisMachine()
+		if err != nil {
+			return nil, err
+		}
+		if f.Machine != me {
+			return nil, nil // another machine's phones
+		}
+	}
 	return f.Subs, nil
 }
 
@@ -215,21 +263,26 @@ func savePushSubs(subs []pushEntry) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(pushFile{Version: 1, Subs: subs}, "", "  ")
+	me, err := thisMachine()
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	b, err := json.MarshalIndent(pushFile{Version: 1, Subs: subs, Machine: me}, "", "  ")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return atomicfile.Write(path, b, 0o600)
 }
 
 // updatePushSubs applies fn to the stored list under the lock and saves it.
 func updatePushSubs(fn func([]pushEntry) []pushEntry) error {
 	pushStoreMu.Lock()
 	defer pushStoreMu.Unlock()
+	lock, err := lockFile(pushStoreLock)
+	if err != nil {
+		return err
+	}
+	defer unlockFile(lock)
 	subs, err := loadPushSubs()
 	if err != nil {
 		return err

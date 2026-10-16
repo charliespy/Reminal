@@ -8,12 +8,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
-	"strconv"
 	"testing"
 	"time"
 )
@@ -21,8 +21,8 @@ import (
 const testPushToken = "v1.1792108800.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 // An alert to a phone that has this machine's token carries it, and this
-// machine's signature over where it goes, what it is and when; one to a
-// phone without a token carries neither (as an older machine sends).
+// machine's signature over where it goes, what it is and when; to a phone
+// without a token nothing is sent: it needs renewing.
 func TestAnAlertIsSignedByItsMachine(t *testing.T) {
 	isolateHome(t)
 	var got []map[string]any
@@ -40,10 +40,10 @@ func TestAnAlertIsSignedByItsMachine(t *testing.T) {
 	if err := sendPush(sub, testPushToken, pushMessage{Title: "t", Body: "b"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sendPush(sub, "", pushMessage{Title: "t", Body: "b"}); err != nil {
-		t.Fatal(err)
+	if err := sendPush(sub, "", pushMessage{Title: "t", Body: "b"}); !errors.Is(err, errPushRenew) {
+		t.Fatalf("untokened: %v, want errPushRenew", err)
 	}
-	if len(got) != 2 {
+	if len(got) != 1 {
 		t.Fatalf("%d requests", len(got))
 	}
 	b := got[0]
@@ -60,11 +60,6 @@ func TestAnAlertIsSignedByItsMachine(t *testing.T) {
 	sum := sha256.Sum256(payload)
 	if !ed25519.Verify(pub, []byte(alertSigned(sub.Endpoint, sum[:], ts)), sig) {
 		t.Error("the signature is not this machine's over the alert")
-	}
-	for _, k := range []string{"token", "machine", "ts", "sig"} {
-		if _, ok := got[1][k]; ok {
-			t.Errorf("an untokened alert carries %s", k)
-		}
 	}
 }
 
@@ -106,9 +101,9 @@ func TestAPhonesTokenIsKeptWithItsAlerts(t *testing.T) {
 // A token handed on is tried with the next alert and kept only once the
 // relay takes it: one the relay refuses as not this machine's is dropped and
 // the phone's working token stays, so a token planted on the phone costs it
-// nothing. A token the relay no longer takes is dropped, and a clock the
-// relay disagrees with keeps the token; either way, while the relay still
-// forwards them, that alert goes untokened rather than not at all.
+// nothing. A token the relay no longer takes is dropped and that alert is
+// lost: the phone then has no token here (the page offers to renew it), and
+// is sent nothing until it does.
 func TestATokenTheRelayRefusesIsDropped(t *testing.T) {
 	isolateHome(t)
 	sub, _, _ := newTestSub(t, "https://fcm.googleapis.com/fcm/send/a")
@@ -116,34 +111,30 @@ func TestATokenTheRelayRefusesIsDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	const junk = "v1.1792108800.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-	good, clock := testPushToken, false
-	var sent []string // the token of each alert the relay was handed ("" untokened)
+	good := testPushToken
+	var sent []string // the token of each alert the relay was handed
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		tok, _ := body["token"].(string)
 		sent = append(sent, tok)
-		switch {
-		case tok != "" && clock:
-			w.WriteHeader(http.StatusForbidden)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "no", "code": "clock"})
-		case tok != "" && tok != good:
+		if tok != good {
 			w.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "no", "code": "unbound"})
-		default:
-			_ = json.NewEncoder(w).Encode(map[string]int{"status": 201})
+			return
 		}
+		_ = json.NewEncoder(w).Encode(map[string]int{"status": 201})
 	}))
 	defer srv.Close()
 	old := pushURL
 	pushURL = func() string { return srv.URL + "/push" }
 	defer func() { pushURL = old }()
-	step := func(name string, wantSent []string, wantToken, wantNew string) {
+	step := func(name string, wantErr error, wantSent []string, wantToken, wantNew string) {
 		t.Helper()
 		sent = nil
 		e, _ := findPushSub(sub.Endpoint)
-		if err := sendBound(e, pushMessage{Title: "t"}); err != nil {
-			t.Errorf("%s: %v", name, err)
+		if err := sendBound(e, pushMessage{Title: "t"}); !errors.Is(err, wantErr) {
+			t.Errorf("%s: err %v, want %v", name, err, wantErr)
 		}
 		e, _ = findPushSub(sub.Endpoint)
 		if fmt.Sprint(sent) != fmt.Sprint(wantSent) || e.Token != wantToken || e.NewToken != wantNew {
@@ -153,42 +144,25 @@ func TestATokenTheRelayRefusesIsDropped(t *testing.T) {
 	if err := setPushToken(sub.Endpoint, good); err != nil {
 		t.Fatal(err)
 	}
-	step("a good new token is kept", []string{good}, good, "")
+	step("a good new token is kept", nil, []string{good}, good, "")
 	if err := setPushToken(sub.Endpoint, junk); err != nil {
 		t.Fatal(err)
 	}
-	step("a planted token is dropped, the good one stays", []string{junk, good}, good, "")
-	step("then the good one alone", []string{good}, good, "")
-	clock = true
-	step("clock off: untokened, the token kept", []string{good, ""}, good, "")
-	clock = false
+	step("a planted token is dropped, the good one stays", nil, []string{junk, good}, good, "")
+	step("then the good one alone", nil, []string{good}, good, "")
 	good = "v1.1792108800.CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
-	step("no longer taken: dropped, untokened", []string{testPushToken, ""}, "", "")
+	step("no longer taken: dropped, that alert lost", errPushUnbound, []string{testPushToken}, "", "")
+	if n := untokenedPushSubs(); n != 1 {
+		t.Errorf("the phone is not marked for renewal (%d untokened)", n)
+	}
+	step("then nothing is sent until it renews", errPushRenew, nil, "", "")
 }
 
-// The machine and the relay agree on what is signed and on the day untokened
-// alerts stop (cloudflare/src/push.ts).
+// The machine and the relay agree on what is signed (cloudflare/src/push.ts).
 func TestAlertsAgreeWithTheRelay(t *testing.T) {
 	src, err := os.ReadFile("../../cloudflare/src/push.ts")
 	if err != nil {
 		t.Fatal(err)
-	}
-	m := regexp.MustCompile(`UNTOKENED_UNTIL = Date\.UTC\((\d+), (\d+), (\d+)\)`).FindSubmatch(src)
-	if m == nil {
-		t.Fatal("push.ts: no UNTOKENED_UNTIL = Date.UTC(y, m, d)")
-	}
-	y, _ := strconv.Atoi(string(m[1]))
-	mo, _ := strconv.Atoi(string(m[2]))
-	d, _ := strconv.Atoi(string(m[3]))
-	if want := time.Date(y, time.Month(mo+1), d, 0, 0, 0, 0, time.UTC); !pushUntokenedUntil.Equal(want) {
-		t.Errorf("the machine says %v, the relay %v", pushUntokenedUntil, want)
-	}
-	page, err := os.ReadFile("web/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "ALERTS_UNTOKENED_UNTIL = Date.UTC(" + string(m[1]) + ", " + string(m[2]) + ", " + string(m[3]) + ")"; !regexp.MustCompile(regexp.QuoteMeta(want)).Match(page) {
-		t.Errorf("app.js does not say %s", want)
 	}
 	if !regexp.MustCompile(`"reminal-push\\n" \+ endpoint \+ "\\n" \+ payloadSha256Hex \+ "\\n" \+ ts`).Match(src) {
 		t.Error("push.ts's alertSigned is not the machine's: reminal-push, endpoint, sha256 hex, ts")

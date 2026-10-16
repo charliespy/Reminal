@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"reminal/internal/config"
@@ -153,8 +154,46 @@ var errPushGone = errors.New("push subscription is gone")
 // dropped, so the phone's page offers to renew it.
 var errPushUnbound = errors.New("this phone's alerts are not bound to this machine; renew them from the phone")
 
-// errPushClock: the relay found this alert's time too far from its own.
-var errPushClock = errors.New("the relay found this machine's clock off; alerts go untokened until it is right")
+// errPushClock: the relay found this alert's time too far from its own,
+// even after this machine set its clock by the relay's.
+var errPushClock = errors.New("the relay found this machine's clock off")
+
+// errPushRenew: this phone's alerts here have no token (they were turned on
+// before alerts were bound to their machine, or the relay refused theirs),
+// so none is sent until the phone renews them; the page offers to.
+var errPushRenew = errors.New("this phone's alerts need renewing: open reminal on the phone and tap Renew alerts on this phone")
+
+// relayClock is how far the relay's clock is from this machine's, as the
+// relay last said (the Date of each answer, or the time a "clock" refusal
+// gives): an alert's time is the relay's, so a machine whose clock is off
+// still has its alerts taken.
+var relayClock struct {
+	sync.Mutex
+	off time.Duration
+}
+
+func relayNow() time.Time {
+	relayClock.Lock()
+	defer relayClock.Unlock()
+	return time.Now().Add(relayClock.off)
+}
+
+// learnRelayClock sets the offset from an answer of the relay's: its own
+// time in ms (exact, a "clock" refusal gives it) or else its Date (to the
+// second, which an alert's time allows for).
+func learnRelayClock(resp *http.Response, nowMs int64) {
+	var at time.Time
+	if nowMs > 0 {
+		at = time.UnixMilli(nowMs)
+	} else if d, err := http.ParseTime(resp.Header.Get("Date")); err == nil {
+		at = d
+	} else {
+		return
+	}
+	relayClock.Lock()
+	relayClock.off = time.Until(at)
+	relayClock.Unlock()
+}
 
 var pushHTTP = &http.Client{Timeout: 20 * time.Second}
 
@@ -169,10 +208,15 @@ func alertSigned(endpoint string, payloadSum []byte, ts int64) string {
 	return fmt.Sprintf("reminal-push\n%s\n%x\n%d", endpoint, payloadSum, ts)
 }
 
-// sendPush sends one alert. With the phone's token (pushEntry.Token), it is
-// signed by this machine's key over where it goes, what it is and when —
-// what the relay checks the token against; without one, as before.
+// sendPush sends one alert with the phone's token (pushEntry.Token),
+// signed by this machine's key over where it goes, what it is and when (the
+// relay's time) — what the relay checks the token against. Without a token
+// nothing is sent (errPushRenew). Refused for its time, it is sent once
+// more on the relay's time as that refusal gives it.
 func sendPush(sub pushSub, token string, msg pushMessage) error {
+	if token == "" {
+		return errPushRenew
+	}
 	pt, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -181,53 +225,60 @@ func sendPush(sub pushSub, token string, msg pushMessage) error {
 	if err != nil {
 		return err
 	}
-	call := map[string]any{
-		"endpoint": sub.Endpoint,
-		"payload":  base64.StdEncoding.EncodeToString(sealed),
-		"ttl":      3600,
-		"urgency":  "high",
-	}
-	if token != "" {
-		key, err := loadOrCreateMachineKey()
-		if err != nil {
-			return err
-		}
-		ts := time.Now().Unix()
-		sum := sha256.Sum256(sealed)
-		call["token"], call["ts"] = token, ts
-		call["machine"] = base64.StdEncoding.EncodeToString(key.Public().(ed25519.PublicKey))
-		call["sig"] = base64.StdEncoding.EncodeToString(ed25519.Sign(key, []byte(alertSigned(sub.Endpoint, sum[:], ts))))
-	}
-	body, _ := json.Marshal(call)
-	req, err := http.NewRequest(http.MethodPost, pushURL(), bytes.NewReader(body))
+	key, err := loadOrCreateMachineKey()
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := pushHTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+	sum := sha256.Sum256(sealed)
 	var out struct {
 		Status int    `json:"status"`
 		Error  string `json:"error"`
 		Code   string `json:"code"`
+		Now    int64  `json:"now"`
 	}
-	_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&out)
-	if resp.StatusCode == http.StatusForbidden && token != "" {
-		switch out.Code {
-		case "unbound":
-			return errPushUnbound
-		case "clock":
-			return errPushClock
+	for try := 0; ; try++ {
+		ts := relayNow().Unix()
+		body, _ := json.Marshal(map[string]any{
+			"endpoint": sub.Endpoint,
+			"payload":  base64.StdEncoding.EncodeToString(sealed),
+			"ttl":      3600,
+			"urgency":  "high",
+			"token":    token,
+			"ts":       ts,
+			"machine":  base64.StdEncoding.EncodeToString(key.Public().(ed25519.PublicKey)),
+			"sig":      base64.StdEncoding.EncodeToString(ed25519.Sign(key, []byte(alertSigned(sub.Endpoint, sum[:], ts)))),
+		})
+		req, err := http.NewRequest(http.MethodPost, pushURL(), bytes.NewReader(body))
+		if err != nil {
+			return err
 		}
-	}
-	if resp.StatusCode != http.StatusOK {
-		if out.Error != "" {
-			return fmt.Errorf("relay refused the alert: %s", out.Error)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := pushHTTP.Do(req)
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("relay refused the alert (HTTP %d)", resp.StatusCode)
+		out.Code, out.Now, out.Error, out.Status = "", 0, "", 0
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&out)
+		resp.Body.Close()
+		learnRelayClock(resp, out.Now)
+		if resp.StatusCode == http.StatusForbidden {
+			switch out.Code {
+			case "unbound":
+				return errPushUnbound
+			case "clock":
+				if try == 0 {
+					continue // on the relay's time, as it just said
+				}
+				return errPushClock
+			}
+		}
+		if resp.StatusCode != http.StatusOK {
+			if out.Error != "" {
+				return fmt.Errorf("relay refused the alert: %s", out.Error)
+			}
+			return fmt.Errorf("relay refused the alert (HTTP %d)", resp.StatusCode)
+		}
+		break
 	}
 	switch {
 	case out.Status == http.StatusNotFound || out.Status == http.StatusGone:

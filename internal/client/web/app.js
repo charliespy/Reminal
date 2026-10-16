@@ -990,6 +990,15 @@
       const j = s.toJSON();
       return { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth };
     }
+    // What an owner device signs for a push request (pushAction on the
+    // machine): its op and endpoint, and for "token" the token too.
+    function pushActionOf(p) {
+      return 'push:' + p.op + ':' + p.sub.endpoint + (p.op === 'token' ? ':' + p.token : '');
+    }
+    // The request a machine is sent for one push call.
+    function pushRequestOf(p, proof, reqId) {
+      return { push: { op: p.op, sub: p.sub, rules: p.rules || undefined, token: p.op === 'token' ? p.token : undefined, proof, req_id: reqId } };
+    }
     async function pushCall(b64, op, sub, rules, token) {
       const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { push: { op, sub, rules, token }, timeout: op === 'test' ? 30000 : 10000 });
       if (!r || !r.push) throw new Error('needs-upgrade');
@@ -1002,11 +1011,13 @@
     // notification, "Alerts are on"; the service worker keeps it for the page
     // (sw.js), and the page hands it to that machine (op "token"). A machine
     // that has none for this phone (it was turned on before) says so
-    // (tokened false), and the sheet offers Renew alerts on this phone.
+    // (tokened false): it sends this phone nothing until it has one, so the
+    // page offers Renew alerts on this phone — in the Machines panel as soon
+    // as such a machine answers, and in the sheet.
     const ALERT_TOKENS = 'reminal-alert-tokens';
-    // When the relay stops forwarding alerts without a token (push.ts's
-    // UNTOKENED_UNTIL).
-    const ALERTS_UNTOKENED_UNTIL = Date.UTC(2026, 11, 15);
+    // The machines this phone's alerts need renewing on.
+    const alertRenew = new Set();
+    const alertRenewAsked = new Set();
     async function askAlertToken(b64, sub) {
       const r = await fetch('/push/token', { method: 'POST', cache: 'no-store', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth, machine: b64URLToStd(b64) }) });
@@ -1028,7 +1039,7 @@
           const b64 = Object.keys(store).find(k => b64URLToStd(k) === machine);
           const token = await (await c.match(req)).text();
           if (!b64) { await c.delete(req); continue; }
-          try { await pushCall(b64, 'token', sub, undefined, token); await c.delete(req); }
+          try { await pushCall(b64, 'token', sub, undefined, token); await c.delete(req); alertRenew.delete(b64); paintAlertRenew(); }
           // Refused by the machine (alerts off there, not its owner): it will
           // not take it later either. Not reached: tried again the next time
           // the page or the sheet opens.
@@ -1047,20 +1058,65 @@
       const prefs = alertPrefsCache || await loadAlertPrefs();
       const { store, keys } = await sortedAlertMachines();
       if (!alerts.sub) { alerts.renew = []; return; }
-      const renew = [];
       await Promise.all(keys.filter(k => alertMachineOn(prefs, store[k])).map(async k => {
-        try { const r = await pushCall(k, 'get', alerts.sub); if (r.subscribed && r.tokens && !r.tokened) renew.push(k); } catch (_) {}
+        try { const r = await pushCall(k, 'get', alerts.sub); if (r.subscribed && r.tokens && !r.tokened) alertRenew.add(k); else alertRenew.delete(k); } catch (_) {}
       }));
-      alerts.renew = renew;
+      alerts.renew = [...alertRenew];
+      paintAlertRenew();
       if (alerts.open) paintAlerts();
+    }
+    // A machine that just answered, asked once a page load whether this
+    // phone's alerts there need renewing: so the first time the page opens
+    // after alerts were bound, the person is asked, sheet open or not.
+    async function checkAlertRenewFor(b64, rec) {
+      if (alertRenewAsked.has(b64) || !pushSupported()) return;
+      const prefs = alertPrefsCache || await loadAlertPrefs();
+      if (!alertMachineOn(prefs, rec)) return;
+      // Asked once it can be: no subscription yet (the service worker not
+      // ready) is not an answer.
+      const sub = alerts.sub || await pushSubscription(false).catch(() => null);
+      if (!sub || alertRenewAsked.has(b64)) return;
+      alertRenewAsked.add(b64);
+      alerts.sub = sub;
+      try {
+        const r = await pushCall(b64, 'get', sub);
+        if (r.subscribed && r.tokens && !r.tokened) alertRenew.add(b64); else alertRenew.delete(b64);
+      } catch (_) { alertRenewAsked.delete(b64); return; }
+      alerts.renew = [...alertRenew];
+      paintAlertRenew();
+      if (alerts.open) paintAlerts();
+    }
+    // The Machines panel's line: one tap renews them all.
+    async function paintAlertRenew() {
+      const el = document.getElementById('alerts-renew');
+      if (!el) return;
+      el.hidden = !alertRenew.size;
+      if (!alertRenew.size) return;
+      const store = await loadOwnedMachines();
+      el.querySelector('.alr-text').textContent = 'Phone alerts from ' + [...alertRenew].map(k => machineLabel(store[k] || {}, k)).join(', ') + ' need renewing on this device.';
+    }
+    async function renewAlerts() {
+      const sub = alerts.sub || await pushSubscription(false).catch(() => null);
+      if (!sub) return 'This device has no alerts subscription: turn alerts on again in Alerts.';
+      let failed = '';
+      for (const k of alertRenew) {
+        try { await askAlertToken(k, sub); } catch (e) { failed = (e && e.message) || 'that did not work'; }
+      }
+      return failed;
+    }
+    {
+      const el = document.getElementById('alerts-renew');
+      if (el) el.querySelector('button').addEventListener('click', async () => {
+        const b = el.querySelector('button'); b.disabled = true;
+        const failed = await renewAlerts();
+        b.disabled = false;
+        el.querySelector('.alr-text').textContent = failed || 'Renewing — tap nothing more: a notification “Alerts are on” arrives on this device for each machine.';
+      });
     }
     async function alertsRenew() {
       if (alerts.busy || !alerts.sub) return;
       alerts.busy = true; paintAlerts();
-      let failed = '';
-      for (const k of alerts.renew || []) {
-        try { await askAlertToken(k, alerts.sub); } catch (e) { failed = (e && e.message) || 'that did not work'; }
-      }
+      const failed = await renewAlerts();
       alerts.busy = false;
       alertsSay(failed ? 'err' : 'ok', failed || 'Renewing — a notification “Alerts are on” arrives on this device for each machine.');
     }
@@ -1485,7 +1541,7 @@
         h += '</div>';
         if ((a.renew || []).length) {
           h += '<div class="al-renew"><div class="al-text">Alerts on this device need renewing for ' + escHTML((a.renew || []).map(k => machineLabel(store[k] || {}, k)).join(', '))
-            + ' — they stop after ' + new Date(ALERTS_UNTOKENED_UNTIL).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) + ' otherwise.</div>'
+            + ': until then they get no alerts from ' + ((a.renew || []).length === 1 ? 'it' : 'them') + '.</div>'
             + '<button class="al-btn" id="al-renew"' + (a.busy ? ' disabled' : '') + '>' + aIcon('bell', 15) + '<span>Renew alerts on this phone</span></button></div>';
         }
         h += alertMsgHTML();
@@ -3979,10 +4035,10 @@
                 // device asked (every owner shares the channel key) and is bound
                 // to the op and endpoint, matching pushAction on the host.
                 const p = opts.push;
-                const proof = await signOwnerAction('push:' + p.op + ':' + p.sub.endpoint, dirID);
+                const proof = await signOwnerAction(pushActionOf(p), dirID);
                 if (!proof) return done(new Error('this device has no owner key'));
                 att.reqId = dirReqId();
-                const enc = await encrypt(box, JSON.stringify({ push: { op: p.op, sub: p.sub, rules: p.rules || undefined, proof, req_id: att.reqId } }));
+                const enc = await encrypt(box, JSON.stringify(pushRequestOf(p, proof, att.reqId)));
                 sock.send(JSON.stringify({ type: 'dir_query', data: enc }));
                 state = 'query';
               } else if (opts.open) {
@@ -4701,6 +4757,7 @@
       dot.className = 'machine-dot online';
       dot.title = 'online';
       maybeCatchUpAlerts(b64, rec, resp); // finish an alert change it missed while offline
+      checkAlertRenewFor(b64, rec); // alerts here that need renewing on this device
       // Auto-name an unnamed machine from its reported hostname. Persist WITHOUT
       // re-rendering: we're mid-fill inside renderMachines's Promise.all, and a
       // renderMachines() here would tear down and rebuild every box (flicker) and
