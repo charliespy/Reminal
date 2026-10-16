@@ -14,12 +14,24 @@ jobs:
   # run them. This gate cannot live in ci.yml — `needs` reaches jobs in the same
   # workflow only — so the checks are stated here too, and the build waits on
   # them.
+  # The whole suite, plainly and under the race detector, in four shards
+  # side by side: almost all of its time is internal/client, so that
+  # package's tests are split by their measured times (scripts/ci/shard.sh,
+  # checked by shard.test.sh in shard 1), and each shard runs its part both
+  # ways. Shard 1 also runs formatting, vet, every other package both ways
+  # and the ultraviolet copy. The same tests as one runner's `go test ./...`
+  # and `go test -race ./...`, in about a third of the time.
   test:
     # The public releases are made in the public repository and nowhere else: a
     # copy of this workflow in any other repository — a fork, a private one —
     # would build its own code under these names.
     if: github.repository == 'harshalgajjar/Reminal'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: test (${{ matrix.shard }}/4)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -27,6 +39,7 @@ jobs:
           go-version: stable
           cache: true
       - name: Formatting
+        if: matrix.shard == 1
         run: |
           unformatted="$(gofmt -l ./cmd ./internal)"
           if [ -n "$unformatted" ]; then
@@ -35,15 +48,28 @@ jobs:
             exit 1
           fi
       - name: Vet
+        if: matrix.shard == 1
         run: go vet ./...
-      - name: Test
-        run: go test ./...
-      - name: Test with the race detector
-        run: go test -race ./...
+      - name: Test, and with the race detector (every package but internal/client)
+        if: matrix.shard == 1
+        run: |
+          set -e
+          pkgs=$(go list ./... | grep -vx 'reminal/internal/client')
+          go test $pkgs
+          go test -race $pkgs
+      - name: Test, and with the race detector (internal/client, shard ${{ matrix.shard }} of 4)
+        run: |
+          set -e
+          # The split itself checked once a run: every test in one shard.
+          if [ ${{ matrix.shard }} = 1 ]; then sh scripts/ci/shard.test.sh; fi
+          re=$(SHARD1_HEAD=60 sh scripts/ci/shard.sh 4 ${{ matrix.shard }})
+          go test -run "$re" ./internal/client
+          go test -race -run "$re" ./internal/client
       # third_party/ultraviolet is a module of its own (the root go.mod's
       # replace points at it), so ./... above leaves it out: its tests,
       # with reminal's line-move checks, run here.
       - name: Test the ultraviolet copy
+        if: matrix.shard == 1
         working-directory: third_party/ultraviolet
         run: go vet ./... && go test -race ./...
 
