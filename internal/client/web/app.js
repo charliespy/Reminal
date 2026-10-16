@@ -9630,6 +9630,25 @@
       if (e.key === HISTORY_KEY || e.key === null) renderRecents();
     });
 
+    // Escape closes the menu the keyboard is in (or the one open while
+    // nothing has the keyboard), back on the button that opened it — after
+    // anything over it took the key first, and after its search box cleared
+    // what was typed in it.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      // A sheet opened from a menu (Alerts, What's new) closes first: it
+      // takes Escape on the window, after this.
+      if (document.querySelector('.cl-sheet:not([hidden])')) return;
+      const t = e.target;
+      if (t && t.tagName === 'INPUT' && t.value) return;
+      const d = (t && t.closest && t.closest('header details[open]')) || (t === document.body && document.querySelector('header details[open]'));
+      if (!d) return;
+      e.preventDefault();
+      d.open = false;
+      const s = d.querySelector('summary');
+      if (s) s.focus();
+    });
+
     // Close the recents <details> on any outside click. Native <details>
     // doesn't have this behavior — only the summary toggles it — so a
     // dropdown left open after picking a row would shadow the terminal. This
@@ -9652,24 +9671,6 @@
         host.open = false;
       }
     }, true);
-    // And Escape closes the menu the keyboard is in (or the one open while
-    // nothing has the keyboard), back on the button that opened it — after
-    // anything over it took the key first, and after its search box cleared
-    // what was typed in it.
-    document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape' || e.defaultPrevented) return;
-      // A sheet opened from a menu (Alerts, What's new) closes first: it
-      // takes Escape on the window, after this.
-      if (document.querySelector('.cl-sheet:not([hidden])')) return;
-      const t = e.target;
-      if (t && t.tagName === 'INPUT' && t.value) return;
-      const d = (t && t.closest && t.closest('header details[open]')) || (t === document.body && document.querySelector('header details[open]'));
-      if (!d) return;
-      e.preventDefault();
-      d.open = false;
-      const s = d.querySelector('summary');
-      if (s) s.focus();
-    });
     // While the Host dropdown is open, poll the stats live and refresh the
     // panel; stop polling when it closes.
     let hostPollTimer = null;
