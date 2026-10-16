@@ -301,6 +301,12 @@ func (a *Agent) harnessReadAt() time.Time {
 	return time.Time{}
 }
 
+// harnessSlowToTurnAway are the agents a turn of which runs for a while
+// before it says it cannot run: pi with no model to run on works for over
+// 2 s before "Error: No API key found for the selected model." Two seconds of
+// work is no proof it took the message: the whole window is waited out.
+var harnessSlowToTurnAway = map[string]bool{"pi": true}
+
 // harnessDown reports whether the agent here is logged out.
 func (a *Agent) harnessDown() bool {
 	a.metaMu.Lock()
@@ -318,9 +324,9 @@ func (a *Agent) harnessTurnedAway() bool {
 			return true
 		}
 		a.metaMu.Lock()
-		working := a.attnState == "working"
+		working, prog := a.attnState == "working", strings.TrimPrefix(a.attnFG, "-")
 		a.metaMu.Unlock()
-		if working && time.Since(start) > 2*time.Second {
+		if working && time.Since(start) > 2*time.Second && !harnessSlowToTurnAway[prog] {
 			return false
 		}
 		time.Sleep(attnInterval)

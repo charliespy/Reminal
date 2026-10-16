@@ -392,3 +392,24 @@ func TestPiWithAModelIsNotLoggedOut(t *testing.T) {
 		}
 	}
 }
+
+// A message typed into pi with no model: it works for over 2 s, then says it
+// has no API key. That is a message turned away, not one taken; another
+// agent working that long has taken it.
+func TestPiTurningAMessageAwayLateIsTurnedAway(t *testing.T) {
+	for _, tc := range []struct {
+		prog string
+		want bool
+	}{{"pi", true}, {"claude", false}} {
+		a := &Agent{attnFG: tc.prog, attnState: "working"}
+		go func() {
+			time.Sleep(3 * time.Second)
+			for i := 0; i < harnessDownAfter; i++ {
+				a.noteHarnessHealth(" Error: No API key found for the selected model.\n/work\n0.0%/0 (auto)   unknown", tc.prog, false)
+			}
+		}()
+		if got := a.harnessTurnedAway(); got != tc.want {
+			t.Errorf("%s, working, then turned away after 3 s: %v, want %v", tc.prog, got, tc.want)
+		}
+	}
+}
