@@ -11,6 +11,16 @@ import (
 	"reminal/internal/session"
 )
 
+// isolateHome points the test's home at a temp folder: HOME, and
+// USERPROFILE, which is what os.UserHomeDir reads on Windows.
+func isolateHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	return home
+}
+
 // writeRec persists a live (PID == us, so pidAlive) session record into the
 // test's isolated HOME so resolveActive can read it back.
 func writeRec(t *testing.T, a session.Active) {
@@ -28,7 +38,7 @@ func writeRec(t *testing.T, a session.Active) {
 }
 
 func TestResolveActivePrecedence(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 	t.Setenv("REMINAL_SESSION", "")
 
 	writeRec(t, session.Active{ID: "ABCD1234", PIN: "1", Name: "deploy", Cwd: "/home/u/web"})
@@ -71,7 +81,7 @@ func TestResolveActivePrecedence(t *testing.T) {
 }
 
 func TestResolveActiveByPortStillWorks(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 	t.Setenv("REMINAL_SESSION", "")
 	writeRec(t, session.Active{ID: "PORT1111", PIN: "1", Kind: session.KindPort, Port: 8080})
 
@@ -88,7 +98,7 @@ func TestResolveActiveByPortStillWorks(t *testing.T) {
 // over the oldest-on-disk record — otherwise a shell inside session B reports
 // viewers for session A when both are running.
 func TestResolveActivePrefersEnvSession(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 	writeRec(t, session.Active{ID: "AAAA1111", PIN: "1"})
 	writeRec(t, session.Active{ID: "BBBB2222", PIN: "2"})
 
@@ -150,13 +160,13 @@ func TestHumanShort(t *testing.T) {
 }
 
 func TestAbbrevHome(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateHome(t)
 	if got := abbrevHome(home); got != "~" {
 		t.Errorf("abbrevHome(home) = %q, want ~", got)
 	}
-	if got := abbrevHome(home + "/project"); got != "~/project" {
-		t.Errorf("abbrevHome(home/project) = %q, want ~/project", got)
+	sep := string(os.PathSeparator)
+	if got := abbrevHome(home + sep + "project"); got != "~"+sep+"project" {
+		t.Errorf("abbrevHome(home/project) = %q, want ~%sproject", got, sep)
 	}
 	if got := abbrevHome("/etc/hosts"); got != "/etc/hosts" {
 		t.Errorf("abbrevHome(/etc/hosts) = %q, want unchanged", got)

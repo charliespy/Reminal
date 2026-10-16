@@ -12,7 +12,7 @@ import (
 func TestClassifyNotify(t *testing.T) {
 	// Isolate hook-state I/O to a temp HOME so the test never touches ~/.reminal
 	// (session.WriteHookState/ReadHookState resolve under os.UserHomeDir()).
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 	const id = "TESTSESS"
 
 	set := func(state string) {
