@@ -6,7 +6,8 @@
 # opened while the terminal has it, what is typed — Enter and the arrows too
 # — goes on to the session, and the card answers its keys once clicked; and
 # it does not open while someone is typing into the terminal, only in a
-# pause. The page as served, no host behind it. Needs docker; the browser
+# pause, nor over a PIN half typed into a join link's PIN box. And Escape
+# closes a header menu. The page as served, no host behind it. Needs docker; the browser
 # runs in a Playwright container.
 #
 #   scripts/viewer-tour-test/run.sh [PAGE_DIR]   (default: the page built from internal/client/web)
