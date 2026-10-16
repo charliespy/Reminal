@@ -117,6 +117,10 @@ func TestHarnessLoggedOutThroughTheEmulator(t *testing.T) {
 // bottoms of their real screens.
 func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 	screens := map[string]string{
+		// Claude Code 2.1.301 with no login, as a fresh machine shows it: its
+		// login menu, then, a way picked, its sign-in link.
+		"claude":             " Claude Code can be used with your Claude subscription or billed based on API usage through your\n Console account.\n\n Select login method:\n\n ❯ 1. Claude account with subscription · Pro, Max, Team, or Enterprise\n   2. Anthropic Console account · API usage billing\n   3. 3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI",
+		"claude, signing in": " Browser didn't open? Use the url below to sign in (c to copy)\n\n https://claude.com/cai/oauth/authorize?code=true&client_id=x&response_type=code\n\n\n Paste code here if prompted >",
 		"agy": " Welcome to the Antigravity CLI. You are currently not signed in.\n Select login method:\n" +
 			" > 1. Google OAuth\n   2. Use a Google Cloud project\n   ↑/↓ Navigate · enter Select",
 		// As they are drawn: a dialog is mostly its own blank rows.
@@ -161,6 +165,15 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 	} {
 		if harnessProblemIn(ok, "") {
 			t.Errorf("read as logged out: %q", ok)
+		}
+	}
+	// Claude Code's conversation naming its login words is not its menu.
+	for _, ok := range []string{
+		"● To use the API key instead, select login method 2 (Anthropic Console account · API usage billing).",
+		"  The docs say: paste code here if prompted, then press Enter.",
+	} {
+		if harnessProblemIn(ok, "claude") {
+			t.Errorf("Claude Code's words read as its login menu: %q", ok)
 		}
 	}
 }
