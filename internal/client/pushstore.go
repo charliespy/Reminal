@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"reminal/internal/atomicfile"
 )
 
 // The phones that asked this machine for alerts, and what each one wants to
@@ -155,6 +157,28 @@ func dropNewPushToken(endpoint, token string) error {
 	})
 }
 
+// pushSubsToRenew is how many phones of owners still enrolled here get
+// untokened alerts; -1 when no phone gets alerts from this machine.
+func pushSubsToRenew() int {
+	pushStoreMu.Lock()
+	subs, _ := loadPushSubs()
+	pushStoreMu.Unlock()
+	n, any := 0, false
+	for _, s := range subs {
+		if !s.stillOwner() {
+			continue
+		}
+		any = true
+		if s.Token == "" && s.NewToken == "" {
+			n++
+		}
+	}
+	if !any {
+		return -1
+	}
+	return n
+}
+
 // untokenedPushSubs is how many phones still get untokened alerts.
 func untokenedPushSubs() int {
 	pushStoreMu.Lock()
@@ -174,11 +198,14 @@ type pushFile struct {
 	Subs    []pushEntry `json:"subs"`
 }
 
-// pushStoreMu serialises read-modify-write of push.json within a process.
-// Across processes the write is an atomic rename, and the only writers are
-// the directory host (on an owner's request) and the watcher (pruning a dead
-// subscription), so the last write winning is acceptable.
+// pushStoreMu serialises read-modify-write of push.json within a process,
+// and pushStoreLock across processes: a phone's token written by one while
+// another rewrites the file for a dead subscription must not be lost (its
+// alerts would stop once untokened ones do). Each write is whole
+// (atomicfile): a crash leaves the old file or the new one.
 var pushStoreMu sync.Mutex
+
+const pushStoreLock = "push.lock"
 
 func pushStorePath() (string, error) {
 	dir, err := reminalDir()
@@ -219,17 +246,18 @@ func savePushSubs(subs []pushEntry) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.Write(path, b, 0o600)
 }
 
 // updatePushSubs applies fn to the stored list under the lock and saves it.
 func updatePushSubs(fn func([]pushEntry) []pushEntry) error {
 	pushStoreMu.Lock()
 	defer pushStoreMu.Unlock()
+	lock, err := lockFile(pushStoreLock)
+	if err != nil {
+		return err
+	}
+	defer unlockFile(lock)
 	subs, err := loadPushSubs()
 	if err != nil {
 		return err

@@ -135,6 +135,17 @@ await page.waitForFunction((n) => true, before);
 for (let i = 0; i < 40 && asked.length === before; i++) await new Promise(r => setTimeout(r, 100));
 check(asked.length === before + 1 && asked[before].machine === std(NEW), 'alerts turned on for a machine ask its token at once', JSON.stringify(asked.slice(before)));
 check(!asked.some(a => a.machine === std(OLD)), 'a machine too old for tokens is never asked one', JSON.stringify(asked));
+// What the page really sends a machine for a token (the calls above stand
+// in for the machine): the token in the request, and in what the owner signs.
+const req = await page.evaluate(() => {
+  const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/phone', p256dh: 'p', auth: 'a' }, tok = 'v1.1797000000.' + 'z'.repeat(43);
+  return { token: pushRequestOf({ op: 'token', sub, token: tok }, { x: 1 }, 'r1'), set: pushRequestOf({ op: 'set', sub, rules: { cpu: true } }, { x: 1 }, 'r2'),
+    act: pushActionOf({ op: 'token', sub, token: tok }), actSet: pushActionOf({ op: 'set', sub }) };
+});
+check(req.token.push.token === 'v1.1797000000.' + 'z'.repeat(43) && req.token.push.op === 'token' && req.token.push.req_id === 'r1' && req.set.push.token === undefined,
+  'the request for a token carries the token (and only that one does)', JSON.stringify(req));
+check(req.act === 'push:token:https://fcm.googleapis.com/fcm/send/phone:v1.1797000000.' + 'z'.repeat(43) && req.actSet === 'push:set:https://fcm.googleapis.com/fcm/send/phone',
+  'the owner signs the token with it (pushAction on the machine)', JSON.stringify([req.act, req.actSet]));
 check(!errs.length, 'no page errors', errs.join(' | '));
 await browser.close();
 console.log(fails ? fails + ' failed' : 'all passed');

@@ -30,7 +30,15 @@ type pushReq struct {
 	ReqID string `json:"req_id,omitempty"`
 }
 
-func pushAction(op, endpoint string) string { return "push:" + op + ":" + endpoint }
+// pushAction is what the owner device signs for one request: its op and the
+// phone's endpoint, and for op "token" the token itself, so a proof for one
+// token cannot be spent handing this machine another.
+func pushAction(op, endpoint, token string) string {
+	if op == "token" {
+		return "push:token:" + endpoint + ":" + token
+	}
+	return "push:" + op + ":" + endpoint
+}
 
 // applyLocalPush answers one phone-alert request on this machine.
 func (a *Agent) applyLocalPush(resp *protocol.DirResponse, q *pushReq) {
@@ -40,7 +48,7 @@ func (a *Agent) applyLocalPush(resp *protocol.DirResponse, q *pushReq) {
 		out.Error = err.Error()
 		return
 	}
-	if why := a.verifyOwnerAction(q.Proof, pushAction(q.Op, q.Sub.Endpoint)); why != "" {
+	if why := a.verifyOwnerAction(q.Proof, pushAction(q.Op, q.Sub.Endpoint, q.Token)); why != "" {
 		out.Error = why
 		return
 	}

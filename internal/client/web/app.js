@@ -990,6 +990,15 @@
       const j = s.toJSON();
       return { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth };
     }
+    // What an owner device signs for a push request (pushAction on the
+    // machine): its op and endpoint, and for "token" the token too.
+    function pushActionOf(p) {
+      return 'push:' + p.op + ':' + p.sub.endpoint + (p.op === 'token' ? ':' + p.token : '');
+    }
+    // The request a machine is sent for one push call.
+    function pushRequestOf(p, proof, reqId) {
+      return { push: { op: p.op, sub: p.sub, rules: p.rules || undefined, token: p.op === 'token' ? p.token : undefined, proof, req_id: reqId } };
+    }
     async function pushCall(b64, op, sub, rules, token) {
       const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { push: { op, sub, rules, token }, timeout: op === 'test' ? 30000 : 10000 });
       if (!r || !r.push) throw new Error('needs-upgrade');
@@ -3979,10 +3988,10 @@
                 // device asked (every owner shares the channel key) and is bound
                 // to the op and endpoint, matching pushAction on the host.
                 const p = opts.push;
-                const proof = await signOwnerAction('push:' + p.op + ':' + p.sub.endpoint, dirID);
+                const proof = await signOwnerAction(pushActionOf(p), dirID);
                 if (!proof) return done(new Error('this device has no owner key'));
                 att.reqId = dirReqId();
-                const enc = await encrypt(box, JSON.stringify({ push: { op: p.op, sub: p.sub, rules: p.rules || undefined, proof, req_id: att.reqId } }));
+                const enc = await encrypt(box, JSON.stringify(pushRequestOf(p, proof, att.reqId)));
                 sock.send(JSON.stringify({ type: 'dir_query', data: enc }));
                 state = 'query';
               } else if (opts.open) {

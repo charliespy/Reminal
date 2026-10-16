@@ -88,19 +88,67 @@ func allChecks(currentVersion string) []check {
 	}
 }
 
-// checkPhoneAlerts says when phones subscribed here still get alerts that
-// are not bound to this machine: forwarded until pushUntokenedUntil, then
-// not, until each phone turns them on again.
+// checkPhoneAlerts says how this machine's phone alerts stand: phones whose
+// alerts are not yet bound to it (forwarded until pushUntokenedUntil, then
+// not, until each phone renews them — unless the relay is one that does not
+// bind alerts at all, an older self-hosted one), and a clock far enough off
+// the relay's that it refuses bound alerts. Phones of owners removed from
+// this machine are not counted: they get nothing from it anyway.
 func checkPhoneAlerts() (level, string) {
-	n := untokenedPushSubs()
-	if n == 0 {
+	n := pushSubsToRenew()
+	if n < 0 {
+		return levelOK, "no phones"
+	}
+	binds, skew := relayAlertsInfo()
+	var notes []string
+	lvl := levelOK
+	if n > 0 && binds {
+		phones := fmt.Sprintf("%d phone(s)", n)
+		lvl = levelWarn
+		if time.Now().Before(pushUntokenedUntil) {
+			notes = append(notes, fmt.Sprintf("%s need alerts renewed before %s: open reminal on each and tap Renew alerts on this phone", phones, pushUntokenedUntil.Format("2 Jan 2006")))
+		} else {
+			notes = append(notes, fmt.Sprintf("%s have not got alerts from this machine since %s: open reminal on each and turn alerts on again", phones, pushUntokenedUntil.Format("2 Jan 2006")))
+		}
+	}
+	if skew > pushClockSlack || skew < -pushClockSlack {
+		lvl = levelWarn
+		notes = append(notes, fmt.Sprintf("this machine's clock is %s off the relay's, so the relay refuses its bound alerts: set the clock right", skew.Round(time.Second).Abs()))
+	}
+	if len(notes) == 0 {
+		if n > 0 {
+			return levelOK, "none to renew (this relay does not bind alerts to machines)"
+		}
 		return levelOK, "none to renew"
 	}
-	phones := fmt.Sprintf("%d phone(s)", n)
-	if time.Now().Before(pushUntokenedUntil) {
-		return levelWarn, fmt.Sprintf("%s need alerts renewed before %s: open reminal on each and tap Renew alerts", phones, pushUntokenedUntil.Format("2 Jan 2006"))
+	return lvl, strings.Join(notes, "; ")
+}
+
+// pushClockSlack is how far off the relay's clock a bound alert's time may
+// be (cloudflare/src/push.ts's SIG_FRESH), less a margin.
+const pushClockSlack = 90 * time.Second
+
+// relayAlertsInfo asks the relay whether it binds alerts to machines (it
+// answers POST /push/token; an older one does not know the path) and how
+// far this machine's clock is from its own (its Date). Unreachable: taken
+// as binding, with no skew known.
+func relayAlertsInfo() (binds bool, skew time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.WebURL()+"/push/token", nil)
+	if err != nil {
+		return true, 0
 	}
-	return levelFail, phones + " no longer get alerts from this machine: open reminal on each and turn alerts on again"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return true, 0
+	}
+	resp.Body.Close()
+	if at, err := http.ParseTime(resp.Header.Get("Date")); err == nil {
+		skew = time.Since(at)
+	}
+	// A relay that binds alerts answers a GET there with "POST only".
+	return resp.StatusCode == http.StatusMethodNotAllowed, skew
 }
 
 // checkOwnerKey reports how this device's owner identity is kept.
