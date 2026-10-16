@@ -9,11 +9,11 @@ let fails = 0;
 const ok = (m) => console.log('ok   ' + m);
 const fail = (m) => { console.log('FAIL ' + m); fails++; };
 
-async function open(seen) {
+async function open(seen, path) {
   const ctx = await b.newContext({ viewport: { width: 1100, height: 700 } });
   if (seen) await ctx.addInitScript(() => { try { localStorage.setItem('reminal-tour-v1', 'done'); } catch (_) {} });
   const page = await ctx.newPage();
-  await page.goto('http://127.0.0.1:8099/');
+  await page.goto('http://127.0.0.1:8099/' + (path || ''));
   await page.waitForFunction(() => typeof term === 'object' && term && document.querySelector('.xterm-helper-textarea'));
   // What is sent to the session (the socket stood in for, the session live).
   await page.evaluate(() => { window.__got = ''; inputLive = () => true; deliverInput = (d) => { window.__got += d; }; });
@@ -69,6 +69,47 @@ const step = (page) => page.evaluate(() => {
   !openedWhileTyping ? ok('the first-visit tour does not open while the terminal is being typed into') : fail('the first-visit tour opened over the typing');
   await page.waitForTimeout(3000);           // a pause
   await tourOpen(page) ? ok('it opens once the typing pauses') : fail('it never opened after the typing paused');
+  await ctx.close();
+}
+// ---- A join link without its PIN: not over a PIN being typed ----
+// The PIN is read off another screen, digit by digit with pauses: the tour
+// waits while the box holds digits not sent yet (opened, it would take the
+// keyboard, and the rest of the PIN and its Enter would go to it).
+{
+  const { ctx, page } = await open(false, '?s=ABCD2345');
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'pin-input');
+  await page.keyboard.type('43', { delay: 400 });
+  await page.waitForTimeout(8000);           // past the link's 6 s wait, and the typing pause
+  const st = await page.evaluate(() => ({ tour: !!document.querySelector('.tour-card'), pin: document.getElementById('pin-input').value, focus: document.activeElement.id }));
+  !st.tour && st.pin === '43' && st.focus === 'pin-input' ? ok('a join link: the tour waits while the PIN box holds digits not sent, the keyboard left there') : fail('the tour over a PIN being typed: ' + JSON.stringify(st));
+  await page.keyboard.press('Backspace'); await page.keyboard.press('Backspace');
+  await page.waitForTimeout(3000);
+  await tourOpen(page) ? ok('the PIN box emptied, it opens in the pause') : fail('it never opened once the PIN box was empty');
+  await ctx.close();
+}
+
+// ---- Escape closes the menu the keyboard is in ----
+{
+  const { ctx, page } = await open(true);
+  await page.locator('#recents > summary').click();
+  const opened = await page.evaluate(() => document.getElementById('recents').open);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(100);
+  const st = await page.evaluate(() => ({ open: document.getElementById('recents').open, focus: document.activeElement === document.querySelector('#recents > summary') }));
+  opened && !st.open && st.focus ? ok('Escape closes a header menu, the keyboard back on its button') : fail('Escape on an open header menu: ' + JSON.stringify({ opened, ...st }));
+  // A sheet opened from the menu (Alerts): the first Escape closes only the
+  // sheet, the second the menu.
+  await page.locator('#recents > summary').click();
+  // Pressed as a click on it (on this page, with no host, Playwright finds it not visible).
+  await page.evaluate(() => document.getElementById('alerts-bar-btn').click());
+  await page.waitForTimeout(200);
+  const state = () => page.evaluate(() => ({ menu: document.getElementById('recents').open, sheet: !document.getElementById('alsheet').hidden }));
+  const s0 = await state();
+  await page.keyboard.press('Escape'); await page.waitForTimeout(150);
+  const s1 = await state();
+  await page.keyboard.press('Escape'); await page.waitForTimeout(150);
+  const s2 = await state();
+  s0.menu && s0.sheet && s1.menu && !s1.sheet && !s2.menu && !s2.sheet ? ok('a sheet from a header menu: the first Escape closes the sheet alone, the second the menu') : fail('Escape over a sheet from a menu: ' + JSON.stringify({ s0, s1, s2 }));
   await ctx.close();
 }
 await b.close();

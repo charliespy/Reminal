@@ -9630,6 +9630,25 @@
       if (e.key === HISTORY_KEY || e.key === null) renderRecents();
     });
 
+    // Escape closes the menu the keyboard is in (or the one open while
+    // nothing has the keyboard), back on the button that opened it — after
+    // anything over it took the key first, and after its search box cleared
+    // what was typed in it.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      // A sheet opened from a menu (Alerts, What's new) closes first: it
+      // takes Escape on the window, after this.
+      if (document.querySelector('.cl-sheet:not([hidden])')) return;
+      const t = e.target;
+      if (t && t.tagName === 'INPUT' && t.value) return;
+      const d = (t && t.closest && t.closest('header details[open]')) || (t === document.body && document.querySelector('header details[open]'));
+      if (!d) return;
+      e.preventDefault();
+      d.open = false;
+      const s = d.querySelector('summary');
+      if (s) s.focus();
+    });
+
     // Close the recents <details> on any outside click. Native <details>
     // doesn't have this behavior — only the summary toggles it — so a
     // dropdown left open after picking a row would shadow the terminal. This
@@ -12970,16 +12989,22 @@
       if (seenBefore || document.body.classList.contains('pane-only') || params.has('pane')) return;
       const t0 = Date.now();
       const waitForSession = !!params.get('s');
-      // Not while someone is typing into the terminal: it opens in a pause
-      // (TOUR_TYPING_PAUSE_MS since their last key), never over a command
-      // being typed.
+      // Not while someone is typing, into the terminal or a field such as
+      // the PIN: it opens in a pause (TOUR_TYPING_PAUSE_MS since their last
+      // key), never over a command being typed. Nor over a field holding
+      // what they typed and have not sent yet (a PIN half read off the
+      // other screen): it would take the keyboard, and the rest of the PIN
+      // and its Enter would go to the tour.
       const TOUR_TYPING_PAUSE_MS = 2000;
+      const isField = (el) => !!(el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(button|checkbox|radio|range|submit|reset|file|color)$/i.test(el.type))));
       let lastTermKeyAt = 0;
-      document.addEventListener('keydown', (e) => { if (isTermKeys(e.target)) lastTermKeyAt = Date.now(); }, true);
+      document.addEventListener('keydown', (e) => { if (isTermKeys(e.target) || isField(e.target)) lastTermKeyAt = Date.now(); }, true);
       (function poll() {
+        const el = document.activeElement;
         const busy = document.querySelector('details[open]') ||
           ($('share-modal') && getComputedStyle($('share-modal')).display !== 'none') ||
-          Date.now() - lastTermKeyAt < TOUR_TYPING_PAUSE_MS;
+          Date.now() - lastTermKeyAt < TOUR_TYPING_PAUSE_MS ||
+          (!connected() && isField(el) && !isTermKeys(el) && el.value !== '');
         const ready = !waitForSession || connected() || Date.now() - t0 > 6000;
         if (ready && !busy && Date.now() - t0 > 900) {
           // Connected: give the terminal a moment to paint its first screen
