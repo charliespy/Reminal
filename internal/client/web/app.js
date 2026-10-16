@@ -3940,7 +3940,23 @@
     function dirReqId() {
       return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
     }
+    // A machine over its allowance for a request answers "busy" with how
+    // long until it would take it (retry_ms): waited exactly, and asked
+    // again — never taken for the machine being offline. Two tabs or two
+    // browsers on one machine pace themselves this way, whatever each
+    // thinks the other is doing.
+    const DIR_BUSY_TRIES = 30; // an abort cap; each wait is the machine's own
     async function queryDirectory(machinePubU8, opts) {
+      for (let i = 0; ; i++) {
+        try { return await queryDirectoryOnce(machinePubU8, opts); }
+        catch (e) {
+          if (!(e && e.busyMs) || i + 1 >= DIR_BUSY_TRIES) throw e;
+          await new Promise(r => setTimeout(r, e.busyMs));
+        }
+      }
+    }
+    const dirBusy = ms => Object.assign(new Error('the machine is busy'), { busyMs: Math.max(1, Number(ms) || 1) });
+    async function queryDirectoryOnce(machinePubU8, opts) {
       opts = opts || {};
       const dk = await loadDeviceKeyPair();
       if (!dk) throw new Error('this device has no owner key');
@@ -3986,6 +4002,7 @@
               return;
             }
             if (state === 'own') {
+              if (msg.type === 'own_busy' && msg.ex_id === att.exID) return done(dirBusy(msg.retry_ms));
               if (msg.type !== 'own_resp' || msg.ex_id !== att.exID) return;
               const agentEph = base64ToU8(msg.data || '');
               const machinePub = base64ToU8(msg.machine_pub || '');
@@ -4059,6 +4076,9 @@
               if (msg.type !== 'dir_resp') return;
               const pt = await decrypt(box, msg.data || '');
               const r = JSON.parse(new TextDecoder().decode(pt));
+              // Over its allowance: this request's busy answer (its id), or —
+              // for a plain listing, which carries none — any.
+              if (r.retry_ms && (r.req_id ? r.req_id === att.reqId : !att.reqId)) return done(dirBusy(r.retry_ms));
               // Every viewer on the channel hears every answer. A push request
               // waits for the one carrying its own id. A machine too old to
               // know about alerts answers with a plain reply and nothing more
@@ -4084,6 +4104,7 @@
               const pt = await decrypt(box, msg.data || '');
               const r = JSON.parse(new TextDecoder().decode(pt));
               if (att.reqId && r.req_id && r.req_id !== att.reqId) return; // another owner's reply
+              if (r.retry_ms) return done(dirBusy(r.retry_ms));
               if (r.error) return done(new Error(r.error));
               return done(null, r);
             }
@@ -4092,6 +4113,7 @@
               const pt = await decrypt(box, msg.data || '');
               const r = JSON.parse(new TextDecoder().decode(pt));
               if (att.reqId && r.req_id && r.req_id !== att.reqId) return;
+              if (r.retry_ms) return done(dirBusy(r.retry_ms));
               if (r.error) return done(new Error(r.error));
               return done(null, r);
             }
@@ -4100,6 +4122,7 @@
               const pt = await decrypt(box, msg.data || '');
               const r = JSON.parse(new TextDecoder().decode(pt));
               if (att.reqId && r.req_id && r.req_id !== att.reqId) return;
+              if (r.retry_ms) return done(dirBusy(r.retry_ms));
               if (r.error) return done(new Error(r.error));
               return done(null, r);
             }
@@ -4108,6 +4131,7 @@
               const pt = await decrypt(box, msg.data || '');
               const r = JSON.parse(new TextDecoder().decode(pt));
               if (att.reqId && r.req_id && r.req_id !== att.reqId) return;
+              if (r.retry_ms) return done(dirBusy(r.retry_ms));
               if (r.error) return done(new Error(r.error));
               return done(null, r);
             }
@@ -5091,6 +5115,14 @@
             return;
           }
           if (hs === 'own') {
+            // Over its allowance for handshakes: opened again when it says,
+            // not taken for a failure (no backoff).
+            if (msg.type === 'own_busy' && msg.ex_id === att.exID) {
+              clearTimeout(timer);
+              warmClose(w);
+              w.retryAt = Date.now() + Math.max(1, Number(msg.retry_ms) || 1);
+              return;
+            }
             if (msg.type !== 'own_resp' || msg.ex_id !== att.exID) return;
             const agentEph = base64ToU8(msg.data || '');
             const machinePub = base64ToU8(msg.machine_pub || '');
@@ -5120,9 +5152,16 @@
             // Observation time = when we ASKED, so a reply that lands after a
             // newer live push can't overwrite it (see attnStore).
             const sentAt = w.sentAt;
-            w.inflight = false;
             const pt = await decrypt(w.box, msg.data || '');
             const resp = JSON.parse(new TextDecoder().decode(pt));
+            // "Busy" (retry_ms) is no listing. To this poll (a plain one: no
+            // id), it is asked again when the machine says; another owner's
+            // is not this one's to act on.
+            if (resp && resp.retry_ms) {
+              if (!resp.req_id && w.inflight) setTimeout(() => { if (w.sock === sock) { w.inflight = false; warmSend(b64, w); } }, resp.retry_ms);
+              return;
+            }
+            w.inflight = false;
             if (!resp || typeof resp !== 'object' || !Array.isArray(resp.sessions)) return;
             const list = resp.sessions;
             await withOwnedMachines(m => {

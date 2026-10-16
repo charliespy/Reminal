@@ -40,6 +40,34 @@ const maxDirMessageBytes = 1 << 20
 // the same signed handshake used for a PIN-free connect, and returns the
 // machine's live sessions. The reply is end-to-end encrypted; the relay only
 // ever sees opaque frames on an opaque channel id.
+// dirBusyError is a machine's answer to a request over its allowance:
+// asked again after Wait, it is taken. Never "unreachable": it answered.
+type dirBusyError struct{ Wait time.Duration }
+
+func (e *dirBusyError) Error() string { return "the machine is busy; asked again shortly" }
+
+func busyAfter(ms int) error {
+	return &dirBusyError{Wait: time.Duration(max(1, ms)) * time.Millisecond}
+}
+
+// dirBusyTries bounds how many times one call is asked again of a machine
+// that keeps saying busy: an abort cap, not a timeout — each wait is the
+// machine's own.
+const dirBusyTries = 30
+
+// withDirBusy runs one directory request, and while the machine answers
+// "busy", waits exactly what it asks and asks again.
+func withDirBusy[T any](f func() (T, error)) (T, error) {
+	for i := 0; ; i++ {
+		v, err := f()
+		var busy *dirBusyError
+		if !errors.As(err, &busy) || i+1 >= dirBusyTries {
+			return v, err
+		}
+		time.Sleep(busy.Wait)
+	}
+}
+
 func QueryDirectory(machinePub ed25519.PublicKey, timeout time.Duration) (protocol.DirResponse, error) {
 	return queryDirectory(machinePub, timeout, dirQueryReq{})
 }
@@ -168,6 +196,10 @@ func dialDirectoryOwner(machinePub ed25519.PublicKey, timeout time.Duration) (*d
 
 // queryDirectory is QueryDirectory with optional search / one-session dump.
 func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dirQueryReq) (protocol.DirResponse, error) {
+	return withDirBusy(func() (protocol.DirResponse, error) { return queryDirectoryOnce(machinePub, timeout, req) })
+}
+
+func queryDirectoryOnce(machinePub ed25519.PublicKey, timeout time.Duration, req dirQueryReq) (protocol.DirResponse, error) {
 	var zero protocol.DirResponse
 	conn, box, err := dialDirectoryOwner(machinePub, timeout)
 	if err != nil {
@@ -227,6 +259,9 @@ func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dir
 		}
 		switch dirReplyFor(req, resp) {
 		case dirReplyMine:
+			if resp.RetryMS > 0 {
+				return zero, busyAfter(resp.RetryMS)
+			}
 			return resp, nil
 		case dirReplyMaybe:
 			maybe = &resp
@@ -324,6 +359,10 @@ func hostTooOld(what string, resp protocol.DirResponse) error {
 // its directory channel — the CLI counterpart to the web Machines panel's
 // "+ New session on this host" — and returns the new session's credentials.
 func SpawnOnMachine(machinePub ed25519.PublicKey, name, cwd string, timeout time.Duration) (*SpawnedSession, error) {
+	return withDirBusy(func() (*SpawnedSession, error) { return spawnOnMachineOnce(machinePub, name, cwd, timeout) })
+}
+
+func spawnOnMachineOnce(machinePub ed25519.PublicKey, name, cwd string, timeout time.Duration) (*SpawnedSession, error) {
 	conn, box, err := dialDirectoryOwner(machinePub, timeout)
 	if err != nil {
 		return nil, err
@@ -363,16 +402,20 @@ func SpawnOnMachine(machinePub ed25519.PublicKey, name, cwd string, timeout time
 			return nil, fmt.Errorf("directory: decrypt failed")
 		}
 		var resp struct {
-			ReqID string `json:"req_id"`
-			ID    string `json:"id"`
-			PIN   string `json:"pin"`
-			Error string `json:"error"`
+			ReqID   string `json:"req_id"`
+			ID      string `json:"id"`
+			PIN     string `json:"pin"`
+			Error   string `json:"error"`
+			RetryMS int    `json:"retry_ms"`
 		}
 		if err := json.Unmarshal(plain, &resp); err != nil {
 			return nil, fmt.Errorf("directory: bad response")
 		}
 		if resp.ReqID != "" && resp.ReqID != reqID {
 			continue // a stale reply to some other request on this channel
+		}
+		if resp.RetryMS > 0 {
+			return nil, busyAfter(resp.RetryMS)
 		}
 		if resp.Error != "" {
 			return nil, fmt.Errorf("%s", resp.Error)
@@ -387,6 +430,11 @@ func SpawnOnMachine(machinePub ed25519.PublicKey, name, cwd string, timeout time
 // KillOnMachine terminates a session on an owned machine over its directory
 // channel — the CLI counterpart to the Machines panel's kill button.
 func KillOnMachine(machinePub ed25519.PublicKey, sessionID string, timeout time.Duration) error {
+	_, err := withDirBusy(func() (struct{}, error) { return struct{}{}, killOnMachineOnce(machinePub, sessionID, timeout) })
+	return err
+}
+
+func killOnMachineOnce(machinePub ed25519.PublicKey, sessionID string, timeout time.Duration) error {
 	conn, box, err := dialDirectoryOwner(machinePub, timeout)
 	if err != nil {
 		return err
@@ -425,15 +473,19 @@ func KillOnMachine(machinePub ed25519.PublicKey, sessionID string, timeout time.
 			return fmt.Errorf("directory: decrypt failed")
 		}
 		var ack struct {
-			ReqID string `json:"req_id"`
-			OK    bool   `json:"ok"`
-			Error string `json:"error"`
+			ReqID   string `json:"req_id"`
+			OK      bool   `json:"ok"`
+			Error   string `json:"error"`
+			RetryMS int    `json:"retry_ms"`
 		}
 		if err := json.Unmarshal(plain, &ack); err != nil {
 			return fmt.Errorf("directory: bad response")
 		}
 		if ack.ReqID != "" && ack.ReqID != reqID {
 			continue
+		}
+		if ack.RetryMS > 0 {
+			return busyAfter(ack.RetryMS)
 		}
 		if ack.Error != "" {
 			return fmt.Errorf("%s", ack.Error)
@@ -460,6 +512,10 @@ func readOwnerResp(conn *dirConn, dirID, exHex string, exID, viewerEph, devicePu
 		// others' replies. Skip any that isn't the answer to OUR own_init — using
 		// someone else's ephemeral/signature would fail verification and wrongly
 		// error out a legitimate query.
+		// Over the machine's allowance for handshakes: it says when to come back.
+		if msg.Type == protocol.TypeOwnerBusy && msg.ExID == exHex {
+			return busyAfter(msg.RetryMS)
+		}
 		if msg.Type != protocol.TypeOwnerResp || msg.ExID != exHex {
 			continue
 		}

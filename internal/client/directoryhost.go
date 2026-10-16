@@ -6,6 +6,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -240,6 +241,14 @@ func newTokenBucket(max, perSec float64) *tokenBucket {
 }
 
 func (tb *tokenBucket) allow(now time.Time) bool {
+	ok, _ := tb.take(now)
+	return ok
+}
+
+// take is allow, and when it refuses, how long until a token is back: what
+// a caller over the allowance is told to wait (retry_ms), so it comes back
+// when it will be answered rather than timing out on a silence.
+func (tb *tokenBucket) take(now time.Time) (bool, time.Duration) {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 	tb.tokens += now.Sub(tb.last).Seconds() * tb.perSec
@@ -248,10 +257,10 @@ func (tb *tokenBucket) allow(now time.Time) bool {
 	}
 	tb.last = now
 	if tb.tokens < 1 {
-		return false
+		return false, time.Duration(math.Ceil((1-tb.tokens)/tb.perSec*1000)) * time.Millisecond
 	}
 	tb.tokens--
-	return true
+	return true, 0
 }
 
 // refund puts a token back, for work that turned out to be an owner's own —
