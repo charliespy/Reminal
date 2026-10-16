@@ -110,6 +110,22 @@ r = await post("/push/token", { ...sub, endpoint: "https://fcm.googleapis.com/fc
 say("ask-other", r.status);
 r = await post("/push/token", { ...sub, machine: "short" });
 say("ask-bad-machine", r.status);
+// Another spelling of the same endpoint is not another subscription: refused,
+// so it cannot get round the cap (each ask shows a notification on the phone).
+const spellings = [endpoint + "#2", endpoint + "?a=1", endpoint.replace("fcm.", "FCM."), endpoint.replace(".com/", ".com:443/")];
+const n2 = sent.length;
+const sp = [];
+for (const e of spellings) sp.push((await post("/push/token", { ...sub, endpoint: e, machine: mine.pub })).status);
+for (const e of spellings) sp.push((await post("/push", { ...(await alert(mine)), endpoint: e })).status);
+say("spellings", sp.join(",") + " sent " + (sent.length - n2));
+// A relay without PUSH_TOKEN_KEY checks no token: a tokened alert goes as an
+// untokened one before the date, and after it the relay says it is not set
+// up (not "unbound", which would make machines drop a good token).
+const keyless = (body, now) => handlePush(new Request("https://live.reminal.app/push", { method: "POST", body: JSON.stringify(body), headers: { "cf-connecting-ip": "198.51.100.1" } }), { ...env, PUSH_TOKEN_KEY: undefined }, now);
+r = await keyless(await alert(mine), UNTOKENED_UNTIL - 1000);
+const kb = r.status;
+r = await keyless(await alert(mine), UNTOKENED_UNTIL);
+say("keyless", kb + " " + r.status + " " + ((await r.json()).code ?? "-"));
 console.log(out.join("\n"));
 `)
 	for _, want := range []string{
@@ -129,6 +145,8 @@ console.log(out.join("\n"));
 		"ask-4 429",
 		"ask-other 200",
 		"ask-bad-machine 400",
+		"spellings 400,400,400,400,400,400,400,400 sent 0",
+		"keyless 200 501 -",
 	} {
 		if !strings.Contains(got, want+"\n") && !strings.HasSuffix(strings.TrimSpace(got), want) {
 			t.Errorf("want %q in:\n%s", want, got)

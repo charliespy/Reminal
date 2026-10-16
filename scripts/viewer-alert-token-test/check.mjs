@@ -111,6 +111,23 @@ check((await page.evaluate(async () => (await (await caches.open('reminal-alert-
 await page.waitForFunction(() => !document.querySelector('#al-renew'), null, { timeout: 10000 }).catch(() => {});
 check(!(await page.evaluate(() => !!document.querySelector('#al-renew'))), 'Renew goes once the machine has it', 'still offered');
 
+// A token its machine refuses (alerts off there) is dropped, not handed on
+// again each time; one that did not reach the machine is kept for later.
+const kept = await page.evaluate(async ([m, t]) => {
+  const c = await caches.open('reminal-alert-tokens');
+  const qd = queryDirectory;
+  queryDirectory = async () => ({ push: { error: 'this phone has no alerts on this machine' } });
+  await c.put('/alert-token/' + encodeURIComponent(m), new Response(t)); await deliverAlertTokens();
+  const refused = (await c.keys()).length;
+  queryDirectory = async () => null;
+  await c.put('/alert-token/' + encodeURIComponent(m), new Response(t)); await deliverAlertTokens();
+  const unreached = (await c.keys()).length;
+  await c.delete('/alert-token/' + encodeURIComponent(m));
+  queryDirectory = qd;
+  return { refused, unreached };
+}, [std(KEY), TOKEN]);
+check(kept.refused === 0 && kept.unreached === 1, 'a token its machine refuses is dropped, one that did not reach it kept', JSON.stringify(kept));
+
 // A machine turned on now: bound from the start, no Renew needed.
 const before = asked.length;
 await page.evaluate(async (NEW) => { await withOwnedMachines(m => { m[NEW] = { name: 'newbox', lastSeen: Date.now() }; }); await syncAllAlerts(); }, NEW);

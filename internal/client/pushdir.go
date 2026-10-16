@@ -69,11 +69,11 @@ func (a *Agent) applyLocalPush(resp *protocol.DirResponse, q *pushReq) {
 		// Synchronous, so the page can say "sent" or say why not — the whole
 		// point of the button is finding out whether the path works. As the
 		// watcher sends: with the phone's token, if it has one here.
-		token := ""
-		if e, ok := findPushSub(q.Sub.Endpoint); ok {
-			token = e.Token
+		e, ok := findPushSub(q.Sub.Endpoint)
+		if !ok {
+			e = pushEntry{Sub: q.Sub}
 		}
-		err := sendPush(q.Sub, token, pushMessage{
+		err := sendBound(e, pushMessage{
 			Title: pushHostLabel(),
 			Body:  "Test alert — this machine can reach this device.",
 			Tag:   "test", URL: "/",
@@ -90,7 +90,7 @@ func (a *Agent) applyLocalPush(resp *protocol.DirResponse, q *pushReq) {
 	}
 	if e, ok := findPushSub(q.Sub.Endpoint); ok {
 		out.Subscribed = true
-		out.Tokened = e.Token != ""
+		out.Tokened = e.Token != "" || e.NewToken != ""
 		out.Rules, _ = json.Marshal(e.Rules)
 	} else {
 		out.Rules, _ = json.Marshal(defaultPushRules())

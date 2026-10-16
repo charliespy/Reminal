@@ -62,6 +62,10 @@ function allowedEndpoint(raw: unknown): URL | null {
     return null;
   }
   if (u.protocol !== "https:" || u.port !== "") return null;
+  // One spelling per subscription, as the browser gave it: the limits and
+  // the token are keyed on it, so another spelling of the same endpoint
+  // (a case, a default port, a query or a fragment) is not let through.
+  if (u.search !== "" || u.hash !== "" || raw !== u.href) return null;
   return PUSH_HOSTS.some((re) => re.test(u.hostname)) ? u : null;
 }
 
@@ -79,6 +83,10 @@ const PER_ENDPOINT = { calls: 20, period: 60 };
 const callers = new Map<string, number[]>();
 const endpoints = new Map<string, number[]>();
 
+// Where the RateLimiter can't be asked (an outage), each isolate counts its
+// own: deliberately not failing closed, so a blip drops no real alerts. For
+// the once-check on an alert's signature that means a replay to another
+// isolate during an outage gets through, at worst one alert shown twice.
 async function within(env: LimiterEnv, scope: string, counts: Map<string, number[]>, key: string, lim: { calls: number; period: number }): Promise<boolean> {
   const c = await allow(env, scope, key, lim.calls, lim.period);
   return c === true || (c === null && inIsolate(counts, key, lim.calls, lim.period));
@@ -238,7 +246,7 @@ export async function handlePushToken(request: Request, env: PushEnv): Promise<R
     return json({ error: "bad subscription keys" }, 400);
   }
   if (p256dh.length !== 65 || p256dh[0] !== 4 || auth.length !== 16) return json({ error: "bad subscription keys" }, 400);
-  const endpoint = req.endpoint as string;
+  const endpoint = ep.href;
   const caller = addressGroup(request.headers.get("cf-connecting-ip") ?? "");
   if (!(await within(env, "push-caller", callers, caller, PER_CALLER)) ||
     !(await within(env, "push-token", tokenAsks, endpoint, PER_TOKEN_ASK))) {
@@ -299,10 +307,12 @@ export async function handlePush(request: Request, env: PushEnv, nowMs = Date.no
   // Checked before anything is counted: an alert that is not the machine's
   // spends none of its subscription's allowance.
   const nowSec = Math.floor(now / 1000);
-  if (req.token !== undefined) {
+  // A relay without PUSH_TOKEN_KEY (not set up yet) checks no token, and
+  // takes the alert as an untokened one.
+  if (req.token !== undefined && env.PUSH_TOKEN_KEY) {
     const machine = machineKey(req.machine);
     const ts = typeof req.ts === "number" && Number.isInteger(req.ts) ? req.ts : NaN;
-    if (!machine || !env.PUSH_TOKEN_KEY || !(await tokenGood(env, req.token, req.endpoint as string, machine.b64, nowSec))) {
+    if (!machine || !(await tokenGood(env, req.token, ep.href, machine.b64, nowSec))) {
       return json({ error: "this alert is not bound to this machine; turn alerts on again from the phone", code: "unbound" }, 403);
     }
     if (!(Math.abs(nowSec - ts) <= SIG_FRESH)) return json({ error: "this alert's time is off; check this machine's clock", code: "clock" }, 403);
@@ -313,16 +323,19 @@ export async function handlePush(request: Request, env: PushEnv, nowMs = Date.no
       return json({ error: "bad signature", code: "unbound" }, 403);
     }
     const key = await crypto.subtle.importKey("raw", machine.bytes, { name: "Ed25519" }, false, ["verify"]);
-    const signed = alertSigned(req.endpoint as string, hex(await crypto.subtle.digest("SHA-256", payload)), ts);
+    const signed = alertSigned(ep.href, hex(await crypto.subtle.digest("SHA-256", payload)), ts);
     if (sig.length !== 64 || !(await crypto.subtle.verify({ name: "Ed25519" }, key, sig, enc.encode(signed)))) {
       return json({ error: "bad signature", code: "unbound" }, 403);
     }
     // Once: the same signed alert sent again is refused for as long as its
-    // time would pass.
-    if (!(await within(env, "push-sig", sigsSeen, b64url(sig), { calls: 1, period: 2 * SIG_FRESH }))) {
+    // time would pass. Keyed on what was signed, not on the signature's bytes.
+    if (!(await within(env, "push-sig", sigsSeen, b64url(await crypto.subtle.digest("SHA-256", enc.encode(signed))), { calls: 1, period: 2 * SIG_FRESH }))) {
       return json({ error: "this alert was already sent" }, 409);
     }
   } else if (now >= UNTOKENED_UNTIL) {
+    // A relay without PUSH_TOKEN_KEY can check no token: it says so, rather
+    // than calling a good token unbound (machines drop an unbound one).
+    if (!env.PUSH_TOKEN_KEY) return json({ error: "alerts are not set up on this relay" }, 501);
     return json({ error: "alerts to this phone must be renewed: open reminal on it and turn them on again", code: "renew" }, 403);
   }
   const caller = addressGroup(request.headers.get("cf-connecting-ip") ?? "");

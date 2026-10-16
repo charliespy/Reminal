@@ -8,7 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -95,7 +95,7 @@ func TestAPhonesTokenIsKeptWithItsAlerts(t *testing.T) {
 	if err := upsertPushSub("dev", sub, defaultPushRules()); err != nil {
 		t.Fatal(err)
 	}
-	if e, ok := findPushSub(sub.Endpoint); !ok || e.Token != testPushToken {
+	if e, ok := findPushSub(sub.Endpoint); !ok || e.NewToken != testPushToken {
 		t.Fatalf("token after re-subscribe: %+v", e)
 	}
 	if n := untokenedPushSubs(); n != 0 {
@@ -103,45 +103,67 @@ func TestAPhonesTokenIsKeptWithItsAlerts(t *testing.T) {
 	}
 }
 
-// A token the relay does not take as this machine's is dropped, so the
-// phone's page offers to renew it; a refusal for another reason (its clock)
-// keeps it.
+// A token handed on is tried with the next alert and kept only once the
+// relay takes it: one the relay refuses as not this machine's is dropped and
+// the phone's working token stays, so a token planted on the phone costs it
+// nothing. A token the relay no longer takes is dropped, and a clock the
+// relay disagrees with keeps the token; either way, while the relay still
+// forwards them, that alert goes untokened rather than not at all.
 func TestATokenTheRelayRefusesIsDropped(t *testing.T) {
 	isolateHome(t)
 	sub, _, _ := newTestSub(t, "https://fcm.googleapis.com/fcm/send/a")
 	if err := upsertPushSub(base64.StdEncoding.EncodeToString(make([]byte, 32)), sub, defaultPushRules()); err != nil {
 		t.Fatal(err)
 	}
-	code := "clock"
+	const junk = "v1.1792108800.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	good, clock := testPushToken, false
+	var sent []string // the token of each alert the relay was handed ("" untokened)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no", "code": code})
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		tok, _ := body["token"].(string)
+		sent = append(sent, tok)
+		switch {
+		case tok != "" && clock:
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "no", "code": "clock"})
+		case tok != "" && tok != good:
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "no", "code": "unbound"})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]int{"status": 201})
+		}
 	}))
 	defer srv.Close()
 	old := pushURL
 	pushURL = func() string { return srv.URL + "/push" }
 	defer func() { pushURL = old }()
-	for _, c := range []struct {
-		code string
-		kept bool
-	}{{"clock", true}, {"unbound", false}} {
-		code = c.code
-		if err := setPushToken(sub.Endpoint, testPushToken); err != nil {
-			t.Fatal(err)
-		}
+	step := func(name string, wantSent []string, wantToken, wantNew string) {
+		t.Helper()
+		sent = nil
 		e, _ := findPushSub(sub.Endpoint)
-		err := sendPush(e.Sub, e.Token, pushMessage{Title: "t"})
-		if c.code == "unbound" && !errors.Is(err, errPushUnbound) {
-			t.Errorf("unbound: err %v", err)
-		}
-		if errors.Is(err, errPushUnbound) {
-			_ = clearPushToken(e.Sub.Endpoint, e.Token)
+		if err := sendBound(e, pushMessage{Title: "t"}); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
 		e, _ = findPushSub(sub.Endpoint)
-		if (e.Token != "") != c.kept {
-			t.Errorf("%s: token kept %v, want %v", c.code, e.Token != "", c.kept)
+		if fmt.Sprint(sent) != fmt.Sprint(wantSent) || e.Token != wantToken || e.NewToken != wantNew {
+			t.Errorf("%s: sent %q, token %q new %q; want sent %q, token %q new %q", name, sent, e.Token, e.NewToken, wantSent, wantToken, wantNew)
 		}
 	}
+	if err := setPushToken(sub.Endpoint, good); err != nil {
+		t.Fatal(err)
+	}
+	step("a good new token is kept", []string{good}, good, "")
+	if err := setPushToken(sub.Endpoint, junk); err != nil {
+		t.Fatal(err)
+	}
+	step("a planted token is dropped, the good one stays", []string{junk, good}, good, "")
+	step("then the good one alone", []string{good}, good, "")
+	clock = true
+	step("clock off: untokened, the token kept", []string{good, ""}, good, "")
+	clock = false
+	good = "v1.1792108800.CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+	step("no longer taken: dropped, untokened", []string{testPushToken, ""}, "", "")
 }
 
 // The machine and the relay agree on what is signed and on the day untokened

@@ -993,7 +993,7 @@
     async function pushCall(b64, op, sub, rules, token) {
       const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { push: { op, sub, rules, token }, timeout: op === 'test' ? 30000 : 10000 });
       if (!r || !r.push) throw new Error('needs-upgrade');
-      if (r.push.error) throw new Error(r.push.error);
+      if (r.push.error) throw Object.assign(new Error(r.push.error), { answered: true });
       return r.push;
     }
 
@@ -1029,7 +1029,10 @@
           const token = await (await c.match(req)).text();
           if (!b64) { await c.delete(req); continue; }
           try { await pushCall(b64, 'token', sub, undefined, token); await c.delete(req); }
-          catch (_) { /* tried again the next time the page or the sheet opens */ }
+          // Refused by the machine (alerts off there, not its owner): it will
+          // not take it later either. Not reached: tried again the next time
+          // the page or the sheet opens.
+          catch (e) { if (e && e.answered) await c.delete(req); }
         }
         if (alerts.open) await checkAlertTokens();
       })().finally(() => { alertTokensBusy = null; });

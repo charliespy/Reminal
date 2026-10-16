@@ -153,6 +153,9 @@ var errPushGone = errors.New("push subscription is gone")
 // dropped, so the phone's page offers to renew it.
 var errPushUnbound = errors.New("this phone's alerts are not bound to this machine; renew them from the phone")
 
+// errPushClock: the relay found this alert's time too far from its own.
+var errPushClock = errors.New("the relay found this machine's clock off; alerts go untokened until it is right")
+
 var pushHTTP = &http.Client{Timeout: 20 * time.Second}
 
 // pushURL is where sealed messages are handed to the relay. A var so tests can
@@ -212,8 +215,13 @@ func sendPush(sub pushSub, token string, msg pushMessage) error {
 		Code   string `json:"code"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&out)
-	if resp.StatusCode == http.StatusForbidden && out.Code == "unbound" && token != "" {
-		return errPushUnbound
+	if resp.StatusCode == http.StatusForbidden && token != "" {
+		switch out.Code {
+		case "unbound":
+			return errPushUnbound
+		case "clock":
+			return errPushClock
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		if out.Error != "" {

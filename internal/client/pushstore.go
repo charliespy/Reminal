@@ -77,6 +77,11 @@ type pushEntry struct {
 	// subscribed before tokens: its alerts go untokened until
 	// pushUntokenedUntil, and the page offers to renew it.
 	Token string `json:"token,omitempty"`
+	// NewToken is one handed on that no alert has used yet. It is tried
+	// first, becomes Token once the relay takes an alert with it, and is
+	// dropped if the relay refuses it; until then Token goes on working, so
+	// a token that is not the relay's never costs the phone its alerts.
+	NewToken string `json:"new_token,omitempty"`
 }
 
 // pushUntokenedUntil is when the relay stops forwarding alerts without a
@@ -87,7 +92,8 @@ var pushUntokenedUntil = time.Date(2026, time.December, 15, 0, 0, 0, 0, time.UTC
 // before it is stored.
 var pushTokenShape = regexp.MustCompile(`^v1\.[0-9]{1,12}\.[A-Za-z0-9_-]{43}$`)
 
-// setPushToken keeps the token the phone was sent for this machine.
+// setPushToken keeps the token the phone was sent for this machine, to try
+// with the next alert (NewToken).
 func setPushToken(endpoint, token string) error {
 	if !pushTokenShape.MatchString(token) {
 		return errors.New("not an alerts token")
@@ -96,7 +102,10 @@ func setPushToken(endpoint, token string) error {
 	err := updatePushSubs(func(subs []pushEntry) []pushEntry {
 		for i := range subs {
 			if subs[i].Sub.Endpoint == endpoint {
-				subs[i].Token, found = token, true
+				found = true
+				if subs[i].Token != token {
+					subs[i].NewToken = token
+				}
 			}
 		}
 		return subs
@@ -120,6 +129,32 @@ func clearPushToken(endpoint, token string) error {
 	})
 }
 
+// promotePushToken keeps a new token the relay took an alert with as the
+// phone's token.
+func promotePushToken(endpoint, token string) error {
+	return updatePushSubs(func(subs []pushEntry) []pushEntry {
+		for i := range subs {
+			if subs[i].Sub.Endpoint == endpoint && subs[i].NewToken == token {
+				subs[i].Token, subs[i].NewToken = token, ""
+			}
+		}
+		return subs
+	})
+}
+
+// dropNewPushToken forgets a new token the relay refused; the phone's
+// token, if it has one, stays.
+func dropNewPushToken(endpoint, token string) error {
+	return updatePushSubs(func(subs []pushEntry) []pushEntry {
+		for i := range subs {
+			if subs[i].Sub.Endpoint == endpoint && subs[i].NewToken == token {
+				subs[i].NewToken = ""
+			}
+		}
+		return subs
+	})
+}
+
 // untokenedPushSubs is how many phones still get untokened alerts.
 func untokenedPushSubs() int {
 	pushStoreMu.Lock()
@@ -127,7 +162,7 @@ func untokenedPushSubs() int {
 	subs, _ := loadPushSubs()
 	n := 0
 	for _, s := range subs {
-		if s.Token == "" {
+		if s.Token == "" && s.NewToken == "" {
 			n++
 		}
 	}
