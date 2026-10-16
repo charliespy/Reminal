@@ -147,4 +147,26 @@ echo 1 > $F/lid; waitfor 'isf "$(cat $F/brightness)" 0' 10; sleep 1
 [ "$(grep -c "dimmed from" /tmp/liddim-test/i.out)" = 2 ] && pass "i: the next shut logs its own first dim" || fail "i: next shut: $(grep -c 'dimmed from' /tmp/liddim-test/i.out) lines"
 exec 7>&-; rm -f /tmp/liddim-test/in.i
 
+echo "== j: a session that stood in for the owner hands off to its dimmer: no light behind the lid"
+# The session owns the census (no daemon) and dims; then the owner is back
+# (a live stand-in takes the lease). owner-dims: its dimmer is running
+# (liddim.pid): ours ends without lighting the screen, the record kept.
+# no-owner-dimmer (an owner too old to have one): ours puts it back, as before.
+for mode in owner-dims no-owner-dimmer; do
+  clean; rm -rf $F; mkdir -p $F; echo 0.6 > $F/brightness; echo 1 > $F/lid; newhome
+  REMINAL_LIDDIM_FAKE=$F REMINAL_CAPTURE_HELPER=$B/reminal-capture-test $B/reminal-dev new j >/dev/null 2>&1
+  waitfor '[ -n "$(pgrep -f "capture-test liddim")" ]' 40; waitfor 'isf "$(cat $F/brightness)" 0' 10
+  P=$(pgrep -f "capture-test liddim"); sleep 600 & O=$!
+  [ $mode = owner-dims ] && echo $O > $HOME/.reminal/liddim.pid
+  echo $O > $HOME/.reminal/vdisplay-census.pid
+  waitfor '! kill -0 $P 2>/dev/null' 60 && ended=1 || ended=0
+  b=$(cat $F/brightness)
+  if [ $mode = owner-dims ]; then
+    [ $ended = 1 ] && isf "$b" 0 && [ "$(cat $HOME/.reminal/liddim-brightness 2>/dev/null)" = 0.6 ] && pass "j: owner's dimmer runs: ours handed off, screen stays 0, record 0.6 kept" || fail "j: owner-dims: ended=$ended brightness=$b record=$(cat $HOME/.reminal/liddim-brightness 2>/dev/null)"
+  else
+    [ $ended = 1 ] && isf "$b" 0.6 && pass "j: no owner dimmer: ours restored 0.6 as it ended" || fail "j: no-owner-dimmer: ended=$ended brightness=$b"
+  fi
+  $B/reminal-dev kill -y j >/dev/null 2>&1; kill $O 2>/dev/null; wait $O 2>/dev/null
+done
+
 clean; echo "fails=$fails"

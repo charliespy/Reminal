@@ -325,7 +325,10 @@ let errFrameMagic: UInt32 = 0xFFFF_FFFF
 // brightness someone sets afterwards stands. Each event is a line on stdout,
 // which the agent logs.
 // Stdin is the agent's lifeline: EOF (closed-lid mode off, agent gone) and
-// SIGTERM restore before exiting.
+// SIGTERM restore before exiting. A "handoff" line first ends it without
+// restoring, the record left as it is: the agent sends it when it stops
+// standing in for another process whose own dimmer is running, which keeps
+// the screen dark behind a shut lid and puts the record back when it opens.
 //
 // The lid is the root power domain's AppleClamshellState, re-read on every
 // power-management interest message and every 2s as a backstop. Brightness is
@@ -506,8 +509,21 @@ if args.count >= 2, args[1] == "liddim" {
         enders.append(src)
     }
     DispatchQueue.global(qos: .utility).async {
-        while !FileHandle.standardInput.availableData.isEmpty {}
-        finish() // EOF: the agent is gone or closed-lid mode is off
+        var pending = Data()
+        while true {
+            let d = FileHandle.standardInput.availableData
+            if d.isEmpty { finish() } // EOF: the agent is gone or closed-lid mode is off
+            pending.append(d)
+            while let nl = pending.firstIndex(of: 0x0A) {
+                let line = String(decoding: pending[pending.startIndex..<nl], as: UTF8.self)
+                pending.removeSubrange(pending.startIndex...nl)
+                if line == "handoff" {
+                    q.sync { say("handed off: the record kept for the dimmer that runs now") }
+                    exit(0)
+                }
+            }
+            if pending.count > 256 { pending.removeAll() } // no line we know is that long
+        }
     }
 
     if fake == nil, let port = IONotificationPortCreate(kIOMainPortDefault) {

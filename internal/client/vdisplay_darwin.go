@@ -152,11 +152,20 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 			// restoring it from here would light the screen every tick.
 			owner = false
 			reap()
+			// The owner claims the census, then starts its dimmer: a dimmer of
+			// ours is kept one more tick if the owner's has not shown up yet,
+			// so ours hands off to it rather than lighting the screen as it
+			// ends. Two dimmers both keep the screen dark.
+			if dim.cmd != nil && !dimmingElsewhere() && !dim.heldForOwner {
+				dim.heldForOwner = true
+				continue
+			}
 			dim.yield()
 			continue
 		}
 		claimCensusLease()
 		owner = true
+		dim.heldForOwner = false
 
 		if !config.LoadSettings().ClosedLid {
 			reap()

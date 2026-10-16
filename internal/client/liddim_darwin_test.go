@@ -165,3 +165,152 @@ func TestSessionDimmerLinesStayOutOfTheTerminal(t *testing.T) {
 		t.Errorf("daemon stderr = %q", got)
 	}
 }
+
+// stdinHelper stands in for reminal-capture and keeps what each liddim run
+// read on its stdin, in <home>/stdin.<pid> once it ends, so a test can tell
+// a handoff from an EOF.
+func stdinHelper(t *testing.T, home string) {
+	t.Helper()
+	script := filepath.Join(home, "fake-helper")
+	// Only the dimmer's runs, and each kept once it has ended (renamed in).
+	in, kept := filepath.Join(home, "in-"), filepath.Join(home, "stdin.")
+	body := "#!/bin/sh\n[ \"$1\" = liddim ] || exec cat >/dev/null\ncat > " + in + "$$ && mv " + in + "$$ " + kept + "$$\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REMINAL_CAPTURE_HELPER", script)
+}
+
+func helperStdins(t *testing.T, home string) []string {
+	t.Helper()
+	m, _ := filepath.Glob(filepath.Join(home, "stdin.*"))
+	var out []string
+	for _, f := range m {
+		b, _ := os.ReadFile(f)
+		out = append(out, string(b))
+	}
+	return out
+}
+
+func liveOther(t *testing.T) int {
+	t.Helper()
+	c := exec.Command("sleep", "60")
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait() })
+	return c.Process.Pid
+}
+
+// A session that stood in for the census owner and now yields: with the
+// owner's dimmer running, ours hands off (no restore as it ends, which would
+// light the screen behind a shut lid); with none (an owner too old to have
+// one), ours ends by EOF and restores, as before. Its name in liddim.pid is
+// written when it starts and goes with it, never another's.
+func TestYieldHandsOffOnlyToARunningDimmer(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		otherDims   bool
+		wantHandoff bool
+	}{
+		{"the owner's dimmer runs: handoff", true, true},
+		{"control: no other dimmer: EOF, restores", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := isolateHome(t)
+			stdinHelper(t, home)
+			if err := os.MkdirAll(filepath.Join(home, ".reminal"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			dim := lidDimmer{log: io.Discard}
+			dim.ensure()
+			if dim.cmd == nil {
+				t.Fatal("the dimmer did not start")
+			}
+			if b, _ := os.ReadFile(lidDimPidPath()); strings.TrimSpace(string(b)) != strconv.Itoa(os.Getpid()) {
+				t.Fatalf("liddim.pid = %q, want our pid", b)
+			}
+			other := 0
+			if tc.otherDims {
+				other = liveOther(t)
+				if err := os.WriteFile(lidDimPidPath(), []byte(strconv.Itoa(other)+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dim.yield()
+			in := helperStdins(t, home)
+			if len(in) != 1 {
+				t.Fatalf("helper runs: %q", in)
+			}
+			if got := in[0] == "handoff\n"; got != tc.wantHandoff {
+				t.Errorf("helper read %q, want handoff=%v", in[0], tc.wantHandoff)
+			}
+			b, err := os.ReadFile(lidDimPidPath())
+			if tc.otherDims && strings.TrimSpace(string(b)) != strconv.Itoa(other) {
+				t.Errorf("the owner's liddim.pid was touched: %q %v", b, err)
+			}
+			if !tc.otherDims && err == nil {
+				t.Errorf("our liddim.pid outlived our dimmer: %q", b)
+			}
+		})
+	}
+}
+
+// The loop end to end: a session that owns the census and dims sees the
+// owner come back. With the owner's dimmer running, ours hands off; with none
+// ever (an owner too old to have one), ours ends by EOF and restores.
+func TestLoopHandsOffWhenTheOwnerReturns(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		otherDims bool
+		want      string
+	}{
+		{"the owner's dimmer runs: handoff", true, "handoff\n"},
+		{"control: no owner dimmer: EOF", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := isolateHome(t)
+			stdinHelper(t, home)
+			if err := os.MkdirAll(filepath.Join(home, ".reminal"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".reminal", "settings.json"), []byte(`{"closed_lid":true}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			defer func(d time.Duration) { vdisplayPoll = d }(vdisplayPoll)
+			vdisplayPoll = 20 * time.Millisecond
+			stop, done := make(chan struct{}), make(chan struct{})
+			go func() { vdisplayLoop(stop, false); close(done) }()
+			defer func() { close(stop); <-done }()
+			until := func(ok func() bool) bool {
+				for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+					if ok() {
+						return true
+					}
+				}
+				return false
+			}
+			if !until(func() bool {
+				b, _ := os.ReadFile(lidDimPidPath())
+				return strings.TrimSpace(string(b)) == strconv.Itoa(os.Getpid())
+			}) {
+				t.Fatal("our dimmer never started")
+			}
+			owner := liveOther(t)
+			if tc.otherDims {
+				if err := os.WriteFile(lidDimPidPath(), []byte(strconv.Itoa(owner)+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(vdisplayCensusLeasePath(), []byte(strconv.Itoa(owner)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if !until(func() bool { return len(helperStdins(t, home)) == 1 }) {
+				t.Fatal("our dimmer never ended")
+			}
+			if in := helperStdins(t, home); in[0] != tc.want {
+				t.Errorf("helper read %q, want %q", in[0], tc.want)
+			}
+		})
+	}
+}
