@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // The screens each agent CLI really draws with no login, or with one it can
@@ -53,5 +54,43 @@ func TestAgentsLoginScreensAsTheyDrawThem(t *testing.T) {
 		if c.out && c.prog != "opencode" && harnessProblemIn(harnessTail(string(raw), harnessRows), "opencode") {
 			t.Errorf("%s: read as opencode's own", c.file)
 		}
+	}
+}
+
+// An agent that comes up from its sign-in screen and then sits still at its
+// prompt is read only a few times more (the screen is read when it may have
+// changed): it is cleared harnessUpFor after the sign-in was first gone, at
+// a read the probe is asked for (harnessReadAt) — never left "logged out",
+// its mail held, for good. A notice seen once is confirmed a read later.
+func TestALoggedInAgentThatSitsStillIsCleared(t *testing.T) {
+	defer func(f func() time.Time) { harnessNow = f }(harnessNow)
+	clock := time.Unix(1_800_000_000, 0)
+	harnessNow = func() time.Time { return clock }
+	a := &Agent{}
+	login, _ := os.ReadFile(filepath.Join("testdata", "harness-screens", "codex.txt"))
+	ready, _ := os.ReadFile(filepath.Join("testdata", "harness-screens", "codex-expired-start.txt"))
+	a.noteHarnessHealth(string(login), "codex", false)
+	if at := a.harnessReadAt(); !at.Equal(clock.Add(attnInterval)) {
+		t.Fatalf("seen once: a read asked for at %v, want %v", at, clock.Add(attnInterval))
+	}
+	clock = clock.Add(attnInterval)
+	a.noteHarnessHealth(string(login), "codex", false)
+	if !a.harnessDown() {
+		t.Fatal("its sign-in screen, read twice: not logged out")
+	}
+	// Logged in: its prompt, read once — and then nothing changes.
+	clock = clock.Add(time.Second)
+	a.noteHarnessHealth(string(ready), "codex", false)
+	at := a.harnessReadAt()
+	if !a.harnessDown() || !at.Equal(clock.Add(harnessUpFor)) {
+		t.Fatalf("after one read of its prompt: down %v, next read %v; want still down until %v", a.harnessDown(), at, clock.Add(harnessUpFor))
+	}
+	clock = at
+	a.noteHarnessHealth(string(ready), "codex", false)
+	if a.harnessDown() {
+		t.Error("its prompt still at the read asked for: still logged out")
+	}
+	if at := a.harnessReadAt(); !at.IsZero() {
+		t.Errorf("nothing waits on a read now, but one is asked for at %v", at)
 	}
 }

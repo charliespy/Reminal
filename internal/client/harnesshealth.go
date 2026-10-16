@@ -135,15 +135,26 @@ func harnessRowsFor(prog string) int {
 }
 
 const (
-	harnessDownAfter = 2  // ticks the notice must be seen to count
-	harnessUpAfter   = 10 // ticks it must be gone to clear (~3 s)
+	harnessDownAfter = 2  // reads the notice must be seen in to count
+	harnessUpAfter   = 10 // reads it must be gone from to clear…
+	// …or this long, whichever comes first: the screen is read when it may
+	// have changed, so an agent that comes up from its sign-in and then sits
+	// still at its prompt gives a few reads, not ten — and was left "logged
+	// out", its mail held, for good.
+	harnessUpFor = 3 * time.Second
 )
+
+// harnessNow is the clock the health state is kept by (tests set it).
+var harnessNow = time.Now
 
 // harnessHealth is the debounced state; guarded by Agent.metaMu.
 type harnessHealth struct {
 	down       bool
 	seen, gone int
 	since      time.Time
+	// When the notice was first seen in this run of reads, and when it was
+	// first gone: what the next read is timed by (harnessReadAt).
+	seenAt, goneAt time.Time
 }
 
 // harnessTail is the last n rows of a screen that have anything on them.
@@ -241,6 +252,7 @@ func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 	// The render carries its styling — "\x1b[1mLogin\x1b[m \x1b[1mexpired" —
 	// which would sit between the words; the text is what is read.
 	bad := !atWork && harnessProblemIn(harnessTail(stripANSI(render), harnessRowsFor(prog)), prog)
+	now := harnessNow()
 	a.metaMu.Lock()
 	h := &a.harness
 	changed := false
@@ -248,13 +260,19 @@ func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 		// Seen at work: logged in, now.
 		h.down, h.seen, h.gone, changed = false, 0, 0, true
 	} else if bad {
+		if h.seen == 0 {
+			h.seenAt = now
+		}
 		h.gone = 0
 		if h.seen++; !h.down && h.seen >= harnessDownAfter {
-			h.down, h.since, changed = true, time.Now(), true
+			h.down, h.since, changed = true, now, true
 		}
 	} else {
+		if h.gone == 0 {
+			h.goneAt = now
+		}
 		h.seen = 0
-		if h.gone++; h.down && h.gone >= harnessUpAfter {
+		if h.gone++; h.down && (h.gone >= harnessUpAfter || now.Sub(h.goneAt) >= harnessUpFor) {
 			h.down, changed = false, true
 		}
 	}
@@ -264,6 +282,23 @@ func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 		// Logged in again: the next tick's screen reading decides the state.
 		a.setAttnState("")
 	}
+}
+
+// harnessReadAt is when the screen should be read again for the health
+// state to settle, whatever else the screen does: a notice seen once is
+// confirmed a read later, and one gone from a logged-out screen clears at
+// harnessUpFor. Zero when nothing waits on a read.
+func (a *Agent) harnessReadAt() time.Time {
+	a.metaMu.Lock()
+	defer a.metaMu.Unlock()
+	h := &a.harness
+	switch {
+	case !h.down && h.seen > 0:
+		return h.seenAt.Add(attnInterval)
+	case h.down && h.gone > 0:
+		return h.goneAt.Add(harnessUpFor)
+	}
+	return time.Time{}
 }
 
 // harnessDown reports whether the agent here is logged out.

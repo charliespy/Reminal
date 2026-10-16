@@ -70,5 +70,26 @@ for (const c of CASES.filter(c => !process.env.ONLY || c.name === process.env.ON
   (got === c.out ? ok : fail)(`${c.name}: ${got ? 'listed logged out' : 'not logged out (' + state + ')'}${c.out ? '' : ' — it needs no login'}`);
   table.push([c.name, got]);
 }
+// Logged in again (as after signing in), then left alone at its prompt: no
+// longer listed logged out. Codex pointed at a local stand-in API.
+if (!process.env.ONLY || process.env.ONLY === 'codex-back') {
+  const { createServer } = await import('node:http');
+  createServer((q, r) => { q.resume(); q.on('end', () => { r.writeHead(500); r.end('{}'); }); }).listen(9100, '127.0.0.1');
+  const home = '/root/h-codex-back';
+  mkdirSync(home + '/work', { recursive: true });
+  const sid = sh(`cd ${home}/work && reminal new codex-back`, { HOME: '/root' }).match(/Session:\s+([A-Z0-9]+)/)[1];
+  await keys(sid, `export HOME=${home}; cd ${home}/work; codex`);
+  let down = false;
+  for (let i = 0; i < 30 && !(down = stateOf(sid) === 'logged out'); i++) await sleep(1000);
+  mkdirSync(home + '/.codex', { recursive: true });
+  writeFileSync(home + '/.codex/auth.json', JSON.stringify({ OPENAI_API_KEY: 'sk-stand-in' }));
+  writeFileSync(home + '/.codex/config.toml', 'check_for_update_on_startup = false\nmodel_provider = "stub"\nmodel = "gpt-5"\n[model_providers.stub]\nname = "stub"\nbase_url = "http://127.0.0.1:9100/v1"\nenv_key = "OPENAI_API_KEY"\nwire_api = "responses"\n');
+  try { sh('pkill -f "codex"'); } catch (_) {}
+  await sleep(1500);
+  await keys(sid, 'OPENAI_API_KEY=sk-stand-in codex');
+  let up = false;
+  for (let i = 0; i < 20 && !(up = stateOf(sid) !== 'logged out'); i++) await sleep(1000);
+  (down && up ? ok : fail)(`codex-back: logged out ${down}, then logged in and idle: ${up ? 'no longer logged out (' + stateOf(sid) + ')' : 'still logged out'}`);
+}
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);
