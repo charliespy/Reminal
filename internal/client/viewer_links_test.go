@@ -4,10 +4,14 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -49,16 +53,20 @@ process.stdout.write(JSON.stringify(out));
 	defer cancel()
 	cmd := exec.CommandContext(ctx, node, "-e", js)
 	cmd.WaitDelay = 5 * time.Second
-	out, err := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		t.Fatalf("node did not finish in 30 s\n%s", out)
-	}
-	if err != nil {
-		t.Fatalf("node: %v\n%s", err, out)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	t0 := time.Now()
+	err = cmd.Run()
+	took := time.Since(t0)
+	// It has failed only on GitHub's runners, never in Docker: once hung for
+	// minutes, once "exit status 1" after 5 s with nothing printed. What it
+	// says when it fails is all there is to go on, so it says all of it.
+	if ctx.Err() != nil || err != nil {
+		t.Fatalf("node failed: %s\n%s", nodeFailure(ctx, cmd, err, took), nodeContext(node, &stdout, &stderr))
 	}
 	var res map[string][]string
-	if err := json.Unmarshal(out, &res); err != nil {
-		t.Fatalf("node output: %v\n%s", err, out)
+	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
+		t.Fatalf("node output: %v\n%s", err, nodeContext(node, &stdout, &stderr))
 	}
 	for text, links := range res {
 		switch text {
@@ -72,6 +80,110 @@ process.stdout.write(JSON.stringify(out));
 			}
 		}
 	}
+}
+
+// nodeFailure says how a node run ended: its exit code or the signal that
+// ended it, whether it was stopped at the cap, whether its output was held
+// open past WaitDelay (by a process that inherited it), how long it took
+// against the CPU it used.
+func nodeFailure(ctx context.Context, cmd *exec.Cmd, err error, took time.Duration) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%v after %s", err, took.Round(time.Millisecond))
+	if ctx.Err() != nil {
+		b.WriteString("; stopped at the 30 s cap")
+	}
+	if errors.Is(err, exec.ErrWaitDelay) || (cmd.ProcessState != nil && cmd.WaitDelay > 0 && took >= cmd.WaitDelay && ctx.Err() == nil) {
+		b.WriteString("; it ended, but its output stayed open until WaitDelay gave up: another process held it")
+	}
+	if ps := cmd.ProcessState; ps != nil {
+		fmt.Fprintf(&b, "; exit code %d", ps.ExitCode())
+		if ws, ok := ps.Sys().(interface {
+			Signaled() bool
+			Signal() os.Signal
+		}); ok && ws.Signaled() {
+			fmt.Fprintf(&b, ", ended by %v", ws.Signal())
+		}
+		fmt.Fprintf(&b, "; CPU user %s, system %s", ps.UserTime().Round(time.Millisecond), ps.SystemTime().Round(time.Millisecond))
+	} else {
+		b.WriteString("; it never started")
+	}
+	return b.String()
+}
+
+// nodeContext is what was around it: what it printed, each stream apart,
+// which node it was, and the other processes this test binary has running.
+func nodeContext(node string, stdout, stderr *bytes.Buffer) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "stdout (%d bytes): %q\nstderr (%d bytes): %q\n", stdout.Len(), clip(stdout.String()), stderr.Len(), clip(stderr.String()))
+	// Listed first: running node again below would change what is there.
+	if kids := testProcesses(); kids != "" {
+		fmt.Fprintf(&b, "this test binary's children, and the rest of its process group:\n%s", kids)
+	}
+	real, _ := filepath.EvalSymlinks(node)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	vc := exec.CommandContext(ctx, node, "--version")
+	vc.WaitDelay = time.Second
+	v, verr := vc.CombinedOutput()
+	fmt.Fprintf(&b, "node: %s (%s), --version: %q %v\n", node, real, strings.TrimSpace(string(v)), verr)
+	return b.String()
+}
+
+func clip(s string) string {
+	if len(s) > 2000 {
+		return s[:2000] + "…"
+	}
+	return s
+}
+
+// testProcesses lists, from /proc ("" where there is none), the processes
+// whose parent is this test binary or that are in its process group (a
+// child's child is reparented away, but keeps the group): one an earlier
+// test, or node itself, left running is where an inherited pipe or a stray
+// signal would come from.
+func testProcesses() string {
+	ents, err := os.ReadDir("/proc")
+	if err != nil {
+		return ""
+	}
+	me, grp := fmt.Sprint(os.Getpid()), fmt.Sprint(syscallGetpgrp())
+	// pid → [state, ppid, pgrp], from each /proc/<pid>/stat (the fields after
+	// the last ')', the name before it may hold anything).
+	procs := map[string][]string{}
+	for _, e := range ents {
+		if e.Name() == "" || strings.Trim(e.Name(), "0123456789") != "" {
+			continue
+		}
+		st, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+		if err != nil {
+			continue
+		}
+		s := string(st)
+		if i := strings.LastIndexByte(s, ')'); i >= 0 {
+			if f := strings.Fields(s[i+1:]); len(f) >= 3 {
+				procs[e.Name()] = f[:3]
+			}
+		}
+	}
+	// This binary and what started it (go test, a shell) are not news.
+	mine := map[string]bool{}
+	for p := me; p != "" && p != "0" && !mine[p]; {
+		mine[p] = true
+		if f := procs[p]; f != nil {
+			p = f[1]
+		} else {
+			break
+		}
+	}
+	var b strings.Builder
+	for pid, f := range procs {
+		if mine[pid] || (f[1] != me && f[2] != grp) {
+			continue
+		}
+		cmdline, _ := os.ReadFile(filepath.Join("/proc", pid, "cmdline"))
+		fmt.Fprintf(&b, "  pid %s state %s ppid %s pgrp %s: %s\n", pid, f[0], f[1], f[2], clip(strings.ReplaceAll(strings.TrimRight(string(cmdline), "\x00"), "\x00", " ")))
+	}
+	return b.String()
 }
 
 func TestIsNotReady(t *testing.T) {
