@@ -32,7 +32,7 @@
 __pycache__/
 
 # The viewer's built page (internal/client/web/build.json): the binary
-# renders it on its first request; cloudflare/scripts/build-viewer.mjs builds the
+# renders it when its relay's routes are made; cloudflare/scripts/build-viewer.mjs builds the
 # Worker's copy at every wrangler run, and keeps a deploy's live builds in
 # public.kept. Only internal/client/web is source.
 /internal/client/web/assets/

@@ -32,8 +32,9 @@ routes = [
 # before every `wrangler dev` and `wrangler deploy` (scripts/build-viewer.mjs).
 # A deploy keeps the live Worker's recent builds for pages already open, so it
 # runs `node scripts/build-viewer.mjs --previous https://live.reminal.app`
-# first; without that run for this tree the build fails.
-# `REMINAL_VIEWER_DEV=1 npx wrangler dev` builds the page alone.
+# immediately before `wrangler deploy`, in the same script, every time;
+# without that run for this tree the build fails. `wrangler dev` builds the
+# page alone (wrangler runs this with WRANGLER_COMMAND=dev).
 # Keep this below routes, as [durable_objects] is: every key after a table
 # header belongs to that table.
 [build]

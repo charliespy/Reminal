@@ -22,7 +22,7 @@ s = re.sub(r"^routes = \[.*?^\]\n", "", s, flags=re.S | re.M)
 open(p, "w").write(s)
 PY2
 grep -q '^routes' wrangler.toml && { echo "wrangler.toml still has routes"; exit 1; }
-REMINAL_VIEWER_DEV=1 WRANGLER_SEND_METRICS=false npx wrangler dev --local --ip 127.0.0.1 --port 8787 >/tmp/wrangler.log 2>&1 &
+WRANGLER_SEND_METRICS=false npx wrangler dev --local --ip 127.0.0.1 --port 8787 >/tmp/wrangler.log 2>&1 &
 for i in $(seq 1 90); do curl -s -m 2 -o /dev/null "$W/" && break; sleep 1; done
 python3 /t/backend.py &
 export HOME=/tmp/h REMINAL_RELAY=ws://127.0.0.1:8787/ws REMINAL_WEB=$W

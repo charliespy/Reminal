@@ -19,7 +19,7 @@ s = re.sub(r"^\[\[containers\]\]\n.*?(?=^\[)", "", s, flags=re.S | re.M)
 open(p, "w").write(s)
 PY
 npm ci --silent >/dev/null 2>&1
-REMINAL_VIEWER_DEV=1 WRANGLER_SEND_METRICS=false npx wrangler dev --local --ip 127.0.0.1 --port 8787 >/tmp/wrangler.log 2>&1 &
+WRANGLER_SEND_METRICS=false npx wrangler dev --local --ip 127.0.0.1 --port 8787 >/tmp/wrangler.log 2>&1 &
 for i in $(seq 1 90); do curl -s -m 2 -o /dev/null http://127.0.0.1:8787/ && break; sleep 1; done
 export HOME=/root/h REMINAL_RELAY=ws://127.0.0.1:8787/ws REMINAL_WEB=http://127.0.0.1:8787
 mkdir -p $HOME && cd $HOME

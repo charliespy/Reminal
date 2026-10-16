@@ -2,7 +2,7 @@
   "name": "reminal-relay",
   "private": true,
   "scripts": {
-    "dev": "REMINAL_VIEWER_DEV=1 wrangler dev",
+    "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

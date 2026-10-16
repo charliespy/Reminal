@@ -35,10 +35,11 @@ const viewerCSP = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; f
 //go:embed web/index.html web/build.json web/app.js web/header.js web/reload.js web/sw.js web/manifest.webmanifest web/icons web/vendor
 var webIndex embed.FS
 
-// viewer is the page this binary serves, rendered from the sources it
-// embeds (internal/viewerbuild, by web/build.json) on its first request: the
-// page and its scripts always come from the same build, so a binary can never
-// serve a page that names a script it does not have.
+// viewer is the page this binary serves, rendered once from the sources it
+// embeds (internal/viewerbuild, by web/build.json) when the relay's mux is
+// built (relayMux): the page and its scripts always come from the same
+// build, so a binary can never serve a page that names a script it does not
+// have.
 var viewerBuilt = sync.OnceValue(func() (b struct {
 	spec viewerbuild.Spec
 	page viewerbuild.Page

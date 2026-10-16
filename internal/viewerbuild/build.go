@@ -5,7 +5,8 @@
 // internal/client/web/<name>.js, served as assets/<name>.<hash>.js — named by
 // its content, so it can be cached for good — and the page's tag for it
 // stamped with that name and its SRI hash. Nothing it makes is committed: the
-// binary renders the page from what it embeds on its first request, and the Worker's
+// binary renders the page from what it embeds when its relay's routes are
+// made, and the Worker's
 // copy is built by cloudflare/scripts/build-viewer.mjs at every wrangler run.
 // Both follow internal/client/web/build.json, and a test holds them to the
 // same output byte for byte.

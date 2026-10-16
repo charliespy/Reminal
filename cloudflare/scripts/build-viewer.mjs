@@ -10,9 +10,11 @@
 // committed, and each run empties ./public (all but _headers) first, so a
 // file no longer built is no longer deployed.
 //
-//   node scripts/build-viewer.mjs --previous https://live.reminal.app [--first-deploy]
-//   npx wrangler deploy                      ([build]: this page, and the builds kept for it)
-//   REMINAL_VIEWER_DEV=1 npx wrangler dev    (this page alone)
+//   node scripts/build-viewer.mjs --previous https://live.reminal.app && npx wrangler deploy
+//   npx wrangler dev                         ([build] as dev: this page alone)
+//
+// A deploy runs --previous immediately before it, in the same script, every
+// time: what is kept is what the live Worker served at that moment.
 //
 // --previous: before a deploy, keep the builds the live Worker serves, for
 // pages already open when this one replaces it (build.json's keep, this one
@@ -20,15 +22,18 @@
 // line exactly build.json's scripts in order, each file taken only if its
 // content is the one its name says, every read capped. They are kept beside
 // --out (public.kept/), with a note of the build they were kept for, and
-// only from https://live.reminal.app unless --other-origin says another
-// origin is meant. A deploy that cannot read them fails, unless
-// --first-deploy says there are none to keep.
+// only from https://live.reminal.app unless --other-origin <origin> names
+// another. A deploy that cannot read them fails, unless --first-deploy says
+// there are none to keep.
 //
 // Without --previous, a run is a deploy's [build]: it serves the builds a
-// --previous run kept for this same build, and fails if there is no such
-// run — so nothing a build of another tree left behind is ever deployed —
-// unless it is --dev (or REMINAL_VIEWER_DEV=1), which builds this page alone,
-// or --first-deploy, which keeps nothing.
+// --previous run kept for this same build, from https://live.reminal.app or
+// from the origin this run itself names with --other-origin (never one
+// carried over from the --previous run), and fails if there is no such run
+// — so nothing a build of another tree, or of another Worker, left behind is
+// ever deployed — or --first-deploy, which keeps nothing. Only --dev, or
+// wrangler's own dev (it runs [build] with WRANGLER_COMMAND=dev, over any
+// value in the environment), builds this page alone.
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -38,7 +43,8 @@ const KNOWN_VERSION = 1;
 const KNOWN_NAME = "assets/{script}.{sha256:16}.js";
 const KNOWN_SRI = "sha384";
 const KNOWN_KEYS = new Set(["_", "version", "scripts", "name", "sri", "template", "tag", "keep", "copy"]);
-// The live Worker, the only origin --previous reads unless --other-origin.
+// The live Worker, the only origin --previous reads unless --other-origin
+// names another.
 export const LIVE = "https://live.reminal.app";
 // What a live builds.txt, a script, and all of a run's scripts may be.
 export const MAX_LIST = 4 << 10;
@@ -132,9 +138,12 @@ async function capped(resp, max, what) {
 // liveBuilds is what the live Worker at origin serves for pages already open:
 // at most keep of the newest builds its builds.txt names, other than this
 // one, each script's content checked against the name it is served by.
-export async function liveBuilds(spec, origin, current, { otherOrigin = false, fetchFn = fetch } = {}) {
+// originOf is a URL's origin ("" for none).
+const originOf = (u) => (u ? new URL(u).origin : "");
+
+export async function liveBuilds(spec, origin, current, { otherOrigin = "", fetchFn = fetch } = {}) {
   const u = new URL(origin);
-  if (u.origin !== LIVE && !otherOrigin) throw new Error(`--previous reads only ${LIVE}; say --other-origin to read ${origin}`);
+  if (u.origin !== LIVE && u.origin !== originOf(otherOrigin)) throw new Error(`--previous reads only ${LIVE}; say --other-origin ${u.origin} to read ${origin}`);
   if (u.protocol !== "https:" && !(u.protocol === "http:" && ["localhost", "127.0.0.1"].includes(u.hostname))) throw new Error(`--previous must be https: ${origin}`);
   const get = (path, max, what) => fetchFn(new URL(path, u.origin), { signal: AbortSignal.timeout(30_000), redirect: "error" }).then((r) => capped(r, max, what));
   const list = (await get("/assets/builds.txt", MAX_LIST, "its builds.txt")).toString("utf8");
@@ -169,12 +178,14 @@ function empty(dir, mine, keep = []) {
 
 // keptFor reads what a --previous run kept for this build, each file checked
 // against its name.
-function keptFor(spec, store, current) {
+function keptFor(spec, store, current, otherOrigin) {
   let note;
   try { note = JSON.parse(readFileSync(join(store, NOTE), "utf8")); } catch {
-    throw new Error(`no builds were kept for this deploy: run node scripts/build-viewer.mjs --previous ${LIVE} first (--first-deploy if there is no live Worker), or REMINAL_VIEWER_DEV=1 for wrangler dev`);
+    throw new Error(`no builds were kept for this deploy: run node scripts/build-viewer.mjs --previous ${LIVE} first (--first-deploy if there is no live Worker), or --dev`);
   }
   if (!Array.isArray(note.builds)) throw new Error(`${join(store, NOTE)} names no builds: run --previous again`);
+  const want = originOf(otherOrigin) || LIVE;
+  if (note.origin !== null && note.origin !== want) throw new Error(`the builds in ${store} were kept from ${note.origin}, and this deploy is of ${want}: ${note.origin === LIVE ? "" : `a deploy of them names it itself (--other-origin ${note.origin}), or `}run --previous again`);
   if (note.for !== current) throw new Error(`the builds in ${store} were kept for ${note.for}, and this is ${current}: run --previous again`);
   const files = {};
   for (const line of note.builds) {
@@ -191,13 +202,15 @@ function keptFor(spec, store, current) {
 }
 
 // build writes the page to out, with the builds kept for it.
-export async function build({ web, out, store = out.replace(/\/+$/, "") + ".kept", previous = "", otherOrigin = false, firstDeploy = false, dev = false, fetchFn = fetch, log = () => {} }) {
+export async function build({ web, out, store = out.replace(/\/+$/, "") + ".kept", previous = "", otherOrigin = "", firstDeploy = false, dev = false, fetchFn = fetch, log = () => {} }) {
   const spec = readSpec(readFileSync(join(web, "build.json"), "utf8"));
   const src = {};
   for (const sc of spec.scripts) src[sc] = readFileSync(join(web, sc + ".js"));
   const page = render(spec, readFileSync(join(web, "index.html")), src);
   let kept = { builds: [], files: {} };
-  if (previous || (firstDeploy && !dev)) {
+  // --previous and --first-deploy keep (or keep nothing) whatever the mode.
+  if (previous || firstDeploy) {
+    dev = false;
     if (previous) {
       try {
         kept = await liveBuilds(spec, previous, page.build, { otherOrigin, fetchFn });
@@ -209,9 +222,9 @@ export async function build({ web, out, store = out.replace(/\/+$/, "") + ".kept
     empty(store, [NOTE]);
     mkdirSync(join(store, "assets"));
     for (const [rel, b] of Object.entries(kept.files)) writeFileSync(join(store, rel), b);
-    writeFileSync(join(store, NOTE), JSON.stringify({ for: page.build, origin: previous || null, builds: kept.builds }, null, 2) + "\n");
+    writeFileSync(join(store, NOTE), JSON.stringify({ for: page.build, origin: previous ? originOf(previous) : null, builds: kept.builds }, null, 2) + "\n");
   } else if (!dev) {
-    kept = keptFor(spec, store, page.build);
+    kept = keptFor(spec, store, page.build, otherOrigin);
   }
   empty(out, [OWN, "index.html", "assets"], [OWN]);
   for (const c of spec.copy) cpSync(join(web, c), join(out, c), { recursive: true });
@@ -231,9 +244,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   if (!existsSync(join(web, "build.json"))) { console.error(`build-viewer: no ${join(web, "build.json")}`); process.exit(1); }
   build({
     web, out, previous: opt("--previous"),
-    otherOrigin: args.includes("--other-origin"),
+    otherOrigin: opt("--other-origin"),
     firstDeploy: args.includes("--first-deploy"),
-    dev: args.includes("--dev") || process.env.REMINAL_VIEWER_DEV === "1",
+    dev: args.includes("--dev") || process.env.WRANGLER_COMMAND === "dev",
     log: (m) => console.log("build-viewer: " + m),
   }).catch((e) => { console.error("build-viewer: " + e.message); process.exit(1); });
 }
