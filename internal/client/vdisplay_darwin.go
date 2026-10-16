@@ -32,7 +32,7 @@ import (
 // vdisplayPoll is the census cadence. Each poll is one ~100ms osascript; slow
 // enough to be invisible, fast enough that a yanked monitor grows a virtual
 // replacement within seconds.
-const vdisplayPoll = 12 * time.Second
+var vdisplayPoll = 12 * time.Second
 
 // censusLeaseTTL is how long a census claim stands without being refreshed.
 // The owner rewrites the lease every vdisplayPoll, so this is ~2.5 missed
@@ -120,8 +120,19 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 	}
 	defer reap()
 	defer releaseCensusLease()
-	var dim lidDimmer
-	defer dim.stop()
+	dim := lidDimmer{log: lidDimLog(isDaemon)}
+	// owner: we hold the census this tick. Only the owner may stop the dimmer
+	// outright (stop puts back what the state file holds); anyone else only
+	// ends a dimmer of its own. Deferred before releaseCensusLease's defer, so
+	// it runs while the lease is still ours.
+	owner := false
+	defer func() {
+		if owner {
+			dim.stop()
+		} else {
+			dim.yield()
+		}
+	}()
 
 	for {
 		if sleepOrStop(stop, vdisplayPoll) {
@@ -136,11 +147,16 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		if !isDaemon && censusHeldByOther() {
 			// Yield anything we were holding from before the owner appeared;
 			// it picks the display up on its next tick, once the lock is free.
+			// Only a dimmer of our own is ended: the owner's state file holds
+			// the brightness its live dimmer took away behind the shut lid, and
+			// restoring it from here would light the screen every tick.
+			owner = false
 			reap()
-			dim.stop()
+			dim.yield()
 			continue
 		}
 		claimCensusLease()
+		owner = true
 
 		if !config.LoadSettings().ClosedLid {
 			reap()
