@@ -54,9 +54,14 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 	"codex":  regexp.MustCompile(`signinwithchatgpt|provideyourownapikey|incorrectapikeyprovided`),
 	"qwen":   regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey`),
 	// Claude Code's own login menu (a fresh machine shows it before anything
-	// else), and its sign-in step once a way is picked. Its own rows, from
-	// their start: its conversation can name these words in a sentence.
-	"claude": regexp.MustCompile(`^[^a-z0-9]*(\d\.)?(selectloginmethod:?$|claudeaccountwithsubscription·|anthropicconsoleaccount·apiusagebilling|browserdidn.?topen\?usetheurlbelowtosignin|pastecodehereifprompted)`),
+	// else), and its sign-in step once a way is picked: "Opening browser to
+	// sign in…" under a spinner first, then the link. Its own rows, from
+	// their start: its conversation can name these words in a sentence. In a
+	// narrow terminal the link's heading wraps beside "(c to copy)", so only
+	// its start is on its first row ("Browser didn't open? Use the url").
+	// Not seen during the spinner, a logged-out Claude Code was read as at
+	// work, then done.
+	"claude": regexp.MustCompile(`^[^a-z0-9]*(\d\.)?(selectloginmethod:?$|claudeaccountwithsubscription·|anthropicconsoleaccount·apiusagebilling|openingbrowsertosignin|browserdidn.?topen\?usetheurl|pastecodehereifprompted)`),
 }
 
 // harnessLoginScreenIn reports whether a row is the sign-in screen of prog,
