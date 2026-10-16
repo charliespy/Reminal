@@ -97,6 +97,19 @@ const step = (page) => page.evaluate(() => {
   await page.waitForTimeout(100);
   const st = await page.evaluate(() => ({ open: document.getElementById('recents').open, focus: document.activeElement === document.querySelector('#recents > summary') }));
   opened && !st.open && st.focus ? ok('Escape closes a header menu, the keyboard back on its button') : fail('Escape on an open header menu: ' + JSON.stringify({ opened, ...st }));
+  // A sheet opened from the menu (Alerts): the first Escape closes only the
+  // sheet, the second the menu.
+  await page.locator('#recents > summary').click();
+  // Pressed as a click on it (on this page, with no host, Playwright finds it not visible).
+  await page.evaluate(() => document.getElementById('alerts-bar-btn').click());
+  await page.waitForTimeout(200);
+  const state = () => page.evaluate(() => ({ menu: document.getElementById('recents').open, sheet: !document.getElementById('alsheet').hidden }));
+  const s0 = await state();
+  await page.keyboard.press('Escape'); await page.waitForTimeout(150);
+  const s1 = await state();
+  await page.keyboard.press('Escape'); await page.waitForTimeout(150);
+  const s2 = await state();
+  s0.menu && s0.sheet && s1.menu && !s1.sheet && !s2.menu && !s2.sheet ? ok('a sheet from a header menu: the first Escape closes the sheet alone, the second the menu') : fail('Escape over a sheet from a menu: ' + JSON.stringify({ s0, s1, s2 }));
   await ctx.close();
 }
 await b.close();

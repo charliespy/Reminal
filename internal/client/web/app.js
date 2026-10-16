@@ -9658,6 +9658,9 @@
     // what was typed in it.
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
+      // A sheet opened from a menu (Alerts, What's new) closes first: it
+      // takes Escape on the window, after this.
+      if (document.querySelector('.cl-sheet:not([hidden])')) return;
       const t = e.target;
       if (t && t.tagName === 'INPUT' && t.value) return;
       const d = (t && t.closest && t.closest('header details[open]')) || (t === document.body && document.querySelector('header details[open]'));
