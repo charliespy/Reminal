@@ -1,0 +1,4 @@
+# The viewer's sources are served, hashed and SRI-pinned exactly as they are
+# in the repository: never converted (a Windows checkout with autocrlf would
+# otherwise build a page whose scripts differ from every other build's).
+internal/client/web/** -text

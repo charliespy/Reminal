@@ -2,6 +2,7 @@ name = "reminal-relay"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
+
 # Pinned so `wrangler deploy` errors out instead of silently shipping
 # to whichever Cloudflare account happens to be logged in. Belongs to
 # harshalg98@gmail.com (the everything-account). Forks must replace this value
@@ -26,6 +27,19 @@ routes = [
   # worker code (index.ts). Relies on the proxied *.reminal.app DNS record.
   { pattern = "*.reminal.app/*", zone_name = "reminal.app" },
 ]
+
+# The viewer in ./public is built, never committed: from internal/client/web,
+# before every `wrangler dev` and `wrangler deploy` (scripts/build-viewer.mjs).
+# A deploy keeps the live Worker's recent builds for pages already open, so it
+# runs `node scripts/build-viewer.mjs --previous https://live.reminal.app`
+# immediately before `wrangler deploy`, in the same script, every time;
+# without that run for this tree the build fails. `wrangler dev` builds the
+# page alone (wrangler runs this with WRANGLER_COMMAND=dev).
+# Keep this below routes, as [durable_objects] is: every key after a table
+# header belongs to that table.
+[build]
+command = "node scripts/build-viewer.mjs"
+watch_dir = ["scripts", "../internal/client/web"]
 
 [durable_objects]
 bindings = [
