@@ -77,6 +77,9 @@ async function newViaButton() {
   await openList();
   await listRows().filter({ hasText: 'New reminal Terminal Here' }).first().click();
 }
+// A file or folder in the Explorer, by name.
+const explorerRow = (name) => p.locator('.explorer-folders-view .monaco-list-row')
+  .filter({ has: p.locator('.label-name', { hasText: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }) }).first();
 // The terminal panel's tab list, one entry per terminal.
 const tabs = () => p.locator('.terminal-tabs-entry:visible');
 // A tab's text as drawn: decoration badges are CSS ::after content, which
@@ -165,8 +168,8 @@ if (phase === 'works') {
   await openList();
   await p.screenshot({ path: `${SHOTS}/4a-cloud-list-one.png` });
   const firstRows = (await listRows().allInnerTexts()).map((r) => r.trim()).filter(Boolean);
-  check('cloud button lists the reminal terminal, then New reminal Terminal Here last',
-    firstRows.length === 2 && /demo-project/.test(firstRows[0]) && /New reminal Terminal Here/.test(firstRows[1]), JSON.stringify(firstRows));
+  check('cloud button lists the reminal terminal, then New reminal Terminal Here and Share a Port',
+    firstRows.length === 3 && /demo-project/.test(firstRows[0]) && /New reminal Terminal Here/.test(firstRows[1]) && /Share a Port/.test(firstRows[2]), JSON.stringify(firstRows));
   await listRows().filter({ hasText: 'New reminal Terminal Here' }).first().click();
   toast = await waitToast(/reminal is sharing/);
   const t2 = (await toast.innerText()).replace(/\s+/g, ' ');
@@ -223,15 +226,15 @@ if (phase === 'status') {
     }, [DRAWN.toString(), re.source], { timeout }).then(() => true, () => false);
     return [ok, JSON.stringify(await p.evaluate((drawn) => (0, eval)(drawn)('.terminal-tabs-entry'), DRAWN.toString()))];
   };
-  // The cloud button's list: the newest terminal's row (the last before New)
-  // carries the same state as its tab.
+  // The cloud button's list: the newest terminal's row (the last before New
+  // and Share a Port) carries the same state as its tab.
   const listSays = async (state, shot) => {
     await openList();
     await p.screenshot({ path: `${SHOTS}/${shot}` });
     const rows = (await listRows().allInnerTexts()).map((r) => r.trim()).filter(Boolean);
     await p.keyboard.press('Escape');
     await p.waitForTimeout(300);
-    return [rows.length === 4 && rows[2].includes(state) && !rows[0].includes(state) && !rows[1].includes(state), JSON.stringify(rows)];
+    return [rows.length === 5 && rows[2].includes(state) && !rows[0].includes(state) && !rows[1].includes(state), JSON.stringify(rows)];
   };
   let [ok, text] = await barSays(/reminal: 3$/);
   await p.screenshot({ path: `${SHOTS}/12-status-idle.png` });
@@ -328,9 +331,9 @@ if (phase === 'share') {
   await p.screenshot({ path: `${SHOTS}/24-cloud-list.png` });
   const rows = (await listRows().allInnerTexts()).map((r) => r.trim()).filter(Boolean);
   const ids = want.map((w) => w.id.toUpperCase());
-  check('cloud button lists every reminal terminal in tab order, with its ID, then New last',
-    rows.length === want.length + 1 && ids.every((id, i) => rows[i].includes(id)) && /New reminal Terminal Here/.test(rows[rows.length - 1]) &&
-    !rows.some((r) => /Share/.test(r)), JSON.stringify(rows));
+  check('cloud button lists every reminal terminal in tab order, with its ID, then New and Share a Port',
+    rows.length === want.length + 2 && ids.every((id, i) => rows[i].includes(id)) && /New reminal Terminal Here/.test(rows[rows.length - 2]) &&
+    /Share a Port/.test(rows[rows.length - 1]) && !rows.slice(0, -1).some((r) => /Share/.test(r)), JSON.stringify(rows));
   await listRows().filter({ hasText: ids[0] }).first().click();
   await p.waitForTimeout(800);
   // Typed into whatever terminal is now in front, without touching the tabs:
@@ -608,12 +611,28 @@ if (phase === 'revive') {
   await p.waitForTimeout(600);
   await p.keyboard.type(' ');
   await p.keyboard.press('Control+BracketRight');
-  await p.waitForTimeout(8000); // two polls
-  await openList();
-  const first = ((await listRows().first().innerText()) || '').replace(/\s+/g, ' ');
+  // The list catches up on its next poll; how long that took is reported.
+  const stoppedAt = Date.now();
+  out.push(`INFO  Ctrl-] pressed at ${new Date(stoppedAt).toISOString()}`);
+  let first = '';
+  while (Date.now() - stoppedAt < 30000) {
+    await p.waitForTimeout(2000);
+    await openList();
+    first = ((await listRows().first().innerText()) || '').replace(/\s+/g, ' ');
+    if (/Not sharing/.test(first)) break;
+    await p.keyboard.press('Escape');
+  }
   await p.screenshot({ path: `${SHOTS}/29-list-not-sharing.png` });
   await p.keyboard.press('Escape');
-  check('the cloud button list shows a stopped terminal as Not sharing', /Not sharing/.test(first), JSON.stringify(first));
+  check('the cloud button list shows a stopped terminal as Not sharing', /Not sharing/.test(first),
+    `${JSON.stringify(first)} after ${Math.round((Date.now() - stoppedAt) / 1000)}s`);
+  if (!/Not sharing/.test(first)) {
+    // What the window had at that moment, for the log.
+    await openList();
+    out.push(`INFO  list rows: ${JSON.stringify(await listRows().allInnerTexts())}`);
+    await p.keyboard.press('Escape');
+    out.push(`INFO  tabs: ${JSON.stringify(await p.evaluate((d) => (0, eval)(d)('.terminal-tabs-entry'), DRAWN.toString()))}`);
+  }
   await p.evaluate(() => navigator.clipboard.writeText('-'));
   const before = await tabs().count();
   await tabs().nth(0).click({ button: 'right', position: { x: 12, y: 10 } });
@@ -648,6 +667,195 @@ if (phase === 'revive') {
   const text = msg ? (await msg.innerText()).replace(/\s+/g, ' ') : '';
   check('a folder named like a link shows as plain text in the notification',
     !!odd && links === 0 && /docs\(command:/.test(text), `links ${links}: ${JSON.stringify(text)}`);
+}
+
+if (phase === 'front') {
+  // A reminal terminal from the + menu comes straight to the front. VS Code
+  // makes the last tab active before the profile's terminal exists, so
+  // without the extension's help another terminal shows for a moment. Every
+  // change of the selected tab is recorded as it happens.
+  if ((await tabs().count()) < 2) await runCommand('Terminal: Create New Terminal');
+  await p.waitForTimeout(1500);
+  await tabs().first().click({ position: { x: 12, y: 10 } });
+  await p.waitForTimeout(800);
+  const n = await tabs().count();
+  await p.evaluate(() => {
+    window.__sel = [];
+    const snap = () => {
+      const i = [...document.querySelectorAll('.terminal-tabs-entry')].findIndex((e) => e.closest('.monaco-list-row')?.classList.contains('selected'));
+      if (window.__sel.at(-1) !== i) window.__sel.push(i);
+      requestAnimationFrame(snap);
+    };
+    snap();
+  });
+  await p.locator('[aria-label^="Launch Profile"]').first().click();
+  await p.waitForTimeout(800);
+  await p.getByRole('menuitem', { name: /^reminal$/ }).first().click();
+  await waitToast(/reminal is sharing/);
+  await p.waitForTimeout(1000);
+  const seen = await p.evaluate(() => window.__sel);
+  check('a reminal terminal from the + menu comes straight to the front, with no other tab shown first',
+    seen[0] === 0 && seen.at(-1) === n && seen.slice(1).every((i) => i === n || i === -1), `tabs selected: ${JSON.stringify(seen)}`);
+  await clearNotifications();
+}
+
+if (phase === 'cancel') {
+  // A paste that hangs (run.sh points this container's relay at a listener
+  // that never answers) can be stopped from its progress notification.
+  await p.keyboard.press('Control+Shift+E');
+  await p.waitForTimeout(1500);
+  await explorerRow('src').click({ button: 'right' });
+  await p.waitForTimeout(900);
+  await menuPick('reminal Paste…');
+  const box = p.locator('.quick-input-widget .quick-input-box input').first();
+  await box.waitFor({ state: 'visible', timeout: 8000 });
+  await box.fill('ABCDE-FGHJK');
+  await p.keyboard.press('Enter');
+  const progress = await waitToast(/Pasting into src/, 15000);
+  await p.waitForTimeout(2000);
+  await p.screenshot({ path: `${SHOTS}/48-paste-progress.png` });
+  const cancel = progress.getByRole('button', { name: 'Cancel' });
+  const hasCancel = await cancel.count() > 0;
+  if (hasCancel) await cancel.first().click();
+  const stopped = await waitToast(/reminal Paste was stopped\. Part of it may already be in src/, 15000).then(() => true, () => false);
+  await p.screenshot({ path: `${SHOTS}/49-paste-cancelled.png` });
+  check('a paste in progress can be cancelled, and says so', hasCancel && stopped, `cancel button ${hasCancel}`);
+  await clearNotifications();
+}
+
+if (phase === 'transfer') {
+  // reminal Copy in the Explorer's right-click menu, on a file and on a
+  // folder; run.sh pastes both on another machine. reminal Paste is on
+  // folders only.
+  await p.keyboard.press('Control+Shift+E');
+  await p.waitForTimeout(1500);
+  for (const [name, kind] of [['notes.txt', 'FILE'], ['assets', 'FOLDER']]) {
+    await explorerRow(name).click({ button: 'right' });
+    await p.waitForTimeout(900);
+    const items = (await p.getByRole('menuitem').allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+    await p.screenshot({ path: `${SHOTS}/40-explorer-menu-${kind.toLowerCase()}.png` });
+    const copy = items.some((t) => /^reminal Copy\b/.test(t)), paste = items.some((t) => /^reminal Paste/.test(t));
+    if (kind === 'FILE') check('a file\'s right-click menu has reminal Copy and no reminal Paste', copy && !paste, JSON.stringify(items.filter((t) => /reminal/.test(t))));
+    else check('a folder\'s right-click menu has reminal Copy and reminal Paste', copy && paste, JSON.stringify(items.filter((t) => /reminal/.test(t))));
+    await menuPick('reminal Copy');
+    const t = await waitToast(/is ready to paste with code/, 120000);
+    await p.screenshot({ path: `${SHOTS}/41-copied-${kind.toLowerCase()}.png` });
+    const code = /code ([A-Z0-9]{5}-[A-Z0-9]{5})/.exec(await t.innerText())?.[1];
+    await t.getByRole('button', { name: kind === 'FILE' ? 'Copy code' : 'Copy paste command' }).click();
+    await p.waitForTimeout(500);
+    const clip = await p.evaluate(() => navigator.clipboard.readText());
+    check(`copying the ${kind.toLowerCase()} shows its code, and the button copies it`,
+      !!code && clip === (kind === 'FILE' ? code : `reminal paste ${code}`), JSON.stringify(clip));
+    console.log(`TRANSFER-${kind} ${code}`);
+    await clearNotifications();
+  }
+}
+
+if (phase === 'paste') {
+  // reminal Paste on a folder, with a code made on another machine.
+  const code = process.env.PASTE_CODE;
+  await p.keyboard.press('Control+Shift+E');
+  await p.waitForTimeout(1500);
+  const box = p.locator('.quick-input-widget .quick-input-box input').first();
+  const openPaste = async () => {
+    await explorerRow('inbox').click({ button: 'right' });
+    await p.waitForTimeout(900);
+    await menuPick('reminal Paste…');
+    await box.waitFor({ state: 'visible', timeout: 8000 });
+  };
+  await openPaste();
+  await p.keyboard.type('not a code');
+  await p.waitForTimeout(600);
+  const warn = await p.locator('.quick-input-widget .quick-input-message').first().innerText().catch(() => '');
+  await p.screenshot({ path: `${SHOTS}/42-paste-box-bad.png` });
+  check('the paste box rejects something that isn\'t a code', /10 letters and numbers/.test(warn), JSON.stringify(warn));
+  await box.fill(`reminal paste ${code}`);
+  await p.waitForTimeout(400);
+  await p.keyboard.press('Enter');
+  const done = await waitToast(/Pasted peer-note\.txt into inbox/, 120000).then((t) => t, () => undefined);
+  await p.screenshot({ path: `${SHOTS}/43-pasted.png` });
+  check('a whole "reminal paste <code>" line pasted into the folder', !!done, done ? (await done.innerText()).split('\n')[0] : '');
+  await clearNotifications();
+  // A well-formed code that was never handed out.
+  await openPaste();
+  await box.fill('ABCDE-FGHJK');
+  await p.keyboard.press('Enter');
+  const bad = await waitToast(/reminal couldn't paste/, 120000).then((t) => t, () => undefined);
+  await p.screenshot({ path: `${SHOTS}/44-paste-unknown-code.png` });
+  check('an unknown code says reminal couldn\'t paste', !!bad, bad ? (await bad.innerText()).split('\n')[0] : '');
+  await clearNotifications();
+  // A paste that fails in a folder named like a link, [docs](command:...)
+  // (run.sh made it read-only): the error names the folder, and the
+  // notification must show it as text, not as a link.
+  await explorerRow('[docs](command:workbench.action.showCommands)').click({ button: 'right' });
+  await p.waitForTimeout(900);
+  await menuPick('reminal Paste…');
+  await box.waitFor({ state: 'visible', timeout: 8000 });
+  await box.fill(process.env.PASTE_CODE2 ?? '');
+  await p.keyboard.press('Enter');
+  const odd = await waitToast(/reminal couldn't paste/, 120000).then((t) => t, () => undefined);
+  await p.screenshot({ path: `${SHOTS}/44b-paste-error-link-named-folder.png` });
+  const msg = odd ? odd.locator('.notification-list-item-message') : undefined;
+  const linkCount = msg ? await msg.locator('a').count() : -1;
+  const text = msg ? (await msg.innerText()).replace(/\s+/g, ' ') : '';
+  check('a paste error naming a folder like a link shows it as plain text', !!odd && linkCount === 0 && /docs\(command:/.test(text), `links ${linkCount}: ${JSON.stringify(text)}`);
+  await clearNotifications();
+}
+
+if (phase === 'ports') {
+  // Ports reminal shares, in the cloud button's list (against the hosted
+  // relay: the local one doesn't carry ports). run.sh serves a marker page
+  // on port 3000.
+  const marker = process.env.PORT_MARKER;
+  // The cloud button is in the terminal panel's title bar.
+  await runCommand('Terminal: Create New Terminal');
+  await p.waitForTimeout(2500);
+  const sharedRows = () => listRows().filter({ hasText: 'localhost:3000' });
+  await openList();
+  const before = await sharedRows().count();
+  const shareRow = listRows().filter({ hasText: 'Share a Port' });
+  check('before anything is shared, the list has no port, and a Share a Port row', before === 0 && (await shareRow.count()) === 1);
+  await shareRow.first().click();
+  const box = p.locator('.quick-input-widget .quick-input-box input').first();
+  await box.waitFor({ state: 'visible', timeout: 8000 });
+  await p.keyboard.type('70000');
+  await p.waitForTimeout(600);
+  const warn = await p.locator('.quick-input-widget .quick-input-message').first().innerText().catch(() => '');
+  check('Share a Port rejects a port that doesn\'t exist', /1 to 65535/.test(warn), JSON.stringify(warn));
+  await box.fill('3000');
+  await p.keyboard.press('Enter');
+  const shared = await waitToast(/localhost:3000 is shared at https:\/\//, 60000);
+  await p.screenshot({ path: `${SHOTS}/45-port-shared.png` });
+  await shared.getByRole('button', { name: 'Copy link' }).click();
+  await p.waitForTimeout(500);
+  const link = await p.evaluate(() => navigator.clipboard.readText());
+  const pageSays = async (url) => {
+    const v = await ctx.newPage();
+    const ok = await v.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+      .then(() => v.waitForFunction((m) => document.body.innerText.includes(m), marker, { timeout: 20000 }))
+      .then(() => true, () => false);
+    await v.close();
+    return ok;
+  };
+  check('Share a Port shares it: its copied link opens the page', await pageSays(link), link);
+  await clearNotifications();
+  await p.waitForTimeout(5000);
+  await openList();
+  const rows = await sharedRows().count();
+  await p.screenshot({ path: `${SHOTS}/46-list-with-port.png` });
+  const section = await p.locator('.quick-input-widget .quick-input-list').innerText();
+  check('the cloud list shows the shared port under Shared ports', rows === 1 && /Shared ports/i.test(section), JSON.stringify(section.replace(/\s+/g, ' ').slice(0, 200)));
+  await sharedRows().first().click();
+  const actions = await waitToast(/localhost:3000 is shared at/, 8000);
+  await actions.getByRole('button', { name: 'Stop sharing' }).click();
+  const stopped = await waitToast(/Stopped sharing localhost:3000/, 30000).then(() => true, () => false);
+  await p.screenshot({ path: `${SHOTS}/47-port-stopped.png` });
+  check('Stop sharing stops it: the link no longer opens the page', stopped && !(await pageSays(link)));
+  await clearNotifications();
+  await p.waitForTimeout(5000);
+  await openList();
+  check('a stopped port leaves the list', (await sharedRows().count()) === 0);
+  await p.keyboard.press('Escape');
 }
 
 } catch (e) {

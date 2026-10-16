@@ -116,10 +116,19 @@ type Tunnel struct {
 	version   string
 	startedAt time.Time
 
-	writeMu       sync.Mutex // serialises WS writes across the per-request goroutines
-	httpClient    *http.Client
+	writeMu    sync.Mutex // serialises WS writes across the per-request goroutines
+	httpClient *http.Client
+
+	// hsMu guards the channel back to the `reminal expose` that started this
+	// forward, which is written once, either with the forward's credentials
+	// or with why it couldn't reach the relay, and lastErr, that reason.
+	hsMu          sync.Mutex
 	handshakeFD   int
 	handshakeAddr string
+	lastErr       string
+	// abandon ends a new forward whose result never reached `reminal
+	// expose`: that already told the user it failed, so it must not go live.
+	abandon func()
 
 	// schemeMu guards scheme and addr, the cached results of probing the local
 	// backend: whether it speaks plain HTTP or HTTPS, and which loopback address
@@ -324,6 +333,14 @@ func (t *Tunnel) Run() error {
 	notifyAgentSignals(sigCh)
 	defer signal.Stop(sigCh)
 	stop := make(chan struct{})
+	var stopOnce sync.Once
+	closeStop := func() { stopOnce.Do(func() { close(stop) }) }
+	t.hsMu.Lock()
+	t.abandon = func() {
+		closeStop()
+		t.closeConn()
+	}
+	t.hsMu.Unlock()
 	go func() {
 		for sig := range sigCh {
 			// SIGUSR1 (the shell agent's "pause" signal) means something else for
@@ -342,17 +359,29 @@ func (t *Tunnel) Run() error {
 				return // unreachable: the process image was replaced
 			}
 			// SIGINT/SIGTERM shut the forward down; `reminal stop` simply ends it.
-			close(stop)
+			closeStop()
 			// Close the live WS too — otherwise the read in runConnection sits
 			// until its deadline, which makes `reminal stop` look like it didn't work.
-			t.connMu.Lock()
-			if t.conn != nil {
-				_ = t.conn.Close()
-			}
-			t.connMu.Unlock()
+			t.closeConn()
 			return
 		}
 	}()
+
+	// A new forward that can't reach the relay in time says why to the
+	// `reminal expose` waiting on it, and ends, instead of leaving that to
+	// time out with no reason while this one retries on in the background.
+	if t.handshakePending() {
+		go func() {
+			select {
+			case <-stop:
+				return
+			case <-time.After(tunnelReadyGiveUp):
+			}
+			if t.writeHandshakeError() {
+				t.abandonForward()
+			}
+		}()
+	}
 
 	// Serve this machine's owner-derived directory channel too, so a machine
 	// that's running ONLY a port forward (no shell session) is still visible and
@@ -377,6 +406,7 @@ func (t *Tunnel) Run() error {
 		if err == nil {
 			err = errors.New("connection closed")
 		}
+		t.setLastErr(humanize(err))
 		if time.Since(start) > stableThresh {
 			backoff = initialBackoff
 		}
@@ -1864,29 +1894,97 @@ func (t *Tunnel) execRestart() error {
 	return execTunnelBinary(exe, args, env)
 }
 
-func (t *Tunnel) writeHandshake() {
-	if t.handshakeFD == 0 && t.handshakeAddr == "" {
-		return
+// tunnelReadyGiveUp is how long a new forward tries to reach the relay before
+// it reports why it couldn't and ends. It is shorter than
+// spawnHandshakeTimeout, so the reason arrives before `reminal expose` stops
+// waiting.
+const tunnelReadyGiveUp = 12 * time.Second
+
+func (t *Tunnel) closeConn() {
+	t.connMu.Lock()
+	if t.conn != nil {
+		_ = t.conn.Close()
 	}
-	payload := map[string]any{
+	t.connMu.Unlock()
+}
+
+// setLastErr keeps why the relay couldn't be reached, as plain text: it can
+// carry the relay's own words, and it is printed in the user's terminal.
+func (t *Tunnel) setLastErr(msg string) {
+	t.hsMu.Lock()
+	t.lastErr = plainText(msg, 300)
+	t.hsMu.Unlock()
+}
+
+func (t *Tunnel) abandonForward() {
+	t.hsMu.Lock()
+	a := t.abandon
+	t.hsMu.Unlock()
+	if a != nil {
+		a()
+	}
+}
+
+func (t *Tunnel) handshakePending() bool {
+	t.hsMu.Lock()
+	defer t.hsMu.Unlock()
+	return t.handshakeFD != 0 || t.handshakeAddr != ""
+}
+
+// sendHandshake writes the one line back to `reminal expose`, if it hasn't
+// been written yet. Callers hold hsMu.
+func (t *Tunnel) sendHandshake(payload map[string]any) bool {
+	if t.handshakeFD == 0 && t.handshakeAddr == "" {
+		return false
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	w, err := handshakeWriter(t.handshakeFD, t.handshakeAddr)
+	t.handshakeFD = 0
+	t.handshakeAddr = ""
+	if err != nil {
+		return false
+	}
+	_, _ = w.Write(append(data, '\n'))
+	_ = w.Close()
+	return true
+}
+
+// writeHandshake gives `reminal expose` the new forward's credentials. If
+// they can't be delivered (it gave up waiting), the forward ends.
+func (t *Tunnel) writeHandshake() {
+	t.hsMu.Lock()
+	pending := t.handshakeFD != 0 || t.handshakeAddr != ""
+	delivered := t.sendHandshake(map[string]any{
 		"id":       t.sessionID,
 		"pin":      t.pin,
 		"open_url": t.PublicURL(),
 		"pid":      os.Getpid(),
 		"port":     t.port,
+	})
+	t.hsMu.Unlock()
+	if pending && !delivered {
+		t.abandonForward()
 	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return
+}
+
+// writeHandshakeError tells `reminal expose` why the forward couldn't reach
+// the relay. It reports whether the forward should end: true unless its
+// credentials were already delivered, whether or not this message arrives.
+func (t *Tunnel) writeHandshakeError() bool {
+	t.hsMu.Lock()
+	defer t.hsMu.Unlock()
+	if t.handshakeFD == 0 && t.handshakeAddr == "" {
+		return false
 	}
-	w, err := handshakeWriter(t.handshakeFD, t.handshakeAddr)
-	if err != nil {
-		return
+	reason := t.lastErr
+	if reason == "" {
+		reason = "couldn't reach the reminal relay"
 	}
-	_, _ = w.Write(append(data, '\n'))
-	_ = w.Close()
-	t.handshakeFD = 0
-	t.handshakeAddr = ""
+	t.sendHandshake(map[string]any{"error": reason})
+	return true
 }
 
 // isHopHeader returns true for headers that mustn't be forwarded across
@@ -1971,6 +2069,9 @@ func SpawnTunnel(port int, public bool, name string) (*SpawnedSession, error) {
 	var sp SpawnedSession
 	if err := json.Unmarshal([]byte(line), &sp); err != nil {
 		return nil, fmt.Errorf("parse handshake: %w", err)
+	}
+	if sp.Error != "" {
+		return nil, fmt.Errorf("couldn't share port %d: %s", port, plainText(sp.Error, 300))
 	}
 	return &sp, nil
 }

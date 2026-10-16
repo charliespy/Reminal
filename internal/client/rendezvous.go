@@ -33,6 +33,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"reminal/internal/crypto"
@@ -80,6 +81,10 @@ type rendezvousChunk struct {
 	Name    string `json:"name"`
 	Content string `json:"content"` // base64 of this chunk
 	Size    int    `json:"size"`    // total file size (informational)
+	// Archive is "tar" when the file is a folder packed by `reminal copy`
+	// (copyfolder.go); empty for a plain file. A paste that predates it saves
+	// the .tar as it is.
+	Archive string `json:"archive,omitempty"`
 }
 
 // runSource performs the source half of a rendezvous: it waits for the
@@ -96,13 +101,13 @@ func copySID(code string, exID []byte) []byte {
 	return append([]byte(routeID(code)+"|"), exID...)
 }
 
-func runSource(fc frameConn, code, path string) error {
+func runSource(fc frameConn, code, path, archive string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
 	if info.IsDir() {
-		return errors.New("directories aren't supported (try tar first)")
+		return errors.New("a folder is sent as a tar of it (see prepareCopy)")
 	}
 
 	// 1. Paste opens with pake_init.
@@ -112,7 +117,7 @@ func runSource(fc frameConn, code, path string) error {
 	}
 	if init.Type == protocol.TypeError {
 		// Relay rejected the source (e.g. the code is already in use).
-		return errors.New(init.Error)
+		return errors.New(plainText(init.Error, 300))
 	}
 	if init.Type != protocol.TypePakeInit {
 		return fmt.Errorf("rendezvous: expected pake_init, got %q", init.Type)
@@ -175,7 +180,7 @@ func runSource(fc frameConn, code, path string) error {
 	}
 
 	// 4. Stream the file in chunks, each encrypted under the transfer key.
-	if err := streamFile(fc, box, path, int(info.Size())); err != nil {
+	if err := streamFile(fc, box, path, int(info.Size()), archive); err != nil {
 		return err
 	}
 
@@ -201,7 +206,7 @@ func runSource(fc frameConn, code, path string) error {
 // streamFile reads path in downloadChunkBytes pieces and sends each as an
 // encrypted TypeData frame. Peak memory is ~one chunk. At least one frame
 // is sent even for an empty file so the paste always learns (name, total).
-func streamFile(fc frameConn, box *crypto.Box, path string, size int) error {
+func streamFile(fc frameConn, box *crypto.Box, path string, size int, archive string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -228,6 +233,7 @@ func streamFile(fc frameConn, box *crypto.Box, path string, size int) error {
 			Name:    name,
 			Content: base64.StdEncoding.EncodeToString(buf[:n]),
 			Size:    size,
+			Archive: archive,
 		})
 		if err != nil {
 			return err
@@ -308,13 +314,30 @@ func runPaste(fc frameConn, code, dest string) (string, error) {
 		return "", err
 	}
 
-	name, raw, err := receiveStream(fc, box)
+	name, archive, raw, err := receiveStream(fc, box)
 	if err != nil {
 		return "", err
 	}
-	written, err := writeRendezvousFile(dest, name, raw)
+	var written string
+	var notes []string
+	if archive == archiveTar {
+		safe, changed := receivedName(strings.TrimSuffix(name, ".tar"), "pasted-folder")
+		written, notes, err = unpackFolder(dest, safe+".tar", raw)
+		if changed && err == nil && strings.HasPrefix(safe, pastedPrefix) {
+			notes = append([]string{fmt.Sprintf("Saved the folder as %s: a name starting with a dot is kept from landing as a hidden folder.", safe)}, notes...)
+		}
+	} else {
+		safe, changed := receivedName(name, "pasted-file")
+		written, err = writeRendezvousFile(dest, safe, raw)
+		if changed && err == nil && strings.HasPrefix(safe, pastedPrefix) {
+			notes = append(notes, fmt.Sprintf("Saved the file as %s: a name starting with a dot is kept from landing as a hidden file.", safe))
+		}
+	}
 	if err != nil {
 		return "", err
+	}
+	for _, n := range notes {
+		fmt.Println(n)
 	}
 
 	// Confirm delivery so the source knows it's safe to close (see the ack
@@ -331,10 +354,11 @@ func runPaste(fc frameConn, code, dest string) (string, error) {
 
 // receiveStream reads encrypted TypeData chunks until it has Total of them,
 // then assembles them in index order. Returns the (source) filename and the
-// reassembled bytes.
-func receiveStream(fc frameConn, box *crypto.Box) (string, []byte, error) {
+// reassembled bytes, and the chunks' Archive.
+func receiveStream(fc frameConn, box *crypto.Box) (string, string, []byte, error) {
 	var (
 		name     string
+		archive  string
 		total    = -1
 		chunks   = map[int][]byte{}
 		received int // running sum of decoded bytes — bounds receiver memory
@@ -342,46 +366,47 @@ func receiveStream(fc frameConn, box *crypto.Box) (string, []byte, error) {
 	for total == -1 || len(chunks) < total {
 		msg, err := fc.recv()
 		if err != nil {
-			return "", nil, err
+			return "", "", nil, err
 		}
 		switch msg.Type {
 		case protocol.TypeData:
 			pt, err := box.Decrypt(msg.Data)
 			if err != nil {
-				return "", nil, fmt.Errorf("rendezvous: decrypt chunk: %w", err)
+				return "", "", nil, fmt.Errorf("rendezvous: decrypt chunk: %w", err)
 			}
 			var c rendezvousChunk
 			if err := json.Unmarshal(pt, &c); err != nil {
-				return "", nil, fmt.Errorf("rendezvous: parse chunk: %w", err)
+				return "", "", nil, fmt.Errorf("rendezvous: parse chunk: %w", err)
 			}
 			if total == -1 {
 				// Bound the peer-supplied chunk count: it sizes the loop below and
 				// an unbounded value lets a hostile sender balloon the chunks map.
 				if c.Total <= 0 || c.Total > maxUploadChunks {
-					return "", nil, errors.New("rendezvous: bad chunk total")
+					return "", "", nil, errors.New("rendezvous: bad chunk total")
 				}
 				total = c.Total
 				name = filepath.Base(c.Name)
+				archive = c.Archive
 			}
 			if c.Index < 0 || c.Index >= total {
-				return "", nil, fmt.Errorf("rendezvous: bad chunk index %d/%d", c.Index, total)
+				return "", "", nil, fmt.Errorf("rendezvous: bad chunk index %d/%d", c.Index, total)
 			}
 			b, err := base64.StdEncoding.DecodeString(c.Content)
 			if err != nil {
-				return "", nil, fmt.Errorf("rendezvous: bad chunk base64: %w", err)
+				return "", "", nil, fmt.Errorf("rendezvous: bad chunk base64: %w", err)
 			}
 			if _, dup := chunks[c.Index]; !dup {
 				// Abort before storing if the transfer would exceed the file cap.
 				// The source enforces this too (validateCopyFile), but a hostile
 				// sender bypasses its own check, so the receiver bounds independently.
 				if received+len(b) > downloadMaxBytes {
-					return "", nil, fmt.Errorf("rendezvous: transfer exceeds %s", humanByteSize(downloadMaxBytes))
+					return "", "", nil, fmt.Errorf("rendezvous: transfer exceeds %s", humanByteSize(downloadMaxBytes))
 				}
 				chunks[c.Index] = b
 				received += len(b)
 			}
 		case protocol.TypeError:
-			return "", nil, fmt.Errorf("source aborted: %s", msg.Error)
+			return "", "", nil, fmt.Errorf("source aborted: %s", plainText(msg.Error, 300))
 		default:
 			// Ignore unrelated frames (pings, etc.).
 		}
@@ -403,7 +428,7 @@ func receiveStream(fc frameConn, box *crypto.Box) (string, []byte, error) {
 	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
 		name = "pasted-file"
 	}
-	return name, assembled, nil
+	return name, archive, assembled, nil
 }
 
 // writeRendezvousFile resolves dest and writes raw, deduplicating the name

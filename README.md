@@ -404,8 +404,8 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | `reminal mcp` | Run the MCP server on stdio — list, search, read and type into sessions across your machines |
 | `reminal expose <port> [--public] [--name <name>]` | Forward a local HTTP port to a public URL (PIN-protected by default) |
 | `reminal send <file>` | Push a file to every connected viewer (web client auto-downloads) |
-| `reminal copy [--ttl <dur>] <file>` | Offer a file for pickup anywhere; prints a one-time code |
-| `reminal paste <code> [dest]` | Fetch a file offered by `reminal copy` on another machine |
+| `reminal copy [--ttl <dur>] <file\|folder>` | Offer a file or folder for pickup anywhere; prints a one-time code |
+| `reminal paste <code> [dest]` | Fetch a file or folder offered by `reminal copy` on another machine |
 | `reminal notify <message>` | Push a notification to viewers (browser notification on web) |
 | `reminal connections` | List currently attached viewers with connect time |
 | `reminal own` | Print this device's owner id + the `add owner` line to paste on machines you want to own |

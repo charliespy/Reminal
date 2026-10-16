@@ -66,7 +66,7 @@ func TestRendezvousRoundTrip(t *testing.T) {
 			err  error
 		}
 		pasteCh := make(chan pres, 1)
-		go func() { srcErr <- runSource(srcConn, code, srcFile) }()
+		go func() { srcErr <- runSource(srcConn, code, srcFile, "") }()
 		go func() {
 			p, e := runPaste(pasteConn, code, dstDir)
 			pasteCh <- pres{p, e}
@@ -110,7 +110,7 @@ func TestRendezvousWrongCode(t *testing.T) {
 
 	srcConn, pasteConn := newMemPair()
 	srcErr := make(chan error, 1)
-	go func() { srcErr <- runSource(srcConn, "RIGHT-CODE", srcFile) }()
+	go func() { srcErr <- runSource(srcConn, "RIGHT-CODE", srcFile, "") }()
 
 	_, err := runPaste(pasteConn, "WRONG-CODE", dstDir)
 	if err != errWrongCode {

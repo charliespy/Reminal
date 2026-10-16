@@ -7,15 +7,26 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  copyCodeOf,
+  exposedOf,
   findReminal,
   INSTALL_UNIX,
   INSTALL_WINDOWS,
   matchSession,
   parseSessions,
+  alreadyExposedOf,
+  isWebLink,
+  stillShared,
+  pasteCode,
+  plainText,
+  stopArgs,
+  problemOf,
   querySessions,
+  savedPathOf,
   SessionInfo,
   statusOf,
   summary,
+  validPort,
 } from "../reminal";
 import { shareAgentText } from "../share";
 
@@ -132,4 +143,68 @@ test("the install lines are the ones the share text gives", () => {
   const agent = shareAgentText("ABCD2345", "123456", "http://r");
   assert.ok(agent.includes(INSTALL_UNIX), INSTALL_UNIX);
   assert.ok(agent.includes(INSTALL_WINDOWS), INSTALL_WINDOWS);
+});
+
+test("copy, paste and expose output is read the way reminal prints it", () => {
+  const copied = "Copy code: ABCDE-FGHJK\nOn the other machine, run:  reminal paste ABCDE-FGHJK\nHolding the folder proj in the background (pid 42, expires in 1h0m0s).\n";
+  assert.equal(copyCodeOf(copied), "ABCDE-FGHJK");
+  assert.equal(copyCodeOf("error: no such file"), undefined);
+  for (const typed of ["ABCDE-FGHJK", "abcdefghjk", " abcde fghjk ", "reminal paste ABCDE-FGHJK", "REMINAL PASTE abcdefghjk ~/x"]) {
+    assert.equal(pasteCode(typed), "ABCDE-FGHJK", typed);
+  }
+  assert.equal(pasteCode("ABCD-EFGH"), "ABCDEFGH"); // an older reminal's code: reminal itself explains
+  for (const bad of ["", "ABC", "ABCDE-FGHJKL", "reminal paste", "not a code", "abc de fghjk", "ABCDE-FGHJ"]) {
+    assert.equal(pasteCode(bad), undefined, bad);
+  }
+  assert.equal(savedPathOf("Saved /home/me/proj (2)\n"), "/home/me/proj (2)");
+  assert.equal(savedPathOf("code is either too old or invalid"), undefined);
+  const exposed = "\n  reminal - exposing localhost:8080 | PIN-protected | v3\n\n  Public URL:  https://port-9sc7gbt6.reminal.app/\n  PIN:         310346\n  Quick link:  https://port-9sc7gbt6.reminal.app/#p=310346   (one-tap auth for you)\n";
+  assert.deepEqual(exposedOf(exposed), {
+    url: "https://port-9sc7gbt6.reminal.app/",
+    pin: "310346",
+    link: "https://port-9sc7gbt6.reminal.app/#p=310346",
+  });
+  for (const [v, want] of [["3000", 3000], ["localhost:8080", 8080], [" 65535 ", 65535], ["0", undefined], ["65536", undefined], ["30a", undefined], ["", undefined]] as const) {
+    assert.equal(validPort(v), want, v);
+  }
+  assert.equal(problemOf({ ok: false, stdout: "", stderr: "error: folder too large (max 100.0 MB)\n" }), "folder too large (max 100.0 MB)");
+});
+
+test("a paste error can't put a link in a notification", () => {
+  // reminal's error can carry a name chosen on the other machine.
+  const r = { ok: false, stdout: "", stderr: 'error: the copied folder has an entry outside it: "[Open](command:workbench.action.terminal.sendSequence)"\n' };
+  const shown = problemOf(r);
+  assert.ok(!/\[[^\]]*\]\(/.test(shown), shown);
+  assert.ok(shown.includes("Open(command:"), shown);
+  assert.equal(plainText("a\u001b[2Jb\u202ec[d](e)"), "a2Jbcd(e)");
+  assert.equal(plainText("x".repeat(10), 4), "xxxx…");
+  assert.equal(problemOf({ ok: false, stdout: "", stderr: "", timedOut: true }), "it took too long and was stopped.");
+});
+
+test("Stop sharing names the forward, not its port, and only one still shared", () => {
+  const s = { id: "ab12cd34", pin: "123456", open_url: "https://x", port: 3000, kind: "port" } as Parameters<typeof stopArgs>[0];
+  assert.deepEqual(stopArgs(s), ["stop", "--yes", "--", "ab12cd34"]);
+  assert.equal(stopArgs({ ...s, id: "-x" }), undefined);
+  assert.equal(stopArgs({ ...s, id: "ab 12" }), undefined);
+  // Gone, or now a shell session with that id: not stopped.
+  assert.equal(stillShared([], "ab12cd34"), undefined);
+  assert.equal(stillShared([{ ...s, kind: undefined, port: undefined }], "ab12cd34"), undefined);
+  assert.equal(stillShared([s], "ab12cd34"), s);
+});
+
+test("a copy code is shown only in the shape reminal hands out", () => {
+  assert.equal(copyCodeOf("Copy code: ABCDE-FGHJK\n"), "ABCDE-FGHJK");
+  assert.equal(copyCodeOf("Copy code: ABCD-EFGH\n"), "ABCD-EFGH");
+  for (const bad of ["Copy code: [x](command:y)\n", "Copy code: ABCDE-FGHJK extra\n", "Copy code: abcde-fghjk\n"]) {
+    assert.equal(copyCodeOf(bad), undefined, bad);
+  }
+});
+
+test("an already shared port and the links handed to the browser", () => {
+  assert.equal(alreadyExposedOf("Port 3000 is already exposed: https://port-ab12cd34.reminal.app/\nTo replace it: ..."), "https://port-ab12cd34.reminal.app/");
+  assert.equal(alreadyExposedOf("Public URL: https://x"), undefined);
+  assert.ok(isWebLink("https://port-ab12cd34.reminal.app/#p=1") && isWebLink("http://127.0.0.1:18080/?s=X"));
+  for (const bad of ["command:workbench.action.terminal.sendSequence", "file:///etc/passwd", "vscode://x", "", undefined]) {
+    assert.ok(!isWebLink(bad), String(bad));
+  }
 });

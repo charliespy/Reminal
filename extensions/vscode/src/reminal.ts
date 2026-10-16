@@ -28,6 +28,14 @@ export interface SessionInfo {
   // from a reminal older than this field.
   attn?: string;
   attn_since?: string;
+  // "port" for a `reminal expose` forward, with the local port it shares.
+  // Absent for a shell, and from a reminal that doesn't list forwards.
+  kind?: string;
+  port?: number;
+}
+
+export function isPort(s: SessionInfo): boolean {
+  return s.kind === "port";
 }
 
 export type Status = "needs" | "working" | "done";
@@ -125,11 +133,13 @@ function processEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-// querySessions is every live session on this machine, or undefined when
-// reminal couldn't be asked (it failed, or timed out).
-export function querySessions(bin: string): Promise<SessionInfo[] | undefined> {
+// queryAll is every live shell session on this machine and every port it
+// shares (`reminal expose`), or undefined when reminal couldn't be asked (it
+// failed, or timed out). A reminal too old to list forwards ignores --ports
+// and gives the shells alone.
+export function queryAll(bin: string): Promise<SessionInfo[] | undefined> {
   return new Promise((resolve) => {
-    execFile(bin, ["info", "--all", "--json"], { env: processEnv(), timeout: 5000, windowsHide: true }, (err, stdout) => {
+    execFile(bin, ["info", "--all", "--json", "--ports"], { env: processEnv(), timeout: 5000, windowsHide: true }, (err, stdout) => {
       if (err) return resolve(undefined);
       const text = stdout.trim();
       if (!text.startsWith("[")) return resolve(/^No reminal/.test(text) ? [] : undefined);
@@ -141,6 +151,11 @@ export function querySessions(bin: string): Promise<SessionInfo[] | undefined> {
       resolve(parseSessions(text));
     });
   });
+}
+
+// querySessions is queryAll's shell sessions.
+export async function querySessions(bin: string): Promise<SessionInfo[] | undefined> {
+  return (await queryAll(bin))?.filter((s) => !isPort(s));
 }
 
 export async function listSessions(bin: string): Promise<SessionInfo[]> {
@@ -195,4 +210,119 @@ export async function waitForSession(
     await new Promise((r) => setTimeout(r, 500));
   }
   return undefined;
+}
+
+// ---- reminal copy / paste / expose ----
+
+export interface RunResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  // timedOut: it ran past its time and was stopped.
+  timedOut?: boolean;
+  // cancelled: the user stopped it.
+  cancelled?: boolean;
+}
+
+// runReminal runs one reminal command and gives back what it printed.
+export function runReminal(bin: string, args: string[], timeoutMs: number, cwd?: string, signal?: AbortSignal): Promise<RunResult> {
+  return new Promise((resolve) => {
+    execFile(bin, args, { env: processEnv(), timeout: timeoutMs, windowsHide: true, cwd, signal }, (err, stdout, stderr) => {
+      const cancelled = !!signal?.aborted;
+      resolve({
+        ok: !err,
+        stdout: String(stdout ?? ""),
+        stderr: String(stderr ?? "") || (err && !stdout ? String(err.message) : ""),
+        timedOut: !cancelled && !!err && (err as { killed?: boolean }).killed === true,
+        cancelled,
+      });
+    });
+  });
+}
+
+// copyCodeOf is the code `reminal copy` printed ("Copy code: ABCDE-FGHJK").
+export function copyCodeOf(stdout: string): string | undefined {
+  // Only a code of the shape reminal hands out (an older reminal's is 8
+  // characters): anything else is never shown or copied as one.
+  return /^Copy code:\s*([A-Z0-9]{5}-[A-Z0-9]{5}|[A-Z0-9]{4}-[A-Z0-9]{4})\s*$/m.exec(stdout)?.[1];
+}
+
+// pasteCode takes what someone typed or pasted into the Paste box: the code
+// alone, in any case and with or without its dash, or the whole
+// `reminal paste <code>` line. It gives the code as reminal prints it, or
+// undefined when there is none.
+export function pasteCode(input: string): string | undefined {
+  // The code may be typed in two halves; a path after it is not part of it.
+  const words = input.trim().replace(/^reminal\s+paste\s+/i, "").split(/\s+/);
+  const alnum = (w: string | undefined, n: number) => !!w && new RegExp(`^[A-Za-z0-9]{${n}}$`).test(w);
+  let code = words[0]?.replace(/^([A-Za-z0-9]{4,5})-([A-Za-z0-9]{4,5})$/, "$1$2") ?? "";
+  if (alnum(words[0], 5) && alnum(words[1], 5)) code = words[0] + words[1];
+  if (!alnum(code, 10) && !alnum(code, 8)) return undefined;
+  code = code.toUpperCase();
+  return code.length === 10 ? `${code.slice(0, 5)}-${code.slice(5)}` : code; // 8: an older reminal's code; reminal explains
+}
+
+// savedPathOf is where `reminal paste` put what it received ("Saved <path>").
+export function savedPathOf(stdout: string): string | undefined {
+  return /^Saved (.+)$/m.exec(stdout)?.[1]?.trim();
+}
+
+// exposedOf is the public link and PIN `reminal expose` printed.
+export function exposedOf(stdout: string): { url?: string; pin?: string; link?: string } {
+  return {
+    url: /Public URL:\s*(\S+)/.exec(stdout)?.[1],
+    pin: /PIN:\s*(\d+)/.exec(stdout)?.[1],
+    link: /Quick link:\s*(\S+)/.exec(stdout)?.[1],
+  };
+}
+
+// problemOf is the line of reminal's output worth showing someone when a
+// command fails: its last non-empty line, without a leading "error: ", as
+// plain text (it can carry names chosen on another machine).
+export function problemOf(r: RunResult): string {
+  if (r.timedOut) return "it took too long and was stopped.";
+  const lines = (r.stderr || r.stdout).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  return plainText((lines[lines.length - 1] ?? "reminal didn't say why.").replace(/^error:\s*/i, ""));
+}
+
+// plainText is text from outside the extension (reminal's output, names
+// from another machine) made fit for a notification, which reads
+// [text](target) as a link: no brackets, no control or direction-changing
+// characters, and not too long.
+export function plainText(s: string, max = 300): string {
+  const t = s.replace(/[[\]]/g, "").replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+// stopArgs stops a shared port by its forward's id, so it is that forward
+// and no other that stops; undefined for an id that isn't one.
+export function stopArgs(s: SessionInfo): string[] | undefined {
+  if (!/^[A-Za-z0-9]+$/.test(s.id)) return undefined;
+  return ["stop", "--yes", "--", s.id];
+}
+
+// stillShared is the forward with this id among what reminal lists now, if
+// it is still a shared port.
+export function stillShared(list: SessionInfo[] | undefined, id: string): SessionInfo | undefined {
+  return list?.find((x) => x.id === id && isPort(x));
+}
+
+// alreadyExposedOf is the link `reminal expose` printed for a port that was
+// already shared ("Port 3000 is already exposed: <url>").
+export function alreadyExposedOf(stdout: string): string | undefined {
+  return /already exposed:\s*(\S+)/.exec(stdout)?.[1];
+}
+
+// isWebLink is a link that is safe to hand to the browser: http or https.
+export function isWebLink(u: string | undefined): u is string {
+  return !!u && /^https?:\/\//i.test(u);
+}
+
+// validPort is the port in what someone typed ("3000" or "localhost:3000"),
+// or undefined when it isn't one.
+export function validPort(v: string): number | undefined {
+  const t = v.trim().replace(/^(localhost|127\.0\.0\.1):/i, "");
+  if (!/^\d{1,5}$/.test(t)) return undefined;
+  const n = Number(t);
+  return n >= 1 && n <= 65535 ? n : undefined;
 }

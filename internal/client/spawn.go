@@ -32,6 +32,9 @@ type SpawnedSession struct {
 	// Phases is how its start went, in parts (ms: StartMark), from an agent
 	// that says it; none from one from before.
 	Phases map[string]int64 `json:"phases,omitempty"`
+	// Error, from a port forward, is why it couldn't reach the relay; it has
+	// ended, and the other fields are empty.
+	Error string `json:"error,omitempty"`
 }
 
 // Spawn launches a detached headless reminal child via the running

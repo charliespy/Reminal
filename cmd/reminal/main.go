@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -180,7 +181,7 @@ func main() {
 			}
 			return
 		case "info":
-			jsonOut, all, withQR := false, false, false
+			jsonOut, all, withQR, ports := false, false, false, false
 			arg := ""
 			for _, a := range os.Args[2:] {
 				switch {
@@ -190,11 +191,13 @@ func main() {
 					all = true
 				case a == "--qr":
 					withQR = true
+				case a == "--ports":
+					ports = true
 				case !strings.HasPrefix(a, "-") && arg == "":
 					arg = a
 				}
 			}
-			if err := runInfo(arg, jsonOut, all, withQR); err != nil {
+			if err := runInfo(arg, jsonOut, all, withQR, ports); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
@@ -917,7 +920,7 @@ func printHelp() {
 		{"reminal kill [id|name] [--machine <id|name>] [-y]", "Fully terminate a shell session — here or on a machine you own (irreversible)"},
 		{"reminal restore [id|name|--all]", "Bring back sessions a restart ended: same id and PIN, scrollback, agent resumed"},
 		{"reminal send <file>", "Push a file to every connected viewer (web auto-downloads)"},
-		{"reminal copy [--ttl <dur>] [-f] <file>", "Offer a file for pickup elsewhere; prints a one-time code"},
+		{"reminal copy [--ttl <dur>] [-f] <file|folder>", "Offer a file or folder for pickup elsewhere; prints a one-time code"},
 		{"reminal paste <code> [dest]", "Fetch a file offered by 'reminal copy' (default dest: .)"},
 		{"reminal notify <message>", "Push a notification to viewers (browser notification on web)"},
 		{"reminal connections", "List currently attached viewers with connect time"},
@@ -1164,7 +1167,7 @@ func sendControl(pid int, cmd string, timeout ...time.Duration) (string, error) 
 	}
 }
 
-// runCopyCmd implements `reminal copy [--ttl <dur>] [--foreground] <file>`.
+// runCopyCmd implements `reminal copy [--ttl <dur>] [--foreground] <file|folder>`.
 // By default it forks a detached holder so the shell isn't blocked;
 // --foreground (-f) keeps the offer in this terminal. --__hold/--handshake-fd
 // are internal flags the detached holder is re-invoked with.
@@ -1173,6 +1176,7 @@ func runCopyCmd(args []string) error {
 	var path string
 	foreground := false
 	hold := false
+	archive := ""
 	handshakeFD := 0
 	handshakeAddr := ""
 	for i := 0; i < len(args); i++ {
@@ -1195,6 +1199,9 @@ func runCopyCmd(args []string) error {
 			foreground = true
 		case a == "--__hold":
 			hold = true
+		case a == "--__archive" && i+1 < len(args):
+			archive = args[i+1]
+			i++
 		case a == "--handshake-fd" && i+1 < len(args):
 			handshakeFD = client.ParseHandshakeFD(args[i : i+2])
 			i++
@@ -1206,7 +1213,7 @@ func runCopyCmd(args []string) error {
 		}
 	}
 	if path == "" {
-		return errors.New("usage: reminal copy [--ttl <dur>] [--foreground] <file>")
+		return errors.New("usage: reminal copy [--ttl <dur>] [--foreground] <file|folder>")
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -1214,7 +1221,7 @@ func runCopyCmd(args []string) error {
 	}
 	switch {
 	case hold:
-		return client.RunCopyHold(abs, ttl, handshakeFD, handshakeAddr)
+		return client.RunCopyHold(abs, archive, ttl, handshakeFD, handshakeAddr)
 	case foreground:
 		return client.RunCopy(abs, ttl)
 	default:
@@ -1393,6 +1400,30 @@ func joinIDs(all []session.Active) string {
 	return strings.Join(ids, ", ")
 }
 
+// sessionIDLike is the shape of a session or forward id.
+var sessionIDLike = regexp.MustCompile(`^[A-Za-z0-9]{8}$`)
+
+// resolveStopTarget is what `reminal stop` acts on. With --yes and an
+// argument shaped like an id, that id and nothing else: no name, prefix or
+// folder match, so a script stopping something that has already gone can't
+// stop a different session instead.
+func resolveStopTarget(arg string, yes bool) (*session.Active, error) {
+	arg = strings.TrimSpace(arg)
+	if !yes || !sessionIDLike.MatchString(arg) {
+		return resolveActive(arg)
+	}
+	all, err := session.ReadAllActive()
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].ID == strings.ToUpper(arg) {
+			return &all[i], nil
+		}
+	}
+	return nil, fmt.Errorf("no session or port forward with id %s", strings.ToUpper(arg))
+}
+
 func isAllDigits(s string) bool {
 	if s == "" {
 		return false
@@ -1415,7 +1446,7 @@ func isAllDigits(s string) bool {
 // a viewer disconnect by mistake. `-y` skips the "press Enter to continue"
 // gate for scripting.
 func runStop(idArg string, yes bool) error {
-	a, err := resolveActive(idArg)
+	a, err := resolveStopTarget(idArg, yes)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return errors.New("no active reminal session to stop")
@@ -2358,7 +2389,10 @@ func parseDuration(s string) (time.Duration, error) {
 // With --all it prints connect details for every shell session at once — the
 // "iterate all my sessions" path — compact by default, full banner + QR per
 // session under --qr. --json emits machine-readable output for any of these.
-func runInfo(arg string, jsonOut, all, withQR bool) error {
+// With --all --json --ports the list also has each `reminal expose` forward,
+// marked "kind": "port", after the shells; tools such as the VS Code
+// extension read it. Without --ports it is shells only, as it always was.
+func runInfo(arg string, jsonOut, all, withQR, ports bool) error {
 	if all {
 		allSessions, err := session.ReadAllActive()
 		if err != nil {
@@ -2367,14 +2401,19 @@ func runInfo(arg string, jsonOut, all, withQR bool) error {
 		shells := matchSessions(allSessions, func(a session.Active) bool { return !a.IsPort() })
 		// recent-first, same ordering as `reminal list`
 		sort.Slice(shells, func(i, j int) bool { return shells[i].LastActive().After(shells[j].LastActive()) })
-		if len(shells) == 0 {
+		var forwards []*session.Active
+		if ports && jsonOut {
+			forwards = matchSessions(allSessions, func(a session.Active) bool { return a.IsPort() })
+			sort.Slice(forwards, func(i, j int) bool { return forwards[i].Port < forwards[j].Port })
+		}
+		if len(shells) == 0 && len(forwards) == 0 {
 			fmt.Println("No reminal shell sessions running.")
 			return nil
 		}
 		if jsonOut {
-			records := make([]any, len(shells))
-			for i, a := range shells {
-				records[i] = client.InfoJSON(a)
+			records := make([]any, 0, len(shells)+len(forwards))
+			for _, a := range append(shells, forwards...) {
+				records = append(records, client.InfoJSON(a))
 			}
 			return json.NewEncoder(os.Stdout).Encode(records)
 		}

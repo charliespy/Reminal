@@ -152,9 +152,12 @@ func RunCopy(path string, ttl time.Duration) error {
 	if ttl <= 0 {
 		ttl = DefaultCopyTTL
 	}
-	if err := validateCopyFile(path); err != nil {
+	src, archive, skipped, cleanup, err := prepareCopy(path)
+	if err != nil {
 		return err
 	}
+	defer cleanup()
+	noteSkipped(skipped)
 	code, err := generateCode()
 	if err != nil {
 		return err
@@ -173,7 +176,7 @@ func RunCopy(path string, ttl time.Duration) error {
 	fmt.Printf("Waiting for paste (expires in %s, Ctrl-C to cancel)…\n", ttl)
 
 	done := make(chan error, 1)
-	go func() { done <- runSource(fc, code, path) }()
+	go func() { done <- runSource(fc, code, src, archive) }()
 
 	select {
 	case err := <-done:
@@ -205,9 +208,18 @@ func RunCopyBackground(path string, ttl time.Duration) error {
 	if ttl <= 0 {
 		ttl = DefaultCopyTTL
 	}
-	if err := validateCopyFile(path); err != nil {
+	src, archive, skipped, cleanup, err := prepareCopy(path)
+	if err != nil {
 		return err
 	}
+	// From here the holder owns a folder's snapshot and removes it when it
+	// ends; until it has started, it is ours to remove.
+	started := false
+	defer func() {
+		if !started {
+			cleanup()
+		}
+	}()
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate self: %w", err)
@@ -219,7 +231,11 @@ func RunCopyBackground(path string, ttl time.Duration) error {
 	}
 	defer devnull.Close()
 
-	cmd := exec.Command(exe, "copy", "--__hold", "--ttl", ttl.String(), path)
+	args := []string{"copy", "--__hold", "--ttl", ttl.String()}
+	if archive != "" {
+		args = append(args, "--__archive", archive)
+	}
+	cmd := exec.Command(exe, append(args, src)...)
 	cmd.Stdin = devnull
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull
@@ -232,6 +248,7 @@ func RunCopyBackground(path string, ttl time.Duration) error {
 		return fmt.Errorf("start background holder: %w", err)
 	}
 	afterStart()
+	started = true
 	reapDetached(cmd)
 
 	line, err := recv(spawnHandshakeTimeout)
@@ -247,7 +264,12 @@ func RunCopyBackground(path string, ttl time.Duration) error {
 	}
 	fmt.Printf("Copy code: %s\n", displayCode(hs.Code))
 	fmt.Printf("On the other machine, run:  reminal paste %s\n", displayCode(hs.Code))
-	fmt.Printf("Holding %s in the background (pid %d, expires in %s).\n", filepath.Base(path), hs.PID, ttl)
+	what := filepath.Base(path)
+	if archive != "" {
+		what = "the folder " + folderName(path)
+	}
+	fmt.Printf("Holding %s in the background (pid %d, expires in %s).\n", what, hs.PID, ttl)
+	noteSkipped(skipped)
 	// `kill` also works in PowerShell (an alias of Stop-Process), so the hint
 	// holds on every platform.
 	fmt.Printf("Cancel with:  kill %d\n", hs.PID)
@@ -258,9 +280,12 @@ func RunCopyBackground(path string, ttl time.Duration) error {
 // relay, reports the code back to its parent over handshakeFD, then blocks
 // serving the first valid paste (or until ttl). Its stdio is /dev/null, so
 // all user-facing output happened in the parent already.
-func RunCopyHold(path string, ttl time.Duration, handshakeFD int, handshakeAddr string) error {
+func RunCopyHold(path, archive string, ttl time.Duration, handshakeFD int, handshakeAddr string) error {
 	if ttl <= 0 {
 		ttl = DefaultCopyTTL
+	}
+	if archive != "" {
+		defer removeCopyTemp(path) // the folder's snapshot, made for this hold
 	}
 	report := func(hs copyHandshake) {
 		hf, err := handshakeWriter(handshakeFD, handshakeAddr)
@@ -291,7 +316,7 @@ func RunCopyHold(path string, ttl time.Duration, handshakeFD int, handshakeAddr 
 
 	fc := &wsFrameConn{conn: conn}
 	done := make(chan error, 1)
-	go func() { done <- runSource(fc, code, path) }()
+	go func() { done <- runSource(fc, code, path, archive) }()
 	select {
 	case err := <-done:
 		return err
@@ -339,4 +364,11 @@ func RunPaste(codeInput, dest string) error {
 	}
 	fmt.Printf("Saved %s\n", path)
 	return nil
+}
+
+// noteSkipped says how many entries a folder's snapshot left out.
+func noteSkipped(n int) {
+	if n > 0 {
+		fmt.Printf("Left out %d link(s) or special file(s); only folders and regular files are copied.\n", n)
+	}
 }
