@@ -413,3 +413,58 @@ func TestPiTurningAMessageAwayLateIsTurnedAway(t *testing.T) {
 		}
 	}
 }
+
+// Cursor CLI turning away the API key it was given, as it prints it and
+// exits: its words stay above the shell's prompt, the shell in front. That
+// is logged out — and, unlike a missing login, a refused key: the key is
+// what to change. Read as Cursor's, not the shell's, and not from a
+// sentence that only names the words.
+func TestACursorKeyItWasGivenAndRefusedIsSaidAsSo(t *testing.T) {
+	refusedThenShell := "⚠ Warning: The provided API key is invalid.\n" +
+		"The API key was loaded from the CURSOR_API_KEY environment variable.\n" +
+		"Please check you have the right key, create a new one, or authenticate without it.\n" +
+		"user@host:~/work$ "
+	inFront := "⚠ Warning: The provided API key is invalid.\n" +
+		"The API key was loaded from the CURSOR_API_KEY environment variable.\n" +
+		"Please check you have the right key, create a new one, or authenticate without it."
+	for _, c := range []struct {
+		name, screen, prog string
+	}{
+		{"exited, the shell in front", refusedThenShell, "bash"},
+		{"still in front", inFront, "cursor-agent"},
+	} {
+		tail := harnessTail(c.screen, harnessRows)
+		if !harnessProblemIn(tail, c.prog) {
+			t.Errorf("%s: not read as logged out", c.name)
+		}
+		if got := harnessKeyRefusedIn(tail); got != "cursor-agent" {
+			t.Errorf("%s: refused key read as %q, want cursor-agent", c.name, got)
+		}
+		a := &Agent{}
+		a.noteHarnessHealth(c.screen, c.prog, false)
+		a.noteHarnessHealth(c.screen, c.prog, false)
+		if !a.harnessDown() || a.harnessKeyRefused() != "cursor-agent" {
+			t.Errorf("%s: down %v, refused %q; want down, by cursor-agent", c.name, a.harnessDown(), a.harnessKeyRefused())
+		}
+		// Its key changed and it runs again, at its prompt: cleared.
+		for i := 0; i < harnessUpAfter; i++ {
+			a.noteHarnessHealth(" → Plan, search, build anything\n  Auto", "cursor-agent", false)
+		}
+		if a.harnessDown() || a.harnessKeyRefused() != "" {
+			t.Errorf("%s: still down %v / refused %q once it runs", c.name, a.harnessDown(), a.harnessKeyRefused())
+		}
+	}
+	// No login at all: logged out, but no key was refused.
+	a := &Agent{}
+	noLogin := "  Press any key to log in..."
+	a.noteHarnessHealth(noLogin, "cursor-agent", false)
+	a.noteHarnessHealth(noLogin, "cursor-agent", false)
+	if !a.harnessDown() || a.harnessKeyRefused() != "" {
+		t.Errorf("no login: down %v, refused %q; want down, none refused", a.harnessDown(), a.harnessKeyRefused())
+	}
+	// Another agent's sentence naming the words is not Cursor refusing a key.
+	prose := "I checked the logs: the provided API key is invalid, so the deploy step failed."
+	if harnessProblemIn(prose, "claude") || harnessKeyRefusedIn(prose) != "" {
+		t.Error("a sentence naming the words was read as Cursor refusing its key")
+	}
+}
