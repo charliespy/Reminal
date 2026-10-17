@@ -81,7 +81,11 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 	// with "Error: No API key found for the selected model." Its startup
 	// warning ("No models available. Use /login …") sits above its editor,
 	// out of the rows read, and stays there after a /login, so it is not used.
-	"pi": regexp.MustCompile(`^\d+(\.\d+)?%/0(\([a-z]+\))?unknown$|^[^a-z0-9]*error:noapikeyfoundfortheselected`),
+	// With a login its provider refuses (a token gone stale, a wrong key) it
+	// takes the message and answers each with the service's 401 on a row of
+	// its own ("Error: 401", then the service's words), at its prompt, ready
+	// for more: it read as done.
+	"pi": regexp.MustCompile(`^\d+(\.\d+)?%/0(\([a-z]+\))?unknown$|^[^a-z0-9]*error:(noapikeyfoundfortheselected|401([^0-9]|$))`),
 	// Claude Code's own login menu (a fresh machine shows it before anything
 	// else), and its sign-in step once a way is picked: "Opening browser to
 	// sign in…" under a spinner first, then the link. Its own rows, from

@@ -151,6 +151,18 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		"pi, turned away": " Error: No API key found for the selected      \n model.                                        \n" +
 			" Use /login to log into a provider via OAuth   \n or API key. See:                              \n" +
 			"───────────────────────────────────────────────\n\n───────────────────────────────────────────────\n/work",
+		// pi 0.74 with a login its provider refuses, 80 columns wide, as
+		// captured: each message answered with the 401 (Anthropic's, an
+		// OAuth token it does not take), its status line naming the model.
+		"pi, refused": " Error: 401\n" +
+			" {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth access\n" +
+			" token is invalid.\"},\"request_id\":\"req_011Cg7iwkH9FtQmsb66Xt71T\"}\n" +
+			strings.Repeat("─", 80) + "\n\n" + strings.Repeat("─", 80) + "\n/work\n" +
+			"0.0%/1.0M (auto)                            (anthropic) claude-opus-4-7 • medium",
+		// And OpenAI's, whose words follow the status on its row (the shape
+		// of its SDK's error; not captured).
+		"pi, refused by OpenAI": " Error: 401 Incorrect API key provided: sk-STAND*****eady. You can find your API\n" +
+			"/work\n0.0%/400k (auto)                                  (openai) gpt-5 • medium",
 		"amp":                "No API key found. Starting login flow...\nWould you like to log in to Amp? [(y)es, (n)o]: ",
 		"codex":              "  Sign in with ChatGPT to use Codex as part of your paid plan\n  › 1. Sign in with ChatGPT\n    2. Provide your own API key",
 		"codex, turned away": "■ unexpected status 401 Unauthorized: Incorrect API key provided:\nkey at https://platform.openai.com/account/api-keys.",
@@ -386,6 +398,9 @@ func TestPiWithAModelIsNotLoggedOut(t *testing.T) {
 			"↑5 ↓3 0.0%/128k (auto)                                                    mock-1",
 		" The user saw \"Error: No API key found for the selected model.\" in their app.\n/tmp\n0.4%/128k (auto)   mock-1",
 		"0.0%/0 (auto)   unknown is what the status line said",
+		// Its tools' output, and its words about a 401, are not its own.
+		" The API answers Error: 401 when the token is stale.\n/tmp\n0.4%/128k (auto)   mock-1",
+		" Error: 4013 items synced\n/tmp\n0.4%/128k (auto)   mock-1",
 	} {
 		if harnessProblemIn(harnessTail(ok, harnessRows), "pi") {
 			t.Errorf("pi with a model read as logged out:\n%s", ok)
