@@ -9,7 +9,7 @@
 # yet: a test file under a race build constraint is in a shard all the same.
 set -eu
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-T=$(mktemp -d); trap 'rm -rf "${T:?}"' EXIT
+T=$(mktemp -d); trap '"$DIR/../rm-tmp.sh" "$T"' EXIT
 fail=0
 { go test -list '.*' ./internal/client; go test -race -list '.*' ./internal/client; } | grep -E '^(Test|Example|Fuzz)[A-Za-z0-9_]*$' | sort -u > "$T/all"
 for N in 4; do

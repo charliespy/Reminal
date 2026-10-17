@@ -12,7 +12,7 @@ set -eu
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$DIR/../.." && pwd)
 OUT=$(mktemp -d)
-trap 'rm -rf "$OUT"' EXIT
+trap '"$ROOT/scripts/rm-tmp.sh" "$OUT"' EXIT
 GOMOD=${CLAUDE_ARGS_GOMOD:-reminal-claude-args-gomod}
 docker run --rm -v "$ROOT":/src:ro -v "$OUT":/out -v "$GOMOD":/go/pkg/mod -e REMINAL_CLAUDE_ARGS=/out/args.json \
   golang:1.26-bookworm sh -c 'cp -r /src /w && cd /w && go test -count=1 -run TestClaudeResumeArgsForTheRig ./internal/client/ >/dev/null'
