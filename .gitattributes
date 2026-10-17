@@ -1,4 +1,12 @@
+# Every file a binary embeds (//go:embed) is checked out exactly as it is
+# stored, never converted: a Windows checkout with autocrlf would otherwise
+# build a binary that carries other bytes than every other build's.
+# cmd/reminal's TestEveryEmbeddedFileIsCheckedOutAsStored holds each embed to
+# a line here.
+#
 # The viewer's sources are served, hashed and SRI-pinned exactly as they are
-# in the repository: never converted (a Windows checkout with autocrlf would
-# otherwise build a page whose scripts differ from every other build's).
+# in the repository.
 internal/client/web/** -text
+# The pi extension reminal writes for pi, and fingerprints against the copy it
+# carries (internal/piext).
+internal/piext/extension/** -text
