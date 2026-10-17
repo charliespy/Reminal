@@ -23,7 +23,8 @@ func TestAgentsLoginScreensAsTheyDrawThem(t *testing.T) {
 		{"cursor-agent", "cursor-agent", true},
 		{"cursor-first", "cursor-agent", true},
 		// Codex 0.162.1: its sign-in menu; signing in through the browser;
-		// a key it can no longer use (its 401 on the first turn).
+		// a key it can no longer use (its 401 on the first turn, a refusal:
+		// harnessKeyRefusals).
 		{"codex", "codex", true},
 		{"codex-badkey", "codex", true},
 		{"codex-expired", "codex", true},
@@ -46,12 +47,15 @@ func TestAgentsLoginScreensAsTheyDrawThem(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := harnessProblemIn(harnessTail(string(raw), harnessRowsFor(c.prog)), c.prog); got != c.out {
+		// Logged out as noteHarnessHealth reads it with c.prog in front: a
+		// sign-in screen, or c.prog refusing the key it was given.
+		tail := harnessTail(string(raw), harnessRowsFor(c.prog))
+		if got := harnessProblemIn(tail, c.prog) || harnessKeyRefusedBy(tail, c.prog); got != c.out {
 			t.Errorf("%s (%s): logged out %v, want %v", c.file, c.prog, got, c.out)
 		}
 		// Another agent's sign-in screen, seen on this one's (a tool's
 		// output): not this one logged out.
-		if c.out && c.prog != "opencode" && harnessProblemIn(harnessTail(string(raw), harnessRows), "opencode") {
+		if other := harnessTail(string(raw), harnessRows); c.out && c.prog != "opencode" && (harnessProblemIn(other, "opencode") || harnessKeyRefusedBy(other, "opencode")) {
 			t.Errorf("%s: read as opencode's own", c.file)
 		}
 	}
