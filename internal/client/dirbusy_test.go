@@ -5,6 +5,8 @@ package client
 
 import (
 	"errors"
+	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,6 +32,85 @@ func TestABucketSaysWhenItWouldTakeOne(t *testing.T) {
 	}
 	if ok, _ := tb.take(now.Add(wait)); !ok {
 		t.Error("asked again after the wait it gave, refused")
+	}
+}
+
+// Many refused at once are each told their own time, one token apart, and
+// every one of them is taken when it comes back at it: not all told the
+// same time, all back at once, one taken and the rest refused again (what
+// left a hammered machine with requests it could no longer even answer).
+// A caller only checked (allow) is owed no time.
+func TestCallersRefusedTogetherAreToldTimesInTurn(t *testing.T) {
+	now := time.Now()
+	tb := newTokenBucket(32, 16)
+	tb.last = now
+	for i := 0; i < 32; i++ {
+		tb.take(now)
+	}
+	if tb.allow(now) {
+		t.Fatal("an empty bucket allowed one")
+	}
+	const n = 28
+	waits := make([]time.Duration, n)
+	for i := range waits {
+		ok, w := tb.take(now)
+		if ok {
+			t.Fatalf("refusal %d was taken", i)
+		}
+		waits[i] = w
+	}
+	for i := 1; i < n; i++ {
+		if d := waits[i] - waits[i-1]; d < 62*time.Millisecond || d > 63*time.Millisecond {
+			t.Fatalf("waits %v then %v: want one token (62.5 ms) apart", waits[i-1], waits[i])
+		}
+	}
+	if waits[0] != 63*time.Millisecond {
+		t.Fatalf("the first refused waits %v, want 63ms (a token's time, the checked caller owed nothing)", waits[0])
+	}
+	for i, w := range waits {
+		if ok, again := tb.take(now.Add(w)); !ok {
+			t.Fatalf("caller %d back at its %v was refused again (told %v)", i, w, again)
+		}
+	}
+}
+
+// A crowd of queries at once, each refused one asking again exactly when
+// it was told, on the machine's own allowances (query, then busy): every
+// one is answered, none past the busy allowance. Told one time each, the
+// same crowd left 23 of 60 unanswered. No clock: each ask is at a time of
+// its own on a timeline.
+func TestACrowdRefusedAtOnceIsAllAnsweredInTurn(t *testing.T) {
+	t0 := time.Now()
+	query, busy := newTokenBucket(32, 16), newTokenBucket(64, 32) // as newDirLimits
+	query.last, busy.last = t0, t0
+	type ask struct {
+		at time.Duration
+		id int
+	}
+	var asks []ask
+	for i := 0; i < 60; i++ {
+		asks = append(asks, ask{time.Duration(i) * 50 * time.Microsecond, i})
+	}
+	answered, unanswered := 0, 0
+	for n := 0; len(asks) > 0; n++ {
+		if n > 10000 {
+			t.Fatalf("still asking after %d asks", n)
+		}
+		sort.Slice(asks, func(i, j int) bool { return asks[i].at < asks[j].at })
+		a := asks[0]
+		asks = asks[1:]
+		ok, wait := query.take(t0.Add(a.at))
+		switch {
+		case ok:
+			answered++
+		case !busy.allow(t0.Add(a.at)):
+			unanswered++
+		default:
+			asks = append(asks, ask{a.at + wait, a.id})
+		}
+	}
+	if answered != 60 || unanswered != 0 {
+		t.Fatalf("%d answered, %d left unanswered; want all 60 answered", answered, unanswered)
 	}
 }
 
@@ -151,5 +232,25 @@ func TestARequestOverTheBusyAllowanceIsCounted(t *testing.T) {
 	a.dirBusy(nil, protocol.TypeDirQuery, "", time.Second)
 	if n := a.dirUnanswered.Load(); n != 1 {
 		t.Errorf("unanswered = %d, want 1", n)
+	}
+}
+
+// What callers refused together are told stays bounded by the bucket: a
+// crowd far larger than it, or one caller asking again without waiting, is
+// not told times further and further out (each refusal used to push every
+// later caller's time on, up to dirBusyMaxWait).
+func TestRefusedCallersAreNeverToldPastWhatTheBucketHolds(t *testing.T) {
+	t0 := time.Unix(1e9, 0)
+	tb := newTokenBucket(32, 16)
+	tb.last, tb.tokens = t0, 0
+	// The longest wait a bucket of 32 at 16 a second can owe: 33 tokens.
+	bound := time.Duration(math.Ceil(33.0/16*1000)) * time.Millisecond
+	for i := 0; i < 10000; i++ {
+		if _, w := tb.take(t0); w > bound {
+			t.Fatalf("caller %d told %v, past %v", i, w, bound)
+		}
+	}
+	if tb.owed > tb.max {
+		t.Errorf("owed %v, more than the bucket holds (%v)", tb.owed, tb.max)
 	}
 }
