@@ -65,7 +65,7 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 	"amp":    regexp.MustCompile(`wouldyouliketologintoamp|noapikeyfound\.startingloginflow`),
 	// Codex: its sign-in menu, signing in through the browser, and a key it
 	// cannot use.
-	"codex": regexp.MustCompile(`signinwithchatgpt|provideyourownapikey|incorrectapikeyprovided|^[^a-z0-9]*finishsigninginviayourbrowser[^a-z0-9]*$`),
+	"codex": regexp.MustCompile(`signinwithchatgpt|provideyourownapikey|^[^a-z0-9]*finishsigninginviayourbrowser[^a-z0-9]*$`),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), and the steps of
 	// setting one up.
@@ -124,6 +124,10 @@ var harnessKeyRefusals = map[string]*regexp.Regexp{
 	// API key provided: sk-…"), then sits at its prompt again: it read as
 	// done. A key it was given and the service refused, from the row's start.
 	"opencode": regexp.MustCompile(`^[^a-z0-9]*incorrectapikeyprovided`),
+	// Codex with an OpenAI key the service refuses: "■ unexpected status 401
+	// Unauthorized: Incorrect API key provided: …", from the row's start (the
+	// same words in a sentence, or a tool's output at a shell, are not it).
+	"codex": regexp.MustCompile(`^[^a-z0-9]*(unexpectedstatus40[13][a-z]*:)?incorrectapikeyprovided`),
 }
 
 // harnessKeyRefusedIn reports whether the bottom of a screen has a CLI
@@ -131,6 +135,21 @@ var harnessKeyRefusals = map[string]*regexp.Regexp{
 // rows as harnessProblemIn. After the CLI exits on it, its words stay above
 // the shell's prompt, the shell in front — so the CLI is the one whose
 // words they are, not the program here.
+// harnessKeyRefusedBy reports whether the bottom of a screen has prog saying
+// it refused its key (harnessKeyRefusals), read as harnessKeyRefusedIn reads.
+func harnessKeyRefusedBy(tail, prog string) bool {
+	re := harnessKeyRefusals[prog]
+	if re == nil {
+		return false
+	}
+	for _, row := range strings.Split(tail, "\n") {
+		if flat := strings.ToLower(strings.Join(strings.Fields(row), "")); flat != "" && re.MatchString(flat) {
+			return true
+		}
+	}
+	return false
+}
+
 func harnessKeyRefusedIn(tail string) string {
 	for _, row := range strings.Split(tail, "\n") {
 		flat := strings.ToLower(strings.Join(strings.Fields(row), ""))
@@ -328,8 +347,14 @@ func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 	if !atWork {
 		// A refused key is the CLI's own words only when that CLI is here,
 		// or exited just now and left them above the shell's prompt.
-		if r := harnessKeyRefusedIn(tail); r != "" && (r == prog || r == prev) {
-			refused = r
+		// Asked of those two by name: two CLIs' rows can read alike
+		// (OpenCode and Codex both pass on OpenAI's "Incorrect API key
+		// provided"), and the words are the one in front's.
+		for _, p := range []string{prog, prev} {
+			if p != "" && harnessKeyRefusedBy(tail, p) {
+				refused = p
+				break
+			}
 		}
 	}
 	bad := !atWork && (refused != "" || harnessProblemIn(tail, prog))

@@ -151,9 +151,8 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		"pi, turned away": " Error: No API key found for the selected      \n model.                                        \n" +
 			" Use /login to log into a provider via OAuth   \n or API key. See:                              \n" +
 			"───────────────────────────────────────────────\n\n───────────────────────────────────────────────\n/work",
-		"amp":                "No API key found. Starting login flow...\nWould you like to log in to Amp? [(y)es, (n)o]: ",
-		"codex":              "  Sign in with ChatGPT to use Codex as part of your paid plan\n  › 1. Sign in with ChatGPT\n    2. Provide your own API key",
-		"codex, turned away": "■ unexpected status 401 Unauthorized: Incorrect API key provided:\nkey at https://platform.openai.com/account/api-keys.",
+		"amp":   "No API key found. Starting login flow...\nWould you like to log in to Amp? [(y)es, (n)o]: ",
+		"codex": "  Sign in with ChatGPT to use Codex as part of your paid plan\n  › 1. Sign in with ChatGPT\n    2. Provide your own API key",
 		"qwen": "  │ Alibaba ModelStudio · Access Method                                      │\n" +
 			"  │                                                                          │\n" +
 			"  │ › Coding Plan                                                            │\n" +
@@ -656,5 +655,71 @@ func TestClaudeRefusingItsLoginIsSaidAsRefused(t *testing.T) {
 	// A sentence quoting the words is not a refusal.
 	if r := harnessKeyRefusedIn("The log said Please run /login · API Error: 401, so I retried."); r != "" {
 		t.Errorf("a sentence quoting the words read as %q refusing its login", r)
+	}
+}
+
+// Codex with a key the service refuses says so on a row of its own ("■
+// unexpected status 401 Unauthorized: Incorrect API key provided: …"). With
+// Codex in front, or just before the shell, that is logged out, by a refused
+// key. The same words at a plain shell (a curl, a script, OpenAI's SDK), in a
+// sentence, or with OpenCode in front are not Codex's; and Codex's words are
+// Codex's even where OpenCode's (which pass on the same service's) would read
+// alike.
+func TestACodexKeyRefusedIsCodexsOnlyAsItsOwn(t *testing.T) {
+	refused := "■ unexpected status 401 Unauthorized: Incorrect API key provided:\nkey at https://platform.openai.com/account/api-keys.\n\n› Ask Codex to do anything"
+	bare := "Incorrect API key provided: sk-STAND****eady.\n› Ask Codex to do anything"
+	for _, c := range []struct {
+		name   string
+		before []string
+		prog   string
+		screen string
+	}{
+		{"in front", []string{"codex"}, "codex", refused},
+		{"in front, the words alone", []string{"codex"}, "codex", bare},
+		{"just exited", []string{"codex", "bash"}, "bash", refused + "\nuser@host:~$ "},
+	} {
+		a := &Agent{}
+		for _, p := range c.before {
+			a.noteForeground(p, 0)
+		}
+		for i := 0; i < harnessDownAfter; i++ {
+			a.noteHarnessHealth(c.screen, c.prog, false)
+		}
+		if !a.harnessDown() || a.harnessKeyRefused() != "codex" {
+			t.Errorf("%s: down %v, refused %q; want down, by codex", c.name, a.harnessDown(), a.harnessKeyRefused())
+		}
+	}
+	for _, c := range []struct {
+		before []string
+		prog   string
+		screen string
+	}{
+		{[]string{"bash"}, "bash", "Incorrect API key provided: sk-abc.\nuser@host:~$ "},
+		{[]string{"bash"}, "bash", "openai.AuthenticationError: Error code: 401 - Incorrect API key provided\nuser@host:~$ "},
+		{[]string{"bash", "curl", "bash"}, "bash", "unexpected status 401 Unauthorized: Incorrect API key provided:\nuser@host:~$ "},
+		{[]string{"codex", "bash", "curl", "bash"}, "bash", "Incorrect API key provided: sk-abc.\nuser@host:~$ "},
+		{[]string{"codex"}, "codex", "• The log says Incorrect API key provided, so I swapped the key.\n› Ask Codex to do anything"},
+		{[]string{"claude"}, "claude", "Incorrect API key provided: sk-abc.\n❯  "},
+	} {
+		a := &Agent{}
+		for _, p := range c.before {
+			a.noteForeground(p, 0)
+		}
+		for i := 0; i < harnessDownAfter+2; i++ {
+			a.noteHarnessHealth(c.screen, c.prog, false)
+		}
+		if a.harnessDown() || a.harnessKeyRefused() != "" {
+			t.Errorf("after %v, %q: down %v, refused %q; want up", c.before, c.screen, a.harnessDown(), a.harnessKeyRefused())
+		}
+	}
+	// OpenCode's own refusal, with OpenCode in front, stays OpenCode's.
+	o := &Agent{}
+	o.noteForeground("opencode", 0)
+	oc := "  ┃  Incorrect API key provided: sk-STAND****eady.\n   /work   tab agents  ctrl+p commands"
+	for i := 0; i < harnessDownAfter; i++ {
+		o.noteHarnessHealth(oc, "opencode", false)
+	}
+	if !o.harnessDown() || o.harnessKeyRefused() != "opencode" {
+		t.Errorf("OpenCode in front: down %v, refused %q; want down, by opencode", o.harnessDown(), o.harnessKeyRefused())
 	}
 }
