@@ -450,6 +450,18 @@ type stagedFile struct {
 	main      bool
 }
 
+// bundleHealAllowed reports whether EnsureBundleInstalled may put this
+// build's bundle in place of a loose binary: never for a dev or manual
+// build, and never for one updated by what installed it (UpdatedByEnv),
+// whose loose binary is that installer's to keep — the heal replaces it with
+// a link into reminal.app and removes the helpers beside it.
+func bundleHealAllowed(currentVersion string) bool {
+	if currentVersion == "" || currentVersion == "dev" || currentVersion == "0.0.0" {
+		return false
+	}
+	return UpdatedBy() == ""
+}
+
 // EnsureBundleInstalled is the darwin self-heal for `reminal upgrade` run from an
 // OLDER version. That old updater, not knowing about the .app, extracts a new
 // release's inner binary LOOSE — stripping the sh.reminal code identity the daemon's
@@ -462,11 +474,8 @@ type stagedFile struct {
 // leaves the loose binary working (degraded) and it retries next run. Returns
 // ("", false) when there's nothing to do or on any error.
 func EnsureBundleInstalled(currentVersion string) (bundleCLI string, healed bool) {
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != "darwin" || !bundleHealAllowed(currentVersion) {
 		return "", false
-	}
-	if currentVersion == "" || currentVersion == "dev" || currentVersion == "0.0.0" {
-		return "", false // dev / manual build — never touch it
 	}
 	bin, err := os.Executable()
 	if err != nil {

@@ -55,9 +55,18 @@ func TestUpdatedByNeverChecksOrReplaces(t *testing.T) {
 		t.Errorf("SwitchChannel = %q, %v; want refused, saying %q", v, err, want)
 	}
 
+	// Nor does the macOS bundle heal put reminal.app in place of the loose
+	// binary its installer put there.
+	if bundleHealAllowed("2.0.33") {
+		t.Error("bundleHealAllowed: a build updated by its image would be replaced by a bundle")
+	}
+
 	// Unset, the same build is offered and may be replaced as before.
 	t.Setenv(UpdatedByEnv, "")
 	if !shouldCheck("2.0.33") || UpgradeBlockedReason("2.0.33") != "" {
 		t.Error("unset: a release build is still kept from updating itself")
+	}
+	if !bundleHealAllowed("2.0.33") || bundleHealAllowed("dev") {
+		t.Error("unset: the bundle heal is not as before (a release build heals, a dev build does not)")
 	}
 }
