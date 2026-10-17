@@ -63,8 +63,9 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 	// setting one up.
 	"qwen": regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey|^[^a-z0-9]*(connectaprovider|manuallyconnectalocalserver,proxy,orunsupportedprovider)[^a-z0-9]*$`),
 	// Cursor CLI: its first screen with no login ("Press any key to log
-	// in..." — a key typed there starts signing in), and the sign-in itself.
-	"cursor-agent": regexp.MustCompile(`^[^a-z0-9]*(pressanykeytologin|ifyourbrowserdidn.?topen,clickthislinktologin:?|pressqtoshowaqrcodetologin)`),
+	// in..." — a key typed there starts signing in), the sign-in itself, and
+	// a key it was given and cannot use (harnessKeyRefusals).
+	"cursor-agent": regexp.MustCompile(`^[^a-z0-9]*(pressanykeytologin|ifyourbrowserdidn.?topen,clickthislinktologin:?|pressqtoshowaqrcodetologin)|` + cursorKeyRefused),
 	// pi with no model to run on (no provider logged in) says so on its own
 	// status line, the last on its screen: its context "0" and its model
 	// "unknown" ("0.0%/0 (auto)   unknown"). A message sent it is turned away
@@ -81,6 +82,39 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 	// Not seen during the spinner, a logged-out Claude Code was read as at
 	// work, then done.
 	"claude": regexp.MustCompile(`^[^a-z0-9]*(\d\.)?(selectloginmethod:?$|claudeaccountwithsubscription·|anthropicconsoleaccount·apiusagebilling|openingbrowsertosignin|browserdidn.?topen\?usetheurl|pastecodehereifprompted)`),
+}
+
+// cursorKeyRefused is Cursor CLI turning away the API key it was given, from
+// the start of its own row: "⚠ Warning: The provided API key is invalid.",
+// then where the key came from ("The API key was loaded from the
+// CURSOR_API_KEY environment variable."), and it exits. A key that was
+// passed and refused, not a login missing: the key is what to change.
+const cursorKeyRefused = `^[^a-z0-9]*(warning:)?theprovidedapikeyisinvalid`
+
+// harnessKeyRefusals are, by CLI, the rows that say it refused the key it was
+// given (not that it has none): a subset of its harnessLoginScreens.
+var harnessKeyRefusals = map[string]*regexp.Regexp{
+	"cursor-agent": regexp.MustCompile(cursorKeyRefused),
+}
+
+// harnessKeyRefusedIn reports whether the bottom of a screen has a CLI
+// saying it refused its key, and which CLI ("" if none): read with the same
+// rows as harnessProblemIn. After the CLI exits on it, its words stay above
+// the shell's prompt, the shell in front — so the CLI is the one whose
+// words they are, not the program here.
+func harnessKeyRefusedIn(tail string) string {
+	for _, row := range strings.Split(tail, "\n") {
+		flat := strings.ToLower(strings.Join(strings.Fields(row), ""))
+		if flat == "" {
+			continue
+		}
+		for prog, re := range harnessKeyRefusals {
+			if re.MatchString(flat) {
+				return prog
+			}
+		}
+	}
+	return ""
 }
 
 // harnessLoginScreenIn reports whether a row is the sign-in screen of prog,
@@ -155,6 +189,9 @@ type harnessHealth struct {
 	// When the notice was first seen in this run of reads, and when it was
 	// first gone: what the next read is timed by (harnessReadAt).
 	seenAt, goneAt time.Time
+	// refused is the CLI whose words, while down, say it refused the key it
+	// was given (harnessKeyRefusedIn), "" when down for want of a login.
+	refused string
 }
 
 // harnessTail is the last n rows of a screen that have anything on them.
@@ -251,7 +288,12 @@ const harnessTurnProof = 10 * time.Second
 func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 	// The render carries its styling — "\x1b[1mLogin\x1b[m \x1b[1mexpired" —
 	// which would sit between the words; the text is what is read.
-	bad := !atWork && harnessProblemIn(harnessTail(stripANSI(render), harnessRowsFor(prog)), prog)
+	tail := harnessTail(stripANSI(render), harnessRowsFor(prog))
+	bad := !atWork && harnessProblemIn(tail, prog)
+	refused := ""
+	if bad {
+		refused = harnessKeyRefusedIn(tail)
+	}
 	now := harnessNow()
 	a.metaMu.Lock()
 	h := &a.harness
@@ -264,7 +306,11 @@ func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 			h.seenAt = now
 		}
 		h.gone = 0
-		if h.seen++; !h.down && h.seen >= harnessDownAfter {
+		// A CLI that refused its key and exited (no agent in front now):
+		// those are its last words, not a glimpse, and count at once — a
+		// read later, the seat was said to have "ended" in between.
+		exited := refused != "" && !isAgentProgram(prog)
+		if h.seen++; !h.down && (h.seen >= harnessDownAfter || exited) {
 			h.down, h.since, changed = true, now, true
 		}
 	} else {
@@ -275,6 +321,11 @@ func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 		if h.gone++; h.down && (h.gone >= harnessUpAfter || now.Sub(h.goneAt) >= harnessUpFor) {
 			h.down, changed = false, true
 		}
+	}
+	if !h.down {
+		h.refused = ""
+	} else if bad {
+		h.refused = refused
 	}
 	down := h.down
 	a.metaMu.Unlock()
@@ -306,6 +357,14 @@ func (a *Agent) harnessReadAt() time.Time {
 // 2 s before "Error: No API key found for the selected model." Two seconds of
 // work is no proof it took the message: the whole window is waited out.
 var harnessSlowToTurnAway = map[string]bool{"pi": true}
+
+// harnessKeyRefused is the CLI that, as the agent here is logged out,
+// refused the key it was given ("" when it has no login at all).
+func (a *Agent) harnessKeyRefused() string {
+	a.metaMu.Lock()
+	defer a.metaMu.Unlock()
+	return a.harness.refused
+}
 
 // harnessDown reports whether the agent here is logged out.
 func (a *Agent) harnessDown() bool {
