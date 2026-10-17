@@ -37,6 +37,14 @@ const harnessLoggedOut = "logged-out"
 // command to run. The command in the same breath is what tells it from an
 // agent's own prose about logins ("…was not logged in, so the redirect to
 // /login looped" does not match).
+// harnessLoginRefused is Claude Code's other shape, for a login it was
+// given and the service turned away: the command first, then the error
+// ("● Please run /login · API Error: 401 OAuth access token is invalid."),
+// on a line of its own — read from that line's start, so a sentence that
+// quotes it is not it. Missed, the agent sat at its prompt and read as
+// waiting for an approval.
+var harnessLoginRefused = regexp.MustCompile(`^(please)?run/login[·:.,\-]*apierror:40[13]([^0-9]|$)`)
+
 var harnessLoginNotice = regexp.MustCompile(`(loginexpired|notloggedin|invalidapikey|oauthtoken(has)?expired)[·:.,\-]*(please)?run/login`)
 
 // harnessLoginScreens are the sign-in screens other CLIs start on when they
@@ -258,6 +266,9 @@ func harnessProblemIn(tail, prog string) bool {
 // it as one once marked a working lead logged out and held its mail.
 func harnessNoticeRow(flat string, bottom bool) bool {
 	core := strings.TrimFunc(flat, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	if harnessLoginRefused.MatchString(core) {
+		return true // a line of its own, from its start
+	}
 	loc := harnessLoginNotice.FindStringIndex(core)
 	if loc == nil {
 		return false

@@ -509,3 +509,28 @@ func TestAKeyRefusedPhraseAtAPlainShellLeavesTheSeatUp(t *testing.T) {
 		t.Errorf("just after Cursor CLI: down %v, refused %q; want down, by cursor-agent", a.harnessDown(), a.harnessKeyRefused())
 	}
 }
+
+// Claude Code turning away a login it was given puts the command first:
+// "● Please run /login · API Error: 401 OAuth access token is invalid."
+// That is logged out too — and a sentence quoting it is not.
+func TestClaudeRefusingItsLoginIsLoggedOut(t *testing.T) {
+	screen := " ▐▛███▛█   Claude Code v2.1.296\n" +
+		"❯ hello\n" +
+		"● Please run /login · API Error: 401 OAuth access token is invalid.\n" +
+		"✻ Worked for 2s · done 10:25 AM\n" +
+		"────────────────────────────────────────\n" +
+		"❯  \n" +
+		"────────────────────────────────────────\n" +
+		"  ⏸ manual mode on · ? for shortcuts"
+	if !harnessProblemIn(harnessTail(screen, harnessRows), "claude") {
+		t.Error("Claude Code's \"Please run /login · API Error: 401\" was not read as logged out")
+	}
+	for _, prose := range []string{
+		"● The log said: please run /login · API Error: 401, so I retried with a new token.",
+		"● I fixed the 401: the app now asks users to run /login · API Error handling is done.",
+	} {
+		if harnessProblemIn(prose, "claude") {
+			t.Errorf("a sentence naming it was read as logged out: %q", prose)
+		}
+	}
+}
