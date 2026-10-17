@@ -8054,6 +8054,7 @@
     let heldBytes = 0;
     let heldSince = 0;
     let heldOverflow = false;
+    let heldLateTimer = 0;
     let inputSerial = 0;
     // The session a connect is switching to while it awaits the owner key;
     // until it has dialled, the socket still open is the old session's.
@@ -8068,34 +8069,49 @@
       return !!(!switchingTo && agentLive && authed && cryptoKey && ws && ws.readyState === WebSocket.OPEN);
     }
     function holdInput(data, n) {
-      if (heldBytes + data.length > INPUT_HOLD_BYTES) { heldOverflow = true; return; }
+      if (heldBytes + data.length > INPUT_HOLD_BYTES) { heldOverflow = true; updateHeldChip(); return; }
       if (!heldInput.length) heldSince = Date.now();
       let i = heldInput.length;
       while (i > 0 && heldInput[i - 1].n > n) i--;
       heldInput.splice(i, 0, { n, data });
       heldBytes += data.length;
+      // Held longer than INPUT_HOLD_MS, it is no longer sent: the chip says
+      // so then, not only once it connects.
+      if (!heldLateTimer) heldLateTimer = setTimeout(() => { heldLateTimer = 0; updateHeldChip(); }, INPUT_HOLD_MS + 50);
       updateHeldChip();
     }
     function dropHeldInput() {
       heldInput = []; heldBytes = 0; heldSince = 0; heldOverflow = false;
+      if (heldLateTimer) { clearTimeout(heldLateTimer); heldLateTimer = 0; }
       updateHeldChip();
     }
     // What is held is shown, by its count: keys typed while the session
     // connects, or while its machine has not answered yet, waited for
     // silently — they appeared all at once much later, which read as the
-    // machine being seconds behind the keyboard.
+    // machine being seconds behind the keyboard. Counted in characters typed
+    // (a paste is as many as it has), a key that is not text (Enter, an
+    // arrow, Ctrl-anything) as one.
+    function heldCount() {
+      let k = 0;
+      for (const it of heldInput) k += /^[^\x00-\x1f\x7f]+$/.test(it.data) ? [...it.data].length : 1;
+      return k;
+    }
+    const heldChars = (k) => k + (k === 1 ? ' character' : ' characters');
     function updateHeldChip() {
       const chip = document.getElementById('held-chip');
       if (!chip) return;
-      const k = heldInput.length;
-      const text = k ? (k === 1 ? '1 key' : k + ' keys') + ' waiting for it to connect' : '';
+      const k = heldCount();
+      const late = k && Date.now() - heldSince > INPUT_HOLD_MS;
+      const text = !k ? '' : late
+        ? heldChars(k) + ' typed while it was not connected will not be sent: they waited too long'
+        : heldChars(k) + ' typed, waiting for it to connect' + (heldOverflow ? ' (some too many to hold will not be sent)' : '');
       document.getElementById('held-chip-text').textContent = text;
       chip.hidden = !text;
     }
     function discardHeld() {
-      const k = heldInput.length;
+      const k = heldCount();
       dropHeldInput();
-      if (k) viewerNote((k === 1 ? '1 key' : k + ' keys') + ' you typed while it connected ' + (k === 1 ? 'was' : 'were') + ' not sent.');
+      if (k) viewerNote(heldChars(k) + ' you typed while it connected ' + (k === 1 ? 'was' : 'were') + ' not sent.');
       term.focus();
     }
     document.getElementById('held-discard').addEventListener('click', () => discardHeld());
