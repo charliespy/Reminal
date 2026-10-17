@@ -561,6 +561,9 @@ func (a *Agent) noteForeground(fg string, pgrp int) {
 			a.agentGoneAt = time.Now() // see typedToQuit
 		}
 	}
+	if changed && a.attnFG != "" {
+		a.attnPrevFG = a.attnFG
+	}
 	a.attnFG = fg
 	if changed {
 		a.attnFGAt = time.Now()

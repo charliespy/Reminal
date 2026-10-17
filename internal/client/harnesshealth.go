@@ -63,9 +63,10 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 	// setting one up.
 	"qwen": regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey|^[^a-z0-9]*(connectaprovider|manuallyconnectalocalserver,proxy,orunsupportedprovider)[^a-z0-9]*$`),
 	// Cursor CLI: its first screen with no login ("Press any key to log
-	// in..." — a key typed there starts signing in), the sign-in itself, and
-	// a key it was given and cannot use (harnessKeyRefusals).
-	"cursor-agent": regexp.MustCompile(`^[^a-z0-9]*(pressanykeytologin|ifyourbrowserdidn.?topen,clickthislinktologin:?|pressqtoshowaqrcodetologin)|` + cursorKeyRefused),
+	// in..." — a key typed there starts signing in), and the sign-in itself.
+	// A key it was given and cannot use is read apart (harnessKeyRefusals):
+	// its words are common enough to come from anything.
+	"cursor-agent": regexp.MustCompile(`^[^a-z0-9]*(pressanykeytologin|ifyourbrowserdidn.?topen,clickthislinktologin:?|pressqtoshowaqrcodetologin)`),
 	// pi with no model to run on (no provider logged in) says so on its own
 	// status line, the last on its screen: its context "0" and its model
 	// "unknown" ("0.0%/0 (auto)   unknown"). A message sent it is turned away
@@ -92,7 +93,10 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 const cursorKeyRefused = `^[^a-z0-9]*(warning:)?theprovidedapikeyisinvalid`
 
 // harnessKeyRefusals are, by CLI, the rows that say it refused the key it was
-// given (not that it has none): a subset of its harnessLoginScreens.
+// given (not that it has none). Unlike harnessLoginScreens they are taken as
+// that CLI's only while it is in front or was just before (noteHarnessHealth):
+// "The provided API key is invalid" is also what other tools print, and at a
+// plain shell's prompt it says nothing about an agent's login.
 var harnessKeyRefusals = map[string]*regexp.Regexp{
 	"cursor-agent": regexp.MustCompile(cursorKeyRefused),
 }
@@ -289,11 +293,18 @@ func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 	// The render carries its styling — "\x1b[1mLogin\x1b[m \x1b[1mexpired" —
 	// which would sit between the words; the text is what is read.
 	tail := harnessTail(stripANSI(render), harnessRowsFor(prog))
-	bad := !atWork && harnessProblemIn(tail, prog)
+	a.metaMu.Lock()
+	prev := a.attnPrevFG
+	a.metaMu.Unlock()
 	refused := ""
-	if bad {
-		refused = harnessKeyRefusedIn(tail)
+	if !atWork {
+		// A refused key is the CLI's own words only when that CLI is here,
+		// or exited just now and left them above the shell's prompt.
+		if r := harnessKeyRefusedIn(tail); r != "" && (r == prog || r == prev) {
+			refused = r
+		}
 	}
+	bad := !atWork && (refused != "" || harnessProblemIn(tail, prog))
 	now := harnessNow()
 	a.metaMu.Lock()
 	h := &a.harness

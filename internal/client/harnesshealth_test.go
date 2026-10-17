@@ -434,13 +434,13 @@ func TestACursorKeyItWasGivenAndRefusedIsSaidAsSo(t *testing.T) {
 		{"still in front", inFront, "cursor-agent"},
 	} {
 		tail := harnessTail(c.screen, harnessRows)
-		if !harnessProblemIn(tail, c.prog) {
-			t.Errorf("%s: not read as logged out", c.name)
-		}
 		if got := harnessKeyRefusedIn(tail); got != "cursor-agent" {
 			t.Errorf("%s: refused key read as %q, want cursor-agent", c.name, got)
 		}
 		a := &Agent{}
+		// Cursor CLI was in front, then (exited) the shell.
+		a.noteForeground("cursor-agent", 0)
+		a.noteForeground(c.prog, 0)
 		a.noteHarnessHealth(c.screen, c.prog, false)
 		// Exited on it, the shell in front: its last words, down at once.
 		// Still in front: as any notice, on its second read.
@@ -471,5 +471,41 @@ func TestACursorKeyItWasGivenAndRefusedIsSaidAsSo(t *testing.T) {
 	prose := "I checked the logs: the provided API key is invalid, so the deploy step failed."
 	if harnessProblemIn(prose, "claude") || harnessKeyRefusedIn(prose) != "" {
 		t.Error("a sentence naming the words was read as Cursor refusing its key")
+	}
+}
+
+// "The provided API key is invalid" from anything but Cursor CLI — a curl to
+// some API, a script — at a plain shell's prompt says nothing about an
+// agent's login: the seat stays up, however often it is read. Only Cursor CLI
+// in front, or in front just before the shell, makes those words its own.
+func TestAKeyRefusedPhraseAtAPlainShellLeavesTheSeatUp(t *testing.T) {
+	screen := "Warning: The provided API key is invalid.\n" +
+		"user@host:~/work$ "
+	for _, c := range []struct {
+		name   string
+		before []string // the programs in front, in turn, before the read
+	}{
+		{"a shell that never ran an agent", []string{"bash"}},
+		{"curl just before the shell", []string{"bash", "curl", "bash"}},
+		{"Cursor CLI, then another program, then the shell", []string{"cursor-agent", "bash", "curl", "bash"}},
+	} {
+		a := &Agent{}
+		for _, p := range c.before {
+			a.noteForeground(p, 0)
+		}
+		for i := 0; i < harnessDownAfter+2; i++ {
+			a.noteHarnessHealth(screen, "bash", false)
+		}
+		if a.harnessDown() || a.harnessKeyRefused() != "" {
+			t.Errorf("%s: down %v, refused %q; want the seat up", c.name, a.harnessDown(), a.harnessKeyRefused())
+		}
+	}
+	// Control: the same screen just after Cursor CLI exited is its refusal.
+	a := &Agent{}
+	a.noteForeground("cursor-agent", 0)
+	a.noteForeground("bash", 0)
+	a.noteHarnessHealth(screen, "bash", false)
+	if !a.harnessDown() || a.harnessKeyRefused() != "cursor-agent" {
+		t.Errorf("just after Cursor CLI: down %v, refused %q; want down, by cursor-agent", a.harnessDown(), a.harnessKeyRefused())
 	}
 }
