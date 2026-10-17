@@ -11,7 +11,7 @@ NAME=reminal-bands-e2e
 IMAGE=reminal-bands-e2e
 PW=mcr.microsoft.com/playwright:v1.56.0-noble
 BIN=$(mktemp -d)
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "${BIN:?}"; }
+cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; "$ROOT/scripts/rm-tmp.sh" "$BIN"; }
 trap cleanup EXIT
 
 GOOS=linux GOARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') \

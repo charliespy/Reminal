@@ -16,7 +16,7 @@ ROOT=$(cd ../.. && pwd)
 PAGE=${1:-}
 if [ -z "$PAGE" ]; then
   PAGE=$("$ROOT/scripts/viewer-page.sh")
-  trap 'rm -rf "${PAGE:?}"' EXIT
+  trap '"$ROOT/scripts/rm-tmp.sh" "$PAGE"' EXIT
 fi
 PW=mcr.microsoft.com/playwright:v1.56.0-noble
 docker run --rm -v "$PAGE":/t:ro -v "$PWD":/s:ro -w /e2e "$PW" \

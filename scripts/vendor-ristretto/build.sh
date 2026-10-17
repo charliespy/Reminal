@@ -13,7 +13,7 @@ NOBLE=1.9.7
 ESBUILD=0.28.2
 
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+trap '"$ROOT/scripts/rm-tmp.sh" "$work"' EXIT
 cp entry.mjs "$work/"
 (cd "$work" && npm init -y >/dev/null && npm install --silent --no-audit --no-fund \
   "@noble/curves@$NOBLE" "esbuild@$ESBUILD" >/dev/null)
