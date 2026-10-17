@@ -486,8 +486,20 @@ func TestAnOpenCodeKeyItWasGivenAndRefusedIsSaidAsSo(t *testing.T) {
 		"  ┃  at https://platform.openai.com/account/api-keys.\n  ┃\n     ▣  Build · GPT-5.6 Terra Pro\n  ┃\n  ┃\n  ┃\n" +
 		"  ┃  Build · GPT-5.6 Terra Pro OpenAI\n  ╹" + strings.Repeat("▀", 74) + "\n" +
 		"   /work                                           tab agents  ctrl+p commands"
-	if got := harnessKeyRefusedIn(harnessTail(refused, harnessRows)); got != "opencode" {
-		t.Fatalf("refused key read as %q, want opencode", got)
+	// Codex passes on the same words: whose they are is the program's in
+	// front, asked by name; asked unnamed, the answer is the same each time.
+	tail := harnessTail(refused, harnessRows)
+	if !harnessKeyRefusedBy(tail, "opencode") {
+		t.Fatal("not read as OpenCode refusing its key")
+	}
+	if first := harnessKeyRefusedIn(tail); first == "" {
+		t.Fatal("not read as a key refused")
+	} else {
+		for i := 0; i < 50; i++ {
+			if got := harnessKeyRefusedIn(tail); got != first {
+				t.Fatalf("read as %q, then %q: not the same each time", first, got)
+			}
+		}
 	}
 	a := &Agent{}
 	a.noteForeground("opencode", 0)
