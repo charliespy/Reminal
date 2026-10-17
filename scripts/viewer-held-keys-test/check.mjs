@@ -37,9 +37,28 @@ const out = await page.evaluate(async () => {
   return { forOther, forThis: await back('') };
 });
 console.log(JSON.stringify(out));
+// The held-input chip: what it counts, and that whatever is dropped is said.
+const chipOut = await page.evaluate(() => {
+  const chip = () => document.getElementById('held-chip').hidden ? '' : document.getElementById('held-chip-text').textContent;
+  const one = (...datas) => { dropHeldInput(); for (const d of datas) holdInput(d, ++inputSerial); return chip(); };
+  const r = {
+    bracketed: one('\x1b[200~hello\x1b[201~'), // a bracketed paste: what is inside
+    plain: one('hello'),                       // control: the same text, not bracketed
+    esc: one('\x1b'),                          // control: a key that is not text is one
+    tooBig: one('x'.repeat(INPUT_HOLD_BYTES + 1)), // a paste over the limit, nothing else held
+    underLimit: one('x'.repeat(INPUT_HOLD_BYTES - 1)), // control: just under it, held
+  };
+  dropHeldInput();
+  return r;
+});
+console.log(JSON.stringify(chipOut));
+const ok3 = /^5 characters /.test(chipOut.bracketed) && /^5 characters /.test(chipOut.plain) && /^1 character /.test(chipOut.esc);
+const ok4 = /too large to hold was not sent/.test(chipOut.tooBig) && new RegExp('^' + (65536 - 1) + ' characters ').test(chipOut.underLimit);
 const ok1 = out.forOther.held === '' && out.forOther.switchingTo === '' && out.forOther.said;
 const ok2 = out.forThis.held === 'rm -rf build' && !out.forThis.said;
 console.log((ok1 ? 'PASS  ' : 'FAIL  ') + 'keys held for a session being switched to are dropped, and said so, when the person goes back to the one on the page');
 console.log((ok2 ? 'PASS  ' : 'FAIL  ') + 'keys typed for the session on the page are kept when it connects again');
+console.log((ok3 ? 'PASS  ' : 'FAIL  ') + 'a bracketed paste is counted by what is inside it (as the same text unbracketed; a lone Esc as one)');
+console.log((ok4 ? 'PASS  ' : 'FAIL  ') + 'a paste too large to hold, with nothing else held, is said to be dropped (one just under the limit is held)');
 await b.close(); srv.close();
-process.exit(ok1 && ok2 ? 0 : 1);
+process.exit(ok1 && ok2 && ok3 && ok4 ? 0 : 1);

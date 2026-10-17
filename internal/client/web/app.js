@@ -8091,9 +8091,20 @@
     // machine being seconds behind the keyboard. Counted in characters typed
     // (a paste is as many as it has), a key that is not text (Enter, an
     // arrow, Ctrl-anything) as one.
+    // A bracketed paste (\x1b[200~ … \x1b[201~, what a shell that asks for
+    // it gets) is counted by what is inside it.
     function heldCount() {
       let k = 0;
-      for (const it of heldInput) k += /^[^\x00-\x1f\x7f]+$/.test(it.data) ? [...it.data].length : 1;
+      for (const it of heldInput) {
+        let d = it.data;
+        if (d.startsWith('\x1b[200~')) {
+          d = d.slice(6);
+          if (d.endsWith('\x1b[201~')) d = d.slice(0, -6);
+          k += [...d].length;
+          continue;
+        }
+        k += /^[^\x00-\x1f\x7f]+$/.test(d) ? [...d].length : 1;
+      }
       return k;
     }
     const heldChars = (k) => k + (k === 1 ? ' character' : ' characters');
@@ -8102,7 +8113,9 @@
       if (!chip) return;
       const k = heldCount();
       const late = k && Date.now() - heldSince > INPUT_HOLD_MS;
-      const text = !k ? '' : late
+      // Anything dropped is said, even with nothing else held: a paste too
+      // large to hold, on an empty queue, went with no word at all.
+      const text = !k ? (heldOverflow ? 'A paste too large to hold was not sent' : '') : late
         ? heldChars(k) + ' typed while it was not connected will not be sent: they waited too long'
         : heldChars(k) + ' typed, waiting for it to connect' + (heldOverflow ? ' (some too many to hold will not be sent)' : '');
       document.getElementById('held-chip-text').textContent = text;
