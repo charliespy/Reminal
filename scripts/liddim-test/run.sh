@@ -10,7 +10,7 @@
 set -euo pipefail
 VM=$1; shift
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-W=$(mktemp -d); trap 'chmod -R u+w "$W" 2>/dev/null; rm -rf "$W"' EXIT
+W=$(mktemp -d); trap 'chmod -R u+w "$W" 2>/dev/null; "$ROOT/scripts/rm-tmp.sh" "$W"' EXIT
 GOOS=darwin GOARCH=arm64 go build -C "$ROOT/scripts/liddim-test/fakehelper" -o "$W/fake/fake-helper" .
 for ref in "$@"; do
   set_=$(echo "$ref" | tr -c 'A-Za-z0-9.\n' _); src="$W/src-$set_"; mkdir -p "$src" "$W/$set_"
@@ -19,7 +19,7 @@ for ref in "$@"; do
   GOOS=darwin GOARCH=arm64 go build -C "$src" -ldflags "-X main.version=9.9.9" -o "$W/$set_/reminal-rel" ./cmd/reminal
   swiftc -O -target arm64-apple-macos12.3 -D REMINAL_TEST_HOOKS -o "$W/$set_/reminal-capture-test" "$src/native/reminal-capture/main.swift"
   swiftc -O -target arm64-apple-macos12.3 -o "$W/$set_/reminal-capture-rel" "$src/native/reminal-capture/main.swift"
-  rm -rf "$src"
+  "$ROOT/scripts/rm-tmp.sh" "$src"
 done
 cp "$ROOT/scripts/liddim-test/check.sh" "$W/"
 tar czf - -C "$W" . | prlctl exec "$VM" 'rm -rf /tmp/liddim-test; mkdir -p /tmp/liddim-test && tar xzf - -C /tmp/liddim-test'

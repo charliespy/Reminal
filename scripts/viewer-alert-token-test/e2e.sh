@@ -14,7 +14,7 @@ DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$DIR/../.." && pwd)
 B=$(mktemp -d)
 IMG=reminal-alert-e2e-$$
-trap 'docker rmi -f "$IMG" >/dev/null 2>&1 || true; rm -rf "${B:?}"' EXIT
+trap 'docker rmi -f "$IMG" >/dev/null 2>&1 || true; "$ROOT/scripts/rm-tmp.sh" "$B"' EXIT
 docker run --rm -v "$ROOT":/src:ro -v "$B":/out -v reminal-away-gocache:/root/.cache/go-build -v reminal-away-gomod:/go/pkg/mod \
     -e GOFLAGS=-buildvcs=false -e CGO_ENABLED=0 -w /src golang:1.26-bookworm \
     go build -o /out/reminal ./cmd/reminal
