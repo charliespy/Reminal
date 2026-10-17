@@ -534,3 +534,43 @@ func TestClaudeRefusingItsLoginIsLoggedOut(t *testing.T) {
 		}
 	}
 }
+
+// Claude Code refusing the login it was given is said as that — a login it
+// has, refused — not as one it never had: only while Claude Code is in front.
+// "Login expired" (no login at all) is logged out with nothing refused, and
+// the same row at a plain shell that never ran it is no refusal of Claude's.
+func TestClaudeRefusingItsLoginIsSaidAsRefused(t *testing.T) {
+	row := "● Please run /login · API Error: 401 OAuth access token is invalid."
+	a := &Agent{}
+	a.noteForeground("claude", 0)
+	screen := "❯ hello\n" + row + "\n❯  "
+	a.noteHarnessHealth(screen, "claude", false)
+	a.noteHarnessHealth(screen, "claude", false)
+	if !a.harnessDown() || a.harnessKeyRefused() != "claude" {
+		t.Errorf("in front: down %v, refused %q; want down, by claude", a.harnessDown(), a.harnessKeyRefused())
+	}
+	// No login at all: logged out, nothing refused.
+	b := &Agent{}
+	b.noteForeground("claude", 0)
+	expired := "❯ hello\n● Login expired · Please run /login\n❯  "
+	b.noteHarnessHealth(expired, "claude", false)
+	b.noteHarnessHealth(expired, "claude", false)
+	if !b.harnessDown() || b.harnessKeyRefused() != "" {
+		t.Errorf("no login: down %v, refused %q; want down, none refused", b.harnessDown(), b.harnessKeyRefused())
+	}
+	// At a plain shell that never ran Claude Code: not its refusal (whether
+	// the row reads as logged out there is harnessLoginRefused's, unchanged).
+	c := &Agent{}
+	c.noteForeground("bash", 0)
+	atShell := row + "\nuser@host:~/work$ "
+	for i := 0; i < harnessDownAfter+2; i++ {
+		c.noteHarnessHealth(atShell, "bash", false)
+	}
+	if r := c.harnessKeyRefused(); r != "" {
+		t.Errorf("at a plain shell: refused by %q; want none", r)
+	}
+	// A sentence quoting the words is not a refusal.
+	if r := harnessKeyRefusedIn("The log said Please run /login · API Error: 401, so I retried."); r != "" {
+		t.Errorf("a sentence quoting the words read as %q refusing its login", r)
+	}
+}
