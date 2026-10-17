@@ -163,6 +163,11 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		// of its SDK's error; not captured).
 		"pi, refused by OpenAI": " Error: 401 Incorrect API key provided: sk-STAND*****eady. You can find your API\n" +
 			"/work\n0.0%/400k (auto)                                  (openai) gpt-5 • medium",
+		// OpenCode 1.19.3 with an OpenAI key the service refuses, as captured.
+		"opencode, refused": "  ┃  Incorrect API key provided: sk-STAND****eady. You can find your API key\n" +
+			"  ┃  at https://platform.openai.com/account/api-keys.\n  ┃\n     ▣  Build · GPT-5.6 Terra Pro\n  ┃\n  ┃\n  ┃\n" +
+			"  ┃  Build · GPT-5.6 Terra Pro OpenAI\n  ╹" + strings.Repeat("▀", 74) + "\n" +
+			"   /work                                           tab agents  ctrl+p commands",
 		"amp":                "No API key found. Starting login flow...\nWould you like to log in to Amp? [(y)es, (n)o]: ",
 		"codex":              "  Sign in with ChatGPT to use Codex as part of your paid plan\n  › 1. Sign in with ChatGPT\n    2. Provide your own API key",
 		"codex, turned away": "■ unexpected status 401 Unauthorized: Incorrect API key provided:\nkey at https://platform.openai.com/account/api-keys.",
@@ -183,6 +188,10 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		if prog, _, _ := strings.Cut(name, ","); !harnessProblemIn(harnessTail(s, harnessRows), prog) {
 			t.Errorf("%s's sign-in screen was not seen as logged out", name)
 		}
+	}
+	// OpenCode's answer naming the error is not the error.
+	if harnessProblemIn("  ┃  The log says Incorrect API key provided, so the key is wrong.\n   /work   tab agents  ctrl+p commands", "opencode") {
+		t.Error("OpenCode's words about a refused key read as its own")
 	}
 	for _, ok := range []string{
 		"  › Ask Codex to do anything   ? for shortcuts",
