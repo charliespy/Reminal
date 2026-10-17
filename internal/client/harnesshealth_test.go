@@ -386,6 +386,9 @@ func TestPiWithAModelIsNotLoggedOut(t *testing.T) {
 			"↑5 ↓3 0.0%/128k (auto)                                                    mock-1",
 		" The user saw \"Error: No API key found for the selected model.\" in their app.\n/tmp\n0.4%/128k (auto)   mock-1",
 		"0.0%/0 (auto)   unknown is what the status line said",
+		// Its tools' output, and its words about a 401, are not its own.
+		" The API answers Error: 401 when the token is stale.\n/tmp\n0.4%/128k (auto)   mock-1",
+		" Error: 4013 items synced\n/tmp\n0.4%/128k (auto)   mock-1",
 	} {
 		if harnessProblemIn(harnessTail(ok, harnessRows), "pi") {
 			t.Errorf("pi with a model read as logged out:\n%s", ok)
@@ -474,6 +477,46 @@ func TestACursorKeyItWasGivenAndRefusedIsSaidAsSo(t *testing.T) {
 	}
 }
 
+// OpenCode 1.19.3 with an OpenAI key the service refuses, as captured: it
+// stays in front, at its prompt, and answers each message with the
+// service's words. Logged out, by a key it was given and that was refused —
+// on its second read, as any notice; cleared once it works. Not from its
+// own words naming the error, nor while another program is in front.
+func TestAnOpenCodeKeyItWasGivenAndRefusedIsSaidAsSo(t *testing.T) {
+	refused := "  ┃  Incorrect API key provided: sk-STAND****eady. You can find your API key\n" +
+		"  ┃  at https://platform.openai.com/account/api-keys.\n  ┃\n     ▣  Build · GPT-5.6 Terra Pro\n  ┃\n  ┃\n  ┃\n" +
+		"  ┃  Build · GPT-5.6 Terra Pro OpenAI\n  ╹" + strings.Repeat("▀", 74) + "\n" +
+		"   /work                                           tab agents  ctrl+p commands"
+	if got := harnessKeyRefusedIn(harnessTail(refused, harnessRows)); got != "opencode" {
+		t.Fatalf("refused key read as %q, want opencode", got)
+	}
+	a := &Agent{}
+	a.noteForeground("opencode", 0)
+	a.noteHarnessHealth(refused, "opencode", false)
+	a.noteHarnessHealth(refused, "opencode", false)
+	if !a.harnessDown() || a.harnessKeyRefused() != "opencode" {
+		t.Fatalf("down %v, refused %q; want down, by opencode", a.harnessDown(), a.harnessKeyRefused())
+	}
+	working := "  ┃  say hi\n     ▣  Build · GPT-5.6 Terra Pro\n  Hi! How can I help?\n  ╹" + strings.Repeat("▀", 74) + "\n   /work   tab agents  ctrl+p commands"
+	for i := 0; i < harnessUpAfter; i++ {
+		a.noteHarnessHealth(working, "opencode", false)
+	}
+	if a.harnessDown() || a.harnessKeyRefused() != "" {
+		t.Errorf("still down %v / refused %q once it works", a.harnessDown(), a.harnessKeyRefused())
+	}
+	prose := "  ┃  The log says Incorrect API key provided, so the key is wrong.\n   /work   tab agents  ctrl+p commands"
+	if harnessKeyRefusedIn(prose) != "" || harnessProblemIn(prose, "opencode") {
+		t.Error("OpenCode's words about a refused key read as its own")
+	}
+	b := &Agent{}
+	b.noteForeground("claude", 0)
+	b.noteHarnessHealth(refused, "claude", false)
+	b.noteHarnessHealth(refused, "claude", false)
+	if b.harnessDown() {
+		t.Error("OpenCode's words read as Claude Code's, with Claude Code in front")
+	}
+}
+
 // "The provided API key is invalid" from anything but Cursor CLI — a curl to
 // some API, a script — at a plain shell's prompt says nothing about an
 // agent's login: the seat stays up, however often it is read. Only Cursor CLI
@@ -531,6 +574,47 @@ func TestClaudeRefusingItsLoginIsLoggedOut(t *testing.T) {
 	} {
 		if harnessProblemIn(prose, "claude") {
 			t.Errorf("a sentence naming it was read as logged out: %q", prose)
+		}
+	}
+}
+
+// pi with a login its provider refuses answers each message with the
+// service's 401 on a row of its own, at its prompt. With pi in front that is
+// logged out, by a refused login; "Error: 401" at a plain shell's prompt (a
+// curl, a script) is not, nor pi's words about a 401 in the middle of a row,
+// nor a number that starts with 401.
+func TestPiRefusedLoginIsLoggedOutOnlyAsPisOwn(t *testing.T) {
+	for name, s := range map[string]string{
+		"anthropic": " Error: 401\n" +
+			" {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth access\n" +
+			" token is invalid.\"},\"request_id\":\"req_011Cg7iwkH9FtQmsb66Xt71T\"}\n" +
+			strings.Repeat("─", 80) + "\n\n" + strings.Repeat("─", 80) + "\n/work\n" +
+			"0.0%/1.0M (auto)                            (anthropic) claude-opus-4-7 • medium",
+		"openai": " Error: 401 Incorrect API key provided: sk-STAND*****eady. You can find your API\n" +
+			"/work\n0.0%/400k (auto)                                  (openai) gpt-5 • medium",
+	} {
+		a := &Agent{}
+		a.noteForeground("pi", 0)
+		for i := 0; i < harnessDownAfter; i++ {
+			a.noteHarnessHealth(s, "pi", false)
+		}
+		if !a.harnessDown() || a.harnessKeyRefused() != "pi" {
+			t.Errorf("pi refused by %s: down %v, refused %q; want down, by pi", name, a.harnessDown(), a.harnessKeyRefused())
+		}
+	}
+	for _, c := range []struct{ prog, screen string }{
+		{"bash", "Error: 401 Unauthorized\nuser@host:~$ "},
+		{"bash", "error: 401\nuser@host:~$ "},
+		{"pi", " The API answers Error: 401 when the token is stale.\n/tmp\n0.4%/128k (auto)   mock-1"},
+		{"pi", " Error: 4013 items synced\n/tmp\n0.4%/128k (auto)   mock-1"},
+	} {
+		a := &Agent{}
+		a.noteForeground(c.prog, 0)
+		for i := 0; i < harnessDownAfter+2; i++ {
+			a.noteHarnessHealth(c.screen, c.prog, false)
+		}
+		if a.harnessDown() {
+			t.Errorf("%s in front, %q: read as logged out", c.prog, c.screen)
 		}
 	}
 }
