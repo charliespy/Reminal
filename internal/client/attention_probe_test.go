@@ -668,11 +668,23 @@ func TestOpenCodeStartingIsNotDone(t *testing.T) {
 		{"claude", starting, settled, "done"},
 		{"", starting, settled, "done"},
 	} {
-		if got := classifyAttnFor(tc.prog, true, tc.tail, tc.settled); got != tc.want {
+		if got := classifyAttnFor(tc.prog, true, tc.tail, tc.settled, 0, false); got != tc.want {
 			t.Errorf("%s, settled %d ms, %q: %q, want %q", tc.prog, tc.settled, tc.tail[max(0, len(tc.tail)-40):], got, tc.want)
 		}
 	}
-	if got := classifyAttnFor("opencode", false, starting, settled); got != "" {
+	if got := classifyAttnFor("opencode", false, starting, settled, 0, false); got != "" {
 		t.Errorf("no program in front: %q", got)
+	}
+	// Never drawn, past attnStartCap (hung, or gone without the shell back in
+	// front): read as any program's screen, not at work for ever.
+	if got := classifyAttnFor("opencode", true, starting, settled, attnStartCap, false); got != "done" {
+		t.Errorf("never drawn, past the cap: %q, want done", got)
+	}
+	if got := classifyAttnFor("opencode", true, starting, settled, attnStartCap-time.Second, false); got != "working" {
+		t.Errorf("never drawn, within the cap: %q, want working", got)
+	}
+	// Drawn already, its prompt now covered (a dialog): at work, however long.
+	if got := classifyAttnFor("opencode", true, starting, settled, time.Hour, true); got != "working" {
+		t.Errorf("a dialog over its prompt: %q, want working", got)
 	}
 }
