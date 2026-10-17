@@ -442,6 +442,11 @@ func TestACursorKeyItWasGivenAndRefusedIsSaidAsSo(t *testing.T) {
 		}
 		a := &Agent{}
 		a.noteHarnessHealth(c.screen, c.prog, false)
+		// Exited on it, the shell in front: its last words, down at once.
+		// Still in front: as any notice, on its second read.
+		if exited := c.prog == "bash"; a.harnessDown() != exited {
+			t.Errorf("%s: down after one read %v, want %v", c.name, a.harnessDown(), exited)
+		}
 		a.noteHarnessHealth(c.screen, c.prog, false)
 		if !a.harnessDown() || a.harnessKeyRefused() != "cursor-agent" {
 			t.Errorf("%s: down %v, refused %q; want down, by cursor-agent", c.name, a.harnessDown(), a.harnessKeyRefused())

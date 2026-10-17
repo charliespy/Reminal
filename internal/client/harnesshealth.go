@@ -306,7 +306,11 @@ func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 			h.seenAt = now
 		}
 		h.gone = 0
-		if h.seen++; !h.down && h.seen >= harnessDownAfter {
+		// A CLI that refused its key and exited (no agent in front now):
+		// those are its last words, not a glimpse, and count at once — a
+		// read later, the seat was said to have "ended" in between.
+		exited := refused != "" && !isAgentProgram(prog)
+		if h.seen++; !h.down && (h.seen >= harnessDownAfter || exited) {
 			h.down, h.since, changed = true, now, true
 		}
 	} else {
