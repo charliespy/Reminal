@@ -108,6 +108,11 @@ const cursorKeyRefused = `^[^a-z0-9]*(warning:)?theprovidedapikeyisinvalid`
 // plain shell's prompt it says nothing about an agent's login.
 var harnessKeyRefusals = map[string]*regexp.Regexp{
 	"cursor-agent": regexp.MustCompile(cursorKeyRefused),
+	// Claude Code turned away by the login it was given ("● Please run
+	// /login · API Error: 401 OAuth access token is invalid"): it has one,
+	// and it was refused — not one it never had. A line of its own, from
+	// its start, as harnessLoginRefused reads it.
+	"claude": regexp.MustCompile(`^[^a-z0-9]*(please)?run/login[·:.,\-]*apierror:40[13]([^0-9]|$)`),
 	// pi with a login its provider refuses (a token gone stale, a wrong key):
 	// it takes the message and answers each with the service's 401 on a row
 	// of its own ("Error: 401", then the service's words), at its prompt,
