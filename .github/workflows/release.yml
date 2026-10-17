@@ -61,7 +61,7 @@ jobs:
         run: |
           set -e
           # The split itself checked once a run: every test in one shard.
-          if [ ${{ matrix.shard }} = 1 ]; then sh scripts/ci/shard.test.sh; fi
+          if [ ${{ matrix.shard }} = 1 ]; then sh scripts/ci/shard.test.sh; sh scripts/rm-tmp.test.sh; fi
           re=$(SHARD1_HEAD=60 sh scripts/ci/shard.sh 4 ${{ matrix.shard }})
           go test -run "$re" ./internal/client
           go test -race -run "$re" ./internal/client

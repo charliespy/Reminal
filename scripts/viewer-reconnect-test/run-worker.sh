@@ -17,7 +17,7 @@ DELAY=${DELAY:-150ms} RATE=${RATE:-1600kbit}
 NAME=reminal-viewer-reconnect-worker
 PW=mcr.microsoft.com/playwright:v1.56.0-noble
 BIN=$(mktemp -d)
-trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$BIN"' EXIT
+trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true; "$ROOT/scripts/rm-tmp.sh" "$BIN"' EXIT
 docker run --rm -v "$TREE":/src:ro -v "$BIN":/out -e GOFLAGS=-buildvcs=false golang:1.26-bookworm \
   sh -c 'cp -r /src /w && cd /w && go build -o /out/reminal ./cmd/reminal'
 docker run --rm --name "$NAME" --cap-add NET_ADMIN -e DELAY="$DELAY" -e RATE="$RATE" \

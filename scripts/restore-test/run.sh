@@ -28,7 +28,7 @@ if [ "$1" = down ]; then down; echo stopped; exit 0; fi
 if ! docker info >/dev/null 2>&1; then echo "Docker isn't running." >&2; exit 1; fi
 
 OUT=$(mktemp -d)
-trap 'rm -rf "$OUT"' EXIT
+trap '"$ROOT/scripts/rm-tmp.sh" "$OUT"' EXIT
 cp "$DIR/Dockerfile" "$DIR/mcp.sh" "$OUT/"
 docker run --rm -v "$ROOT":/src:ro -v "$OUT":/out \
     -v reminal-restore-gocache:/root/.cache/go-build -v reminal-restore-gomod:/go/pkg/mod \
