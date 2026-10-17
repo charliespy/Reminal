@@ -151,18 +151,6 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		"pi, turned away": " Error: No API key found for the selected      \n model.                                        \n" +
 			" Use /login to log into a provider via OAuth   \n or API key. See:                              \n" +
 			"───────────────────────────────────────────────\n\n───────────────────────────────────────────────\n/work",
-		// pi 0.74 with a login its provider refuses, 80 columns wide, as
-		// captured: each message answered with the 401 (Anthropic's, an
-		// OAuth token it does not take), its status line naming the model.
-		"pi, refused": " Error: 401\n" +
-			" {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth access\n" +
-			" token is invalid.\"},\"request_id\":\"req_011Cg7iwkH9FtQmsb66Xt71T\"}\n" +
-			strings.Repeat("─", 80) + "\n\n" + strings.Repeat("─", 80) + "\n/work\n" +
-			"0.0%/1.0M (auto)                            (anthropic) claude-opus-4-7 • medium",
-		// And OpenAI's, whose words follow the status on its row (the shape
-		// of its SDK's error; not captured).
-		"pi, refused by OpenAI": " Error: 401 Incorrect API key provided: sk-STAND*****eady. You can find your API\n" +
-			"/work\n0.0%/400k (auto)                                  (openai) gpt-5 • medium",
 		"amp":                "No API key found. Starting login flow...\nWould you like to log in to Amp? [(y)es, (n)o]: ",
 		"codex":              "  Sign in with ChatGPT to use Codex as part of your paid plan\n  › 1. Sign in with ChatGPT\n    2. Provide your own API key",
 		"codex, turned away": "■ unexpected status 401 Unauthorized: Incorrect API key provided:\nkey at https://platform.openai.com/account/api-keys.",
@@ -586,6 +574,47 @@ func TestClaudeRefusingItsLoginIsLoggedOut(t *testing.T) {
 	} {
 		if harnessProblemIn(prose, "claude") {
 			t.Errorf("a sentence naming it was read as logged out: %q", prose)
+		}
+	}
+}
+
+// pi with a login its provider refuses answers each message with the
+// service's 401 on a row of its own, at its prompt. With pi in front that is
+// logged out, by a refused login; "Error: 401" at a plain shell's prompt (a
+// curl, a script) is not, nor pi's words about a 401 in the middle of a row,
+// nor a number that starts with 401.
+func TestPiRefusedLoginIsLoggedOutOnlyAsPisOwn(t *testing.T) {
+	for name, s := range map[string]string{
+		"anthropic": " Error: 401\n" +
+			" {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth access\n" +
+			" token is invalid.\"},\"request_id\":\"req_011Cg7iwkH9FtQmsb66Xt71T\"}\n" +
+			strings.Repeat("─", 80) + "\n\n" + strings.Repeat("─", 80) + "\n/work\n" +
+			"0.0%/1.0M (auto)                            (anthropic) claude-opus-4-7 • medium",
+		"openai": " Error: 401 Incorrect API key provided: sk-STAND*****eady. You can find your API\n" +
+			"/work\n0.0%/400k (auto)                                  (openai) gpt-5 • medium",
+	} {
+		a := &Agent{}
+		a.noteForeground("pi", 0)
+		for i := 0; i < harnessDownAfter; i++ {
+			a.noteHarnessHealth(s, "pi", false)
+		}
+		if !a.harnessDown() || a.harnessKeyRefused() != "pi" {
+			t.Errorf("pi refused by %s: down %v, refused %q; want down, by pi", name, a.harnessDown(), a.harnessKeyRefused())
+		}
+	}
+	for _, c := range []struct{ prog, screen string }{
+		{"bash", "Error: 401 Unauthorized\nuser@host:~$ "},
+		{"bash", "error: 401\nuser@host:~$ "},
+		{"pi", " The API answers Error: 401 when the token is stale.\n/tmp\n0.4%/128k (auto)   mock-1"},
+		{"pi", " Error: 4013 items synced\n/tmp\n0.4%/128k (auto)   mock-1"},
+	} {
+		a := &Agent{}
+		a.noteForeground(c.prog, 0)
+		for i := 0; i < harnessDownAfter+2; i++ {
+			a.noteHarnessHealth(c.screen, c.prog, false)
+		}
+		if a.harnessDown() {
+			t.Errorf("%s in front, %q: read as logged out", c.prog, c.screen)
 		}
 	}
 }
