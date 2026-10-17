@@ -285,7 +285,7 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// Prefer the agent's own hook-reported state when it's fresh (an
 		// integrated harness reporting via `reminal hook`); otherwise fall back to
 		// the screen inference. The hook is precise; the screen is universal.
-		screenState := classifyAttn(agentActive, tail, settledMs)
+		screenState := classifyAttnFor(prog, agentActive, tail, settledMs)
 		// The hook is precise; the screen is universal. resolveAttn puts the
 		// two together — including the cases where the hook is not to be
 		// believed: written by a harness that has since exited, left at
@@ -797,6 +797,37 @@ func classifyAttn(agentActive bool, tail string, settledMs int64) string {
 		return "input"
 	}
 	return "done"
+}
+
+// classifyAttnFor is classifyAttn for the program prog: a screen that has
+// settled before prog has drawn its prompt is prog still starting, not done
+// (attnPromptDrawn).
+func classifyAttnFor(prog string, agentActive bool, tail string, settledMs int64) string {
+	st := classifyAttn(agentActive, tail, settledMs)
+	if st == "done" && !attnPromptDrawn(prog, tail) {
+		return "working"
+	}
+	return st
+}
+
+// attnPromptMarks are, by program, a row its screen has whenever it is at its
+// prompt: for agents that sit a long while before they draw anything. OpenCode
+// starting on a small machine (a quarter of a CPU) leaves the screen as the
+// shell left it for 20 to 35 s, its command line the last row — settled, so
+// read as done — and keys typed then are lost: a message sent it then was
+// never seen. Its prompt box ends in a row of its own ("╹▀▀▀…"), in its home
+// view and in a conversation, at any width. Its dialogs (the model list, the
+// command menu) are drawn over that row: it reads as at work while one is
+// open, and nothing is typed into it.
+var attnPromptMarks = map[string]*regexp.Regexp{
+	"opencode": regexp.MustCompile(`(?m)^\s*╹▀{8,}`),
+}
+
+// attnPromptDrawn reports whether prog's screen shows it at its prompt, as far
+// as its mark tells (always, for a program with none).
+func attnPromptDrawn(prog, tail string) bool {
+	re := attnPromptMarks[prog]
+	return re == nil || re.MatchString(stripANSI(tail))
 }
 
 // attnPromptCues are lowercase substrings that mark a screen asking the user to

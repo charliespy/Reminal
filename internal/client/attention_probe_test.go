@@ -640,3 +640,39 @@ func TestASecondHarnessWithNoTurnYetIgnoresItsOwnRepaint(t *testing.T) {
 		t.Fatalf("a harness without turn hooks read as %q (%s), want working (screen)", s, src)
 	}
 }
+
+// OpenCode starting on a small machine: the screen as the shell left it, its
+// command line last, for 20 to 35 s. Settled, yet not done: a line typed then
+// is lost. At its prompt (its home view, a conversation; captured from
+// OpenCode 1.19.3) it is done; other programs are as before.
+func TestOpenCodeStartingIsNotDone(t *testing.T) {
+	settled := int64(attnSettleMs + 1)
+	starting := "user@box:/work$ opencode"
+	home := "   ┃  Ask anything… \"Fix broken tests\"\n   ┃\n   ┃  Build · GPT-5.6 Terra Pro OpenAI\n" +
+		"   ╹" + strings.Repeat("▀", 74) + "\n" +
+		"                                                   tab agents  ctrl+p commands\n" +
+		"  /work  ⊙ 1 MCP /status                                                1.19.3"
+	chat := "  ┃  Incorrect API key provided: sk-STAND****eady.\n     ▣  Build · GPT-5.6 Terra Pro\n  ┃\n" +
+		"  ┃  Build · GPT-5.6 Terra Pro OpenAI\n\x1b[38;5;75m  ╹\x1b[38;5;234m" + strings.Repeat("▀", 74) + "\x1b[0m\n" +
+		"   /work                                           tab agents  ctrl+p commands"
+	for _, tc := range []struct {
+		prog, tail string
+		settled    int64
+		want       string
+	}{
+		{"opencode", starting, settled, "working"},
+		{"opencode", home, settled, "done"},
+		{"opencode", chat, settled, "done"},
+		{"opencode", home, 100, "working"},
+		{"opencode", "Run this command? (y/n)", settled, "input"},
+		{"claude", starting, settled, "done"},
+		{"", starting, settled, "done"},
+	} {
+		if got := classifyAttnFor(tc.prog, true, tc.tail, tc.settled); got != tc.want {
+			t.Errorf("%s, settled %d ms, %q: %q, want %q", tc.prog, tc.settled, tc.tail[max(0, len(tc.tail)-40):], got, tc.want)
+		}
+	}
+	if got := classifyAttnFor("opencode", false, starting, settled); got != "" {
+		t.Errorf("no program in front: %q", got)
+	}
+}
