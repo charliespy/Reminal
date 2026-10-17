@@ -592,6 +592,10 @@ type MachineStats struct {
 	Version string `json:"version,omitempty"`
 	Update  string `json:"update,omitempty"`
 	Channel string `json:"channel,omitempty"`
+	// UpdatedBy names who puts a new reminal on this machine when it is not
+	// reminal itself (updater.UpdatedByEnv): a viewer says so in place of
+	// checking for, or offering, an update. Empty: it updates itself.
+	UpdatedBy string `json:"updated_by,omitempty"`
 }
 
 // DirResponse is the encrypted payload of a TypeDirResp: the machine's hostname

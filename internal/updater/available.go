@@ -120,6 +120,9 @@ func UpgradeBlockedReason(currentVersion string) string {
 	if currentVersion == "" || currentVersion == "dev" || currentVersion == "0.0.0" {
 		return "this is a development build — upgrade it by rebuilding, not from here"
 	}
+	if by := UpdatedBy(); by != "" {
+		return "this machine's reminal is updated by " + by + ", not from here"
+	}
 	if !shouldCheck(currentVersion) {
 		// The remaining case shouldCheck rejects is a Homebrew install, where
 		// replacing the file inside the Cellar is something brew would undo.

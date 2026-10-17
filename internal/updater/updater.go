@@ -128,6 +128,9 @@ var errNoAssetForPlatform = errors.New("no build for this platform in the latest
 // actually replaced (false when already on the latest release) so the caller can
 // skip post-upgrade work — like refreshing the background host — on a no-op.
 func Upgrade(currentVersion string) (updated bool, err error) {
+	if err := updatedByRefusal(); err != nil {
+		return false, err
+	}
 	// Bypass the cache so explicit `reminal upgrade` always hits the network.
 	clearCache()
 	latestTag, build, _, err := check(currentVersion, httpTimeoutInteractive)
@@ -157,6 +160,9 @@ func Upgrade(currentVersion string) (updated bool, err error) {
 // pressing a button in a panel must not spray progress into somebody's tmux.
 // Same checks, same apply, results returned instead of printed.
 func UpgradeQuiet(currentVersion string) (updated bool, err error) {
+	if err := updatedByRefusal(); err != nil {
+		return false, err
+	}
 	clearCache() // an explicit request always hits the network
 	latestTag, build, _, err := check(currentVersion, httpTimeoutInteractive)
 	if errors.Is(err, errNoAssetForPlatform) {
@@ -178,6 +184,11 @@ func UpgradeQuiet(currentVersion string) (updated bool, err error) {
 // Dev builds and unknown versions skip the check entirely.
 func shouldCheck(currentVersion string) bool {
 	if currentVersion == "" || currentVersion == "dev" || currentVersion == "0.0.0" {
+		return false
+	}
+	// Updated by what installed it (UpdatedByEnv): there is nothing for it
+	// to offer or apply.
+	if UpdatedBy() != "" {
 		return false
 	}
 	bin, err := os.Executable()

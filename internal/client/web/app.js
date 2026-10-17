@@ -679,6 +679,10 @@
       // No "update available" text: the button below says so, and on a phone
       // the words plus the notes pill overflowed the row into a horizontal
       // scroll. An offer is a button, not a label.
+      // A machine whose reminal is put in place by what installed it (an
+      // image, a package): it neither checks nor upgrades itself, so it says
+      // who does — never "could not check" for a check it does not make.
+      else if (i.updated_by)                   h += '<span>\u00b7 updated by ' + escHTML(i.updated_by) + '</span>';
       else if (hostUpdate(i))                  { /* the upgrade button is the statement */ }
       else if (changelogPending)               h += '<span>\u00b7 checking\u2026</span>';
       else if (answered)                       h += '<span>\u00b7 up to date</span>';
