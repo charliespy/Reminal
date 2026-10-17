@@ -380,6 +380,7 @@ const dirBusyText = "this machine is busy; it asks to be asked again shortly"
 // by, not author one), and only within the busy allowance.
 func (a *Agent) dirBusy(conn *websocket.Conn, typ protocol.MessageType, data string, retry time.Duration) {
 	if a.dirLimits != nil && !a.dirLimits.busy.allow(time.Now()) {
+		a.dirUnanswered.Add(1)
 		return
 	}
 	var req struct {
