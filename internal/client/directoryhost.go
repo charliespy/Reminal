@@ -239,7 +239,7 @@ type tokenBucket struct {
 	// those already told one, not all the same one (twenty told "62 ms" all
 	// came back at once, one was taken, and the rest were refused again,
 	// until even the busy allowance ran out). It falls as the tokens they
-	// were promised come in.
+	// were promised come in, and is never more than max.
 	owed float64
 }
 
@@ -278,7 +278,11 @@ func (tb *tokenBucket) take1(now time.Time, owe bool) (bool, time.Duration) {
 			return false, dirBusyMaxWait // never refills: asked the longest wait
 		}
 		wait := min(time.Duration(math.Ceil((1-tb.tokens+tb.owed)/tb.perSec*1000))*time.Millisecond, dirBusyMaxWait)
-		if owe && wait < dirBusyMaxWait {
+		// No more owed than the bucket holds: a caller that asks again
+		// without waiting is refused each time, and each refusal would push
+		// everyone else's time further out (up to dirBusyMaxWait). Past
+		// max owed, a refused caller is told the last time given.
+		if owe && wait < dirBusyMaxWait && tb.owed < tb.max {
 			tb.owed++
 		}
 		return false, wait

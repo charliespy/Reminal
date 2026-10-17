@@ -5,6 +5,7 @@ package client
 
 import (
 	"errors"
+	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -231,5 +232,25 @@ func TestARequestOverTheBusyAllowanceIsCounted(t *testing.T) {
 	a.dirBusy(nil, protocol.TypeDirQuery, "", time.Second)
 	if n := a.dirUnanswered.Load(); n != 1 {
 		t.Errorf("unanswered = %d, want 1", n)
+	}
+}
+
+// What callers refused together are told stays bounded by the bucket: a
+// crowd far larger than it, or one caller asking again without waiting, is
+// not told times further and further out (each refusal used to push every
+// later caller's time on, up to dirBusyMaxWait).
+func TestRefusedCallersAreNeverToldPastWhatTheBucketHolds(t *testing.T) {
+	t0 := time.Unix(1e9, 0)
+	tb := newTokenBucket(32, 16)
+	tb.last, tb.tokens = t0, 0
+	// The longest wait a bucket of 32 at 16 a second can owe: 33 tokens.
+	bound := time.Duration(math.Ceil(33.0/16*1000)) * time.Millisecond
+	for i := 0; i < 10000; i++ {
+		if _, w := tb.take(t0); w > bound {
+			t.Fatalf("caller %d told %v, past %v", i, w, bound)
+		}
+	}
+	if tb.owed > tb.max {
+		t.Errorf("owed %v, more than the bucket holds (%v)", tb.owed, tb.max)
 	}
 }
