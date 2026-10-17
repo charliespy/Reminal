@@ -8074,10 +8074,31 @@
       while (i > 0 && heldInput[i - 1].n > n) i--;
       heldInput.splice(i, 0, { n, data });
       heldBytes += data.length;
+      updateHeldChip();
     }
     function dropHeldInput() {
       heldInput = []; heldBytes = 0; heldSince = 0; heldOverflow = false;
+      updateHeldChip();
     }
+    // What is held is shown, by its count: keys typed while the session
+    // connects, or while its machine has not answered yet, waited for
+    // silently — they appeared all at once much later, which read as the
+    // machine being seconds behind the keyboard.
+    function updateHeldChip() {
+      const chip = document.getElementById('held-chip');
+      if (!chip) return;
+      const k = heldInput.length;
+      const text = k ? (k === 1 ? '1 key' : k + ' keys') + ' waiting for it to connect' : '';
+      document.getElementById('held-chip-text').textContent = text;
+      chip.hidden = !text;
+    }
+    function discardHeld() {
+      const k = heldInput.length;
+      dropHeldInput();
+      if (k) viewerNote((k === 1 ? '1 key' : k + ' keys') + ' you typed while it connected ' + (k === 1 ? 'was' : 'were') + ' not sent.');
+      term.focus();
+    }
+    document.getElementById('held-discard').addEventListener('click', () => discardHeld());
     function flushHeldInput() {
       if (!inputLive() || (!heldInput.length && !heldOverflow)) return;
       const items = heldInput, late = Date.now() - heldSince > INPUT_HOLD_MS, over = heldOverflow;

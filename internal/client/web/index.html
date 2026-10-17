@@ -214,6 +214,15 @@
        the screen a full-screen program draws by relative moves under it, and
        its next redraws landed a row off (viewerNote). */
     #viewer-notes { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: calc(100% - 32px); pointer-events: none; z-index: 5; }
+    /* Keys typed while the session is not live yet (connecting, or its
+       machine not answering yet): their count, never the keys (one may be a
+       password), and a way to drop them. */
+    #held-chip { position: absolute; right: 14px; bottom: 14px; z-index: 4; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 28px);
+      background: #161b22; border: 1px solid #30363d; color: #e6edf3; font-size: 12.5px; padding: 6px 8px 6px 12px; border-radius: 6px; }
+    #held-chip[hidden] { display: none; }
+    #held-chip button { font: inherit; padding: 3px 10px; border-radius: 5px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; cursor: pointer; }
+    #held-chip button.go { background: #238636; border-color: #2ea043; }
+    #held-chip button[hidden] { display: none; }
     .viewer-note { background: rgba(22, 27, 34, 0.94); border: 1px solid #30363d; color: #c9d1d9; font-size: 12.5px; line-height: 1.35; padding: 6px 12px; border-radius: 6px; text-align: center; overflow-wrap: anywhere; transition: opacity .4s; }
     .viewer-note.gone { opacity: 0; }
     #overlay span { background: #161b22; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; }
@@ -2002,6 +2011,7 @@
     <div id="terminal"></div>
     <div id="overlay"><span id="overlay-text">Connecting…</span></div>
     <div id="viewer-notes" aria-live="polite"></div>
+    <div id="held-chip" hidden role="status"><span id="held-chip-text"></span><button id="held-send" class="go" hidden>Send</button><button id="held-discard">Discard</button></div>
     <button id="jump-bottom" title="Jump to bottom">↓ Jump to bottom</button>
     <div id="findbar">
       <input id="find-input" type="search" placeholder="Find in scrollback" autocomplete="off">
