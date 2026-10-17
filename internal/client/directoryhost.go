@@ -234,33 +234,54 @@ type tokenBucket struct {
 	max    float64
 	perSec float64
 	last   time.Time
+	// owed is how many callers have been told a time to come back that has
+	// not come yet: each one refused is given the next free time, after
+	// those already told one, not all the same one (twenty told "62 ms" all
+	// came back at once, one was taken, and the rest were refused again,
+	// until even the busy allowance ran out). It falls as the tokens they
+	// were promised come in.
+	owed float64
 }
 
 func newTokenBucket(max, perSec float64) *tokenBucket {
 	return &tokenBucket{tokens: max, max: max, perSec: perSec, last: time.Now()}
 }
 
+// allow is take for a caller that is not told when to come back: one it
+// refuses is owed nothing.
 func (tb *tokenBucket) allow(now time.Time) bool {
-	ok, _ := tb.take(now)
+	ok, _ := tb.take1(now, false)
 	return ok
 }
 
-// take is allow, and when it refuses, how long until a token is back: what
-// a caller over the allowance is told to wait (retry_ms), so it comes back
-// when it will be answered rather than timing out on a silence.
+// take is allow, and when it refuses, how long until a token is back for
+// this caller: what a caller over the allowance is told to wait (retry_ms),
+// so it comes back when it will be answered rather than timing out on a
+// silence. Callers refused together are told times one token apart, in
+// the order they asked.
 func (tb *tokenBucket) take(now time.Time) (bool, time.Duration) {
+	return tb.take1(now, true)
+}
+
+func (tb *tokenBucket) take1(now time.Time, owe bool) (bool, time.Duration) {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
-	tb.tokens += now.Sub(tb.last).Seconds() * tb.perSec
+	came := now.Sub(tb.last).Seconds() * tb.perSec
+	tb.tokens += came
 	if tb.tokens > tb.max {
 		tb.tokens = tb.max
 	}
+	tb.owed = max(0, tb.owed-came)
 	tb.last = now
 	if tb.tokens < 1 {
 		if tb.perSec <= 0 {
 			return false, dirBusyMaxWait // never refills: asked the longest wait
 		}
-		return false, min(time.Duration(math.Ceil((1-tb.tokens)/tb.perSec*1000))*time.Millisecond, dirBusyMaxWait)
+		wait := min(time.Duration(math.Ceil((1-tb.tokens+tb.owed)/tb.perSec*1000))*time.Millisecond, dirBusyMaxWait)
+		if owe && wait < dirBusyMaxWait {
+			tb.owed++
+		}
+		return false, wait
 	}
 	tb.tokens--
 	return true, 0
