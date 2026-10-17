@@ -86,11 +86,6 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 	// its own ("Error: 401", then the service's words), at its prompt, ready
 	// for more: it read as done.
 	"pi": regexp.MustCompile(`^\d+(\.\d+)?%/0(\([a-z]+\))?unknown$|^[^a-z0-9]*error:(noapikeyfoundfortheselected|401([^0-9]|$))`),
-	// OpenCode with an OpenAI key the service refuses: it takes each message
-	// and answers it, in its own box, with the service's words ("┃  Incorrect
-	// API key provided: sk-…"), then sits at its prompt again: it read as
-	// done. From the row's start, as Codex's.
-	"opencode": regexp.MustCompile(`^[^a-z0-9]*incorrectapikeyprovided`),
 	// Claude Code's own login menu (a fresh machine shows it before anything
 	// else), and its sign-in step once a way is picked: "Opening browser to
 	// sign in…" under a spinner first, then the link. Its own rows, from
@@ -116,6 +111,11 @@ const cursorKeyRefused = `^[^a-z0-9]*(warning:)?theprovidedapikeyisinvalid`
 // plain shell's prompt it says nothing about an agent's login.
 var harnessKeyRefusals = map[string]*regexp.Regexp{
 	"cursor-agent": regexp.MustCompile(cursorKeyRefused),
+	// OpenCode with an OpenAI key the service refuses: it takes each message
+	// and answers it, in its own box, with the service's words ("┃  Incorrect
+	// API key provided: sk-…"), then sits at its prompt again: it read as
+	// done. A key it was given and the service refused, from the row's start.
+	"opencode": regexp.MustCompile(`^[^a-z0-9]*incorrectapikeyprovided`),
 }
 
 // harnessKeyRefusedIn reports whether the bottom of a screen has a CLI

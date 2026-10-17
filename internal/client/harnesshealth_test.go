@@ -163,11 +163,6 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		// of its SDK's error; not captured).
 		"pi, refused by OpenAI": " Error: 401 Incorrect API key provided: sk-STAND*****eady. You can find your API\n" +
 			"/work\n0.0%/400k (auto)                                  (openai) gpt-5 • medium",
-		// OpenCode 1.19.3 with an OpenAI key the service refuses, as captured.
-		"opencode, refused": "  ┃  Incorrect API key provided: sk-STAND****eady. You can find your API key\n" +
-			"  ┃  at https://platform.openai.com/account/api-keys.\n  ┃\n     ▣  Build · GPT-5.6 Terra Pro\n  ┃\n  ┃\n  ┃\n" +
-			"  ┃  Build · GPT-5.6 Terra Pro OpenAI\n  ╹" + strings.Repeat("▀", 74) + "\n" +
-			"   /work                                           tab agents  ctrl+p commands",
 		"amp":                "No API key found. Starting login flow...\nWould you like to log in to Amp? [(y)es, (n)o]: ",
 		"codex":              "  Sign in with ChatGPT to use Codex as part of your paid plan\n  › 1. Sign in with ChatGPT\n    2. Provide your own API key",
 		"codex, turned away": "■ unexpected status 401 Unauthorized: Incorrect API key provided:\nkey at https://platform.openai.com/account/api-keys.",
@@ -188,10 +183,6 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		if prog, _, _ := strings.Cut(name, ","); !harnessProblemIn(harnessTail(s, harnessRows), prog) {
 			t.Errorf("%s's sign-in screen was not seen as logged out", name)
 		}
-	}
-	// OpenCode's answer naming the error is not the error.
-	if harnessProblemIn("  ┃  The log says Incorrect API key provided, so the key is wrong.\n   /work   tab agents  ctrl+p commands", "opencode") {
-		t.Error("OpenCode's words about a refused key read as its own")
 	}
 	for _, ok := range []string{
 		"  › Ask Codex to do anything   ? for shortcuts",
@@ -495,6 +486,46 @@ func TestACursorKeyItWasGivenAndRefusedIsSaidAsSo(t *testing.T) {
 	prose := "I checked the logs: the provided API key is invalid, so the deploy step failed."
 	if harnessProblemIn(prose, "claude") || harnessKeyRefusedIn(prose) != "" {
 		t.Error("a sentence naming the words was read as Cursor refusing its key")
+	}
+}
+
+// OpenCode 1.19.3 with an OpenAI key the service refuses, as captured: it
+// stays in front, at its prompt, and answers each message with the
+// service's words. Logged out, by a key it was given and that was refused —
+// on its second read, as any notice; cleared once it works. Not from its
+// own words naming the error, nor while another program is in front.
+func TestAnOpenCodeKeyItWasGivenAndRefusedIsSaidAsSo(t *testing.T) {
+	refused := "  ┃  Incorrect API key provided: sk-STAND****eady. You can find your API key\n" +
+		"  ┃  at https://platform.openai.com/account/api-keys.\n  ┃\n     ▣  Build · GPT-5.6 Terra Pro\n  ┃\n  ┃\n  ┃\n" +
+		"  ┃  Build · GPT-5.6 Terra Pro OpenAI\n  ╹" + strings.Repeat("▀", 74) + "\n" +
+		"   /work                                           tab agents  ctrl+p commands"
+	if got := harnessKeyRefusedIn(harnessTail(refused, harnessRows)); got != "opencode" {
+		t.Fatalf("refused key read as %q, want opencode", got)
+	}
+	a := &Agent{}
+	a.noteForeground("opencode", 0)
+	a.noteHarnessHealth(refused, "opencode", false)
+	a.noteHarnessHealth(refused, "opencode", false)
+	if !a.harnessDown() || a.harnessKeyRefused() != "opencode" {
+		t.Fatalf("down %v, refused %q; want down, by opencode", a.harnessDown(), a.harnessKeyRefused())
+	}
+	working := "  ┃  say hi\n     ▣  Build · GPT-5.6 Terra Pro\n  Hi! How can I help?\n  ╹" + strings.Repeat("▀", 74) + "\n   /work   tab agents  ctrl+p commands"
+	for i := 0; i < harnessUpAfter; i++ {
+		a.noteHarnessHealth(working, "opencode", false)
+	}
+	if a.harnessDown() || a.harnessKeyRefused() != "" {
+		t.Errorf("still down %v / refused %q once it works", a.harnessDown(), a.harnessKeyRefused())
+	}
+	prose := "  ┃  The log says Incorrect API key provided, so the key is wrong.\n   /work   tab agents  ctrl+p commands"
+	if harnessKeyRefusedIn(prose) != "" || harnessProblemIn(prose, "opencode") {
+		t.Error("OpenCode's words about a refused key read as its own")
+	}
+	b := &Agent{}
+	b.noteForeground("claude", 0)
+	b.noteHarnessHealth(refused, "claude", false)
+	b.noteHarnessHealth(refused, "claude", false)
+	if b.harnessDown() {
+		t.Error("OpenCode's words read as Claude Code's, with Claude Code in front")
 	}
 }
 
