@@ -226,6 +226,9 @@ func SwitchChannel(manifestURL, want string) (string, error) {
 	if want == "" {
 		return "", fmt.Errorf("no channel named to switch to")
 	}
+	if err := updatedByRefusal(); err != nil {
+		return "", err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), httpTimeoutInteractive)
 	defer cancel()
 	m, err := FetchManifest(ctx, manifestURL)

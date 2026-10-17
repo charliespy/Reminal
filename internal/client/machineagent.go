@@ -419,6 +419,7 @@ func (a *Agent) handleDirQuery(conn *websocket.Conn, data string) {
 	resp.Caps = machineCaps()
 	if resp.Stats != nil {
 		resp.Stats.Version, resp.Stats.Update = a.version, updater.Available(a.version)
+		resp.Stats.UpdatedBy = updater.UpdatedBy()
 	}
 	q := parseDirQuery(a.box, data)
 	// Every owner on the channel hears this reply: say whose it is.
