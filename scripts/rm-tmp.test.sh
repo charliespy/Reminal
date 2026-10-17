@@ -15,6 +15,13 @@ ok 'refuses a path with ..' '! "$R" "$T/../../$K" 2>/dev/null && [ -d "$K" ]'
 ok 'refuses a temp root itself' '! "$R" /tmp 2>/dev/null && ! "$R" /tmp/ 2>/dev/null && [ -d /tmp ]'
 ok 'refuses / and an empty TMPDIR does not widen it' '! TMPDIR= RUNNER_TEMP=/ "$R" / "$K" 2>/dev/null && [ -d "$K" ]'
 ok 'says why it refused' '"$R" "$K" 2>&1 | grep -q "not under a temp dir"'
+ok 'a TMPDIR of $HOME does not make the home a temp root' '! TMPDIR=$HOME "$R" "$K/x" 2>/dev/null && [ -d "$K/x" ]'
+ok 'nor does a TMPDIR above $HOME' '! TMPDIR=$(dirname "$HOME") "$R" "$K/x" 2>/dev/null && [ -d "$K/x" ]'
+ln -s "$K" "$T/link"
+ok 'refuses a path that a link in /tmp leads out of it' '! "$R" "$T/link/x" 2>/dev/null && [ -d "$K/x" ]'
+ok 'removes a link in a temp dir, not what it points at' '"$R" "$T/link" && [ ! -L "$T/link" ] && [ -d "$K/x" ]'
+D=$(mktemp -d "$K/deep.XXXXXX"); mkdir -p "$D/a/b/c"
+ok 'a deep TMPDIR inside the home still serves as a temp root' 'TMPDIR=$D/a/b "$R" "$D/a/b/c" && [ ! -e "$D/a/b/c" ]'
 rm -rf -- "$K"
 "$R" "$T"; ok 'removes the test dir' '[ ! -e "$T" ]'
 [ "$fail" = 0 ] && echo "all passed" || exit 1
