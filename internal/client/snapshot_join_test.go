@@ -404,6 +404,10 @@ func joinFrame(t *testing.T, a *Agent) string {
 // snapshot of the same state.
 func sameAsRef(t *testing.T, a *Agent, step string) {
 	t.Helper()
+	// The old path's snapshot is of the state, which the joins leave as it
+	// is: built once for the two joins that compare to it (each twice its
+	// size to build, and this is called some hundreds of times).
+	var refF, refP *string
 	for _, try := range []string{"join", "join again", "join in parts", "join in parts again"} {
 		var got, want string
 		if strings.Contains(try, "parts") {
@@ -411,9 +415,19 @@ func sameAsRef(t *testing.T, a *Agent, step string) {
 			if err != nil || len(parts) == 0 {
 				t.Fatalf("%s, %s: no parts (%v)", step, try, err)
 			}
-			got, want = unpackParts(t, a, parts), refParts(a)
+			got = unpackParts(t, a, parts)
+			if refP == nil {
+				r := refParts(a)
+				refP = &r
+			}
+			want = *refP
 		} else {
-			got, want = joinFrame(t, a), refFrame(a)
+			got = joinFrame(t, a)
+			if refF == nil {
+				r := refFrame(a)
+				refF = &r
+			}
+			want = *refF
 		}
 		if got != want {
 			i := 0

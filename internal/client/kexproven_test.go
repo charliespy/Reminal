@@ -73,9 +73,13 @@ func simulate(n int, proven bool) (answered int, longestGap time.Duration) {
 }
 
 // A source that proved the PIN once keeps being answered at a steady pace,
-// however many other sources are asking.
+// however many other sources are asking — the last more than the agent's
+// table of sources holds (kexSrcSources), so it is full and sources are
+// let go. (Not 2000: past the table, more sources test nothing more, and
+// each ask from one scans the whole table — a third of the package's
+// slowest test under -race.)
 func TestKexProvenSourceKeepsBeingAnswered(t *testing.T) {
-	for _, n := range []int{1, 2, 10, 2000} {
+	for _, n := range []int{1, 2, 10, kexSrcSources + 64} {
 		got, gap := simulate(n, true)
 		if got < 30 || gap > 15*time.Minute {
 			t.Errorf("%d other sources: proven source answered %d of 60, longest gap %v", n, got, gap)
