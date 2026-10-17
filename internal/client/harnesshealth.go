@@ -5,6 +5,7 @@ package client
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -130,11 +131,6 @@ var harnessKeyRefusals = map[string]*regexp.Regexp{
 	"codex": regexp.MustCompile(`^[^a-z0-9]*(unexpectedstatus40[13][a-z]*:)?incorrectapikeyprovided`),
 }
 
-// harnessKeyRefusedIn reports whether the bottom of a screen has a CLI
-// saying it refused its key, and which CLI ("" if none): read with the same
-// rows as harnessProblemIn. After the CLI exits on it, its words stay above
-// the shell's prompt, the shell in front — so the CLI is the one whose
-// words they are, not the program here.
 // harnessKeyRefusedBy reports whether the bottom of a screen has prog saying
 // it refused its key (harnessKeyRefusals), read as harnessKeyRefusedIn reads.
 func harnessKeyRefusedBy(tail, prog string) bool {
@@ -150,20 +146,42 @@ func harnessKeyRefusedBy(tail, prog string) bool {
 	return false
 }
 
+// harnessKeyRefusedIn reports whether the bottom of a screen has a CLI
+// saying it refused its key, and which CLI ("" if none): read with the same
+// rows as harnessProblemIn. After the CLI exits on it, its words stay above
+// the shell's prompt, the shell in front — so the CLI is the one whose
+// words they are, not the program here.
+//
+// Two CLIs can print the same words (Codex and OpenCode both pass on
+// OpenAI's "Incorrect API key provided"): then the one named is the first
+// by name, the same every time, not whichever a map's order gave (a test
+// read OpenCode's refusal as Codex's half the time). Which of them it was
+// is the program's in front, asked by name (harnessKeyRefusedBy).
 func harnessKeyRefusedIn(tail string) string {
 	for _, row := range strings.Split(tail, "\n") {
 		flat := strings.ToLower(strings.Join(strings.Fields(row), ""))
 		if flat == "" {
 			continue
 		}
-		for prog, re := range harnessKeyRefusals {
-			if re.MatchString(flat) {
+		for _, prog := range harnessKeyRefusalOrder {
+			if harnessKeyRefusals[prog].MatchString(flat) {
 				return prog
 			}
 		}
 	}
 	return ""
 }
+
+// harnessKeyRefusalOrder is harnessKeyRefusals' programs by name: the order
+// harnessKeyRefusedIn asks them in.
+var harnessKeyRefusalOrder = func() []string {
+	ps := make([]string, 0, len(harnessKeyRefusals))
+	for p := range harnessKeyRefusals {
+		ps = append(ps, p)
+	}
+	sort.Strings(ps)
+	return ps
+}()
 
 // harnessLoginScreenIn reports whether a row is the sign-in screen of prog,
 // the program here; of any of them when it is not known.
