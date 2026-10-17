@@ -296,6 +296,10 @@ type Agent struct {
 	// detector last saw it. Written to the session record so a list can tell
 	// an agent from a plain terminal.
 	attnFG string
+	// attnPrevFG is the program that was in front before attnFG (never ""):
+	// what a harness that just exited leaves its last words as
+	// (noteHarnessHealth).
+	attnPrevFG string
 	// harness is whether the agent in this session can work at all — its
 	// login; guarded by metaMu (harnesshealth.go).
 	harness harnessHealth
