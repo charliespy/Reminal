@@ -81,6 +81,7 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 	// with "Error: No API key found for the selected model." Its startup
 	// warning ("No models available. Use /login …") sits above its editor,
 	// out of the rows read, and stays there after a /login, so it is not used.
+	// A login its provider refuses is read apart (harnessKeyRefusals).
 	"pi": regexp.MustCompile(`^\d+(\.\d+)?%/0(\([a-z]+\))?unknown$|^[^a-z0-9]*error:noapikeyfoundfortheselected`),
 	// Claude Code's own login menu (a fresh machine shows it before anything
 	// else), and its sign-in step once a way is picked: "Opening browser to
@@ -112,6 +113,17 @@ var harnessKeyRefusals = map[string]*regexp.Regexp{
 	// and it was refused — not one it never had. A line of its own, from
 	// its start, as harnessLoginRefused reads it.
 	"claude": regexp.MustCompile(`^[^a-z0-9]*(please)?run/login[·:.,\-]*apierror:40[13]([^0-9]|$)`),
+	// pi with a login its provider refuses (a token gone stale, a wrong key):
+	// it takes the message and answers each with the service's 401 on a row
+	// of its own ("Error: 401", then the service's words), at its prompt,
+	// ready for more: it read as done. "Error: 401" is also what a script or
+	// a curl prints, so only with pi in front (or just before) is it pi's.
+	"pi": regexp.MustCompile(`^[^a-z0-9]*error:401([^0-9]|$)`),
+	// OpenCode with an OpenAI key the service refuses: it takes each message
+	// and answers it, in its own box, with the service's words ("┃  Incorrect
+	// API key provided: sk-…"), then sits at its prompt again: it read as
+	// done. A key it was given and the service refused, from the row's start.
+	"opencode": regexp.MustCompile(`^[^a-z0-9]*incorrectapikeyprovided`),
 }
 
 // harnessKeyRefusedIn reports whether the bottom of a screen has a CLI
