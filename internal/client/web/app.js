@@ -3542,11 +3542,15 @@
     // doesn't recognise us. Must byte-match internal/crypto/owner.go.
     const OWNER_TIMEOUT_MS = 4000;
     // A machine under load can miss the window above without having refused
-    // us, so silence gets one more chance before we conclude anything. And a
+    // us — one just woken, on a small share of a CPU, restoring its sessions,
+    // answers in tens of seconds, not four. Silence is asked again, waiting
+    // longer each time (OWNER_SILENT_WAITS), and said as waiting; only once
+    // they are all spent is it taken for a refusal. With a PIN to fall back
+    // on, one more try is all silence gets: the PIN works either way. And a
     // machine that says own_busy has told us to come back — that is not a
-    // refusal at all, so those retries are counted separately and allowed to
-    // run longer.
+    // refusal at all, so those retries are counted separately.
     const OWNER_SILENT_RETRIES = 1;
+    const OWNER_SILENT_WAITS = [1200, 3000, 6000, 12000];
     const OWNER_BUSY_RETRIES = 4;
     const OWNER_RETRY_MS = 1200;
     let ownerTimer = 0;
@@ -3741,10 +3745,15 @@
         ownerTimer = setTimeout(() => {
           ownerTimer = 0;
           if (cryptoKey) return;
-          if (ownerSilentTries < OWNER_SILENT_RETRIES) {
+          // No agent to answer: silence says nothing. Its coming back
+          // (agent_online) starts the handshake again, counted afresh.
+          if (!agentLive) { ownerAttempts.clear(); return; }
+          if (pinValue ? ownerSilentTries < OWNER_SILENT_RETRIES : ownerSilentTries < OWNER_SILENT_WAITS.length) {
+            const wait = pinValue ? OWNER_RETRY_MS : OWNER_SILENT_WAITS[ownerSilentTries];
             ownerSilentTries++;
-            dbg('owner handshake timed out — retry ' + ownerSilentTries);
-            retryOwnerInit(OWNER_RETRY_MS);
+            dbg('owner handshake timed out — retry ' + ownerSilentTries + ' in ' + wait + 'ms');
+            if (!pinValue) setStatus('Waiting for the machine to answer…', 'warn connecting');
+            retryOwnerInit(wait);
             return;
           }
           ownerGaveUp('timeout');
@@ -7376,6 +7385,9 @@
           break;
         case 'agent_offline':
           agentLive = false;
+          // An owner handshake under way waits for the agent's return, which
+          // starts a new one; time it was away is not counted against it.
+          if (ownerTimer && !cryptoKey) { clearTimeout(ownerTimer); ownerTimer = 0; ownerAttempts.clear(); ownerSilentTries = 0; }
           if (staleScreen) forgetCachedScreen(sessionId); // not live, and maybe never again
           setStatus('Agent offline — waiting…', 'warn connecting');
           showOverlay('Agent offline — waiting for it to reconnect…');
