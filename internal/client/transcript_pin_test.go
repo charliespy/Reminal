@@ -128,8 +128,15 @@ func runFakeAgent(t *testing.T, sessionID, pin string, sessionKey []byte, snapsh
 			if err != nil {
 				continue
 			}
-			viewerElem, _ := base64.StdEncoding.DecodeString(m.Data)
-			st, mine, err := crypto.NewCPace([]byte(pin), []byte(pakeChannel), pakeSID(sessionID, exID), false)
+			// A sealing machine answers the bound offer when it comes; an
+			// older one knows only the element as before.
+			bound := seals && m.Frames > 0 && m.FramesData != ""
+			elem := m.Data
+			if bound {
+				elem = m.FramesData
+			}
+			viewerElem, _ := base64.StdEncoding.DecodeString(elem)
+			st, mine, err := crypto.NewCPace([]byte(pin), []byte(pakeChannel), pakeSID(sessionID, exID, bound), false)
 			if err != nil {
 				continue
 			}

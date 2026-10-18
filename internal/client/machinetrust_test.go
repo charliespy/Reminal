@@ -52,7 +52,13 @@ func answeringMachine(t *testing.T, sessionID string, machine ed25519.PrivateKey
 		_, _ = rand.Read(key)
 		wrapped, _ := crypto.WrapSessionKey(shared, exID, key)
 		machinePub := machine.Public().(ed25519.PublicKey)
-		sig := crypto.SignOwner(machine, crypto.OwnerServerTranscript(sessionID, vEph, aEph, devPub, machinePub))
+		// As a sealing agent answers a device that offered sealed frames:
+		// the answer to the offer signed with the rest.
+		seal := ""
+		if in.Frames > 0 {
+			seal, _ = crypto.SealSealInfo(shared, exID, crypto.SealInfo{Stream: 1})
+		}
+		sig := crypto.SignOwner(machine, crypto.OwnerServerTranscriptFor(sessionID, vEph, aEph, devPub, machinePub, in.Frames > 0, seal))
 		_ = c.WriteJSON(protocol.Message{
 			Type:       protocol.TypeOwnerResp,
 			ExID:       in.ExID,
@@ -60,6 +66,7 @@ func answeringMachine(t *testing.T, sessionID string, machine ed25519.PrivateKey
 			MachinePub: base64.StdEncoding.EncodeToString(machinePub),
 			MachineSig: base64.StdEncoding.EncodeToString(sig),
 			Wrap:       base64.StdEncoding.EncodeToString(wrapped),
+			Seal:       seal,
 		})
 		_, _, _ = c.ReadMessage() // hold the socket open until the viewer is done
 	}))

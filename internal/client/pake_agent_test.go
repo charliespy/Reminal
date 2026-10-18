@@ -37,11 +37,11 @@ func viewerHalf(t *testing.T, a *Agent, pin string) ([]byte, bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, mine, err := crypto.NewCPace([]byte(pin), []byte(pakeChannel), pakeSID(a.sessionID, exID), true)
+	st, mine, err := crypto.NewCPace([]byte(pin), []byte(pakeChannel), pakeSID(a.sessionID, exID, false), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.handlePakeInit(conn, exHex, base64.StdEncoding.EncodeToString(mine), 0, "")
+	a.handlePakeInit(conn, exHex, base64.StdEncoding.EncodeToString(mine), "", 0, "")
 	reply, ok := nextOwnerMsg(t, got)
 	if !ok {
 		t.Fatal("the agent did not answer the handshake")
@@ -102,7 +102,7 @@ func TestAgentNoLongerAnswersKexInit(t *testing.T) {
 		// A pake_init on the same socket proves the loop is reading and
 		// answering at all, so silence to kex_init means something.
 		ex2, exID2, _ := crypto.NewExID()
-		_, mine, _ := crypto.NewCPace([]byte(a.pin), []byte(pakeChannel), pakeSID(a.sessionID, exID2), true)
+		_, mine, _ := crypto.NewCPace([]byte(a.pin), []byte(pakeChannel), pakeSID(a.sessionID, exID2, false), true)
 		_ = c.WriteJSON(protocol.Message{
 			Type: protocol.TypePakeInit,
 			ExID: ex2,

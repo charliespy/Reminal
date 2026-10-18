@@ -6,6 +6,7 @@ package client
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"reminal/internal/crypto"
@@ -293,13 +294,15 @@ func TestViewerTakesOnlySealedWhenSealing(t *testing.T) {
 	}
 }
 
-// A handshake answer without seal info, followed by sealed frames: the two
-// disagree, so the viewer reconnects.
+// A handshake answer without seal info is refused outright: this viewer
+// offered sealed frames, and the offer is bound into the handshake. Had one
+// been taken, sealed frames after it would still disagree with it, and the
+// viewer reconnect.
 func TestViewerReconnectsWhenAnswerAndFramesDisagree(t *testing.T) {
 	a, _ := sealedPair(t)
 	v := &Viewer{box: a.box}
-	if err := v.setSeal(a.sessionKey, nil, nil, ""); err != nil {
-		t.Fatal(err)
+	if err := v.setSeal(a.sessionKey, nil, nil, ""); !errors.Is(err, errSealMissing) {
+		t.Fatalf("an answer without seal info was taken: %v", err)
 	}
 	f := fromAgent(t, a, protocol.Message{Type: protocol.TypeData, Data: "x"})
 	if _, _, err := v.admitIn(f); err != errSealedDowngrade {

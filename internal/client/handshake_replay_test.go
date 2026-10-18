@@ -34,7 +34,7 @@ func TestAHandshakeIsAnsweredWhileTheScrollbackIsReplayed(t *testing.T) {
 		}
 		defer c.Close()
 		ex, exID, _ := crypto.NewExID()
-		_, mine, _ := crypto.NewCPace([]byte(a.pin), []byte(pakeChannel), pakeSID(a.sessionID, exID), true)
+		_, mine, _ := crypto.NewCPace([]byte(a.pin), []byte(pakeChannel), pakeSID(a.sessionID, exID, false), true)
 		_ = c.WriteJSON(protocol.Message{Type: protocol.TypePakeInit, ExID: ex, Data: base64.StdEncoding.EncodeToString(mine)})
 		// And the resume a viewer sends right behind it: its screen waits for
 		// the replay — nothing of the session is sent before it is whole.

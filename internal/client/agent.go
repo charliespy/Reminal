@@ -3404,7 +3404,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// (TestPakeInitIsAnsweredOnTheReader). An owner handshake below is
 			// answered off the reader, and the viewer asks again for a screen
 			// that came before its key.
-			a.handlePakeInit(conn, msg.ExID, msg.Data, msg.Frames, msg.Src)
+			a.handlePakeInit(conn, msg.ExID, msg.Data, msg.FramesData, msg.Frames, msg.Src)
 		case protocol.TypeKexInit:
 			// Superseded by pake_init and no longer answered. A viewer that
 			// only sends this needs updating to connect with a PIN.
@@ -3956,15 +3956,21 @@ const pakeChannel = "reminal-session-v3"
 
 // pakeSID binds a handshake to this session and to this exchange, so an element
 // from one handshake is no use in any other.
-func pakeSID(sessionID string, exID []byte) []byte {
-	return append([]byte(sessionID+"|"), exID...)
+func pakeSID(sessionID string, exID []byte, frames bool) []byte {
+	sid := append([]byte(sessionID+"|"), exID...)
+	if frames {
+		// The sealed-frames offer, bound into the key itself: a relay that
+		// strips it leaves the two ends with different keys.
+		sid = append(append(sid, '|'), crypto.FramesLabel...)
+	}
+	return sid
 }
 
 // handlePakeInit answers a viewer's PIN handshake with our CPace element and the
 // session key, wrapped under the key we both derive. Past its allowance it
 // answers pake_busy; on any other failure it is silent and the viewer times
 // out.
-func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, frames int, src string) {
+func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64, framesB64 string, frames int, src string) {
 	if ok, retry := a.allowKexFrom(time.Now(), src); !ok {
 		// Say so, so the viewer waits and tries again instead of timing out.
 		_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypePakeBusy, ExID: exIDHex, RetryMS: int(retry / time.Millisecond)})
@@ -3974,11 +3980,21 @@ func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, fr
 	if err != nil {
 		return
 	}
-	viewerElem, err := base64.StdEncoding.DecodeString(dataB64)
+	// The sealed-frames offer bound into the key (FramesData, the element
+	// made with the sid that names it) is the one answered when it comes and
+	// this agent seals: the answer to it is then as authenticated as the key.
+	// Without it, the element as before — a viewer that does not bind its
+	// offer, or predates sealed frames — answered as it always was.
+	bound := frames > 0 && framesB64 != "" && a.frameKeys() != nil
+	elemB64 := dataB64
+	if bound {
+		elemB64 = framesB64
+	}
+	viewerElem, err := base64.StdEncoding.DecodeString(elemB64)
 	if err != nil || len(viewerElem) != crypto.CPaceElementBytes {
 		return
 	}
-	st, mine, err := crypto.NewCPace([]byte(a.pin), []byte(pakeChannel), pakeSID(a.sessionID, exID), false)
+	st, mine, err := crypto.NewCPace([]byte(a.pin), []byte(pakeChannel), pakeSID(a.sessionID, exID, bound), false)
 	if err != nil {
 		return
 	}
@@ -3992,13 +4008,17 @@ func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, fr
 	}
 	// Before the answer: an older viewer's resume can follow it at once.
 	a.handshakeWithout(frames)
-	_ = a.writeMsg(conn, protocol.Message{
+	resp := protocol.Message{
 		Type: protocol.TypePakeResp,
 		ExID: exIDHex,
 		Data: base64.StdEncoding.EncodeToString(mine),
 		Wrap: base64.StdEncoding.EncodeToString(wrapped),
 		Seal: a.sealInfoFor(frames, key, exID, src),
-	})
+	}
+	if bound {
+		resp.Frames = 1 // which element was answered; the key says it anyway
+	}
+	_ = a.writeMsg(conn, resp)
 }
 
 // handleOwnerInit completes one PIN-free (owner) handshake for an enrolled
@@ -4040,8 +4060,18 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 		})
 		return
 	}
-	// 1. Prove the sender controls this device key for THIS exchange.
-	if !crypto.VerifyOwner(devicePub, crypto.OwnerClientTranscript(a.sessionID, viewerEph, devicePub), deviceSig) {
+	// 1. Prove the sender controls this device key for THIS exchange. The
+	//    sealed-frames offer signed in (FramesSig, over the transcript that
+	//    names it) is the one taken when it comes and this agent seals; the
+	//    answer to it is then signed with the rest. Without it, the transcript
+	//    as before — a device that does not bind its offer, or predates it.
+	bound := msg.Frames > 0 && msg.FramesSig != "" && a.frameKeys() != nil
+	if bound {
+		if deviceSig, err = base64.StdEncoding.DecodeString(msg.FramesSig); err != nil {
+			return
+		}
+	}
+	if !crypto.VerifyOwner(devicePub, crypto.OwnerClientTranscriptFor(a.sessionID, viewerEph, devicePub, bound), deviceSig) {
 		return
 	}
 	// 2. And that the device is enrolled as an owner of this machine.
@@ -4072,7 +4102,9 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 		return
 	}
 	machinePub := machineKey.Public().(ed25519.PublicKey)
-	machineSig := crypto.SignOwner(machineKey, crypto.OwnerServerTranscript(a.sessionID, viewerEph, agentEph, devicePub, machinePub))
+	//    Offered sealed frames, the answer to that is signed with it.
+	seal := a.sealInfoFor(msg.Frames, shared, exID, msg.Src)
+	machineSig := crypto.SignOwner(machineKey, crypto.OwnerServerTranscriptFor(a.sessionID, viewerEph, agentEph, devicePub, machinePub, bound, seal))
 	// 5. Deliver the session key (same one every viewer shares).
 	wrapped, err := crypto.WrapSessionKey(shared, exID, a.sessionKey)
 	if err != nil {
@@ -4086,7 +4118,8 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 		MachinePub: base64.StdEncoding.EncodeToString(machinePub),
 		MachineSig: base64.StdEncoding.EncodeToString(machineSig),
 		Wrap:       base64.StdEncoding.EncodeToString(wrapped),
-		Seal:       a.sealInfoFor(msg.Frames, shared, exID, msg.Src),
+		Seal:       seal,
+		Frames:     map[bool]int{true: 1}[bound], // which transcript was signed
 	})
 }
 
