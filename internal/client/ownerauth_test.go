@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -257,5 +258,22 @@ func TestOneDeviceCannotFillTheSetForAnother(t *testing.T) {
 	// ...and B, another owner, is not kept out by it.
 	if why := a.verifyOwnerAction(signAction(t, privB, "S", "upgrade", now.Unix()), "upgrade"); why != "" {
 		t.Fatalf("another owner was refused because one device filled the set: %s", why)
+	}
+}
+
+// A proof that could not be written down is not kept as taken: the same
+// device asking again with it is told the same (could not record), never
+// "already used".
+func TestAProofNotRecordedIsNotKeptAsTaken(t *testing.T) {
+	isolateHome(t)
+	n := &ownerNonces{file: filepath.Join(os.DevNull, "nope", "owner-nonces.json")} // cannot be written
+	for i := 0; i < 2; i++ {
+		why := n.use("dev", "nonce1", time.Now())
+		if !strings.Contains(why, "could not record") {
+			t.Fatalf("attempt %d: %q, want could not record", i+1, why)
+		}
+	}
+	if len(n.seen) != 0 {
+		t.Fatalf("an unrecorded proof was kept: %v", n.seen)
 	}
 }

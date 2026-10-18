@@ -108,7 +108,7 @@ func (n *ownerNonces) use(device, nonce string, now time.Time) string {
 	}
 	n.seen[key] = now
 	if n.file != "" && !n.saveFile() {
-		delete(n.seen, nonce)
+		delete(n.seen, key)
 		return "this machine could not record the proof; try again"
 	}
 	return ""
