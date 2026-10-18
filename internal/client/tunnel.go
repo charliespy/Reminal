@@ -247,7 +247,7 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 		if id, err = session.NewID(8); err != nil {
 			return nil, err
 		}
-		if pin, err = session.NewPIN(6); err != nil {
+		if pin, err = session.NewExposePIN(); err != nil {
 			return nil, err
 		}
 		if pinHash, err = session.HashPIN(pin); err != nil {

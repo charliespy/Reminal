@@ -67,6 +67,7 @@ outside that boundary.
 |---|---|---|---|---|
 | Session ID | 8 chars, 32-symbol unambiguous alphabet (`internal/session/id.go`) | 32⁸ ≈ 1.1 × 10¹² (~40 bits) | One agent run | Memory only |
 | PIN | 6 digits (`internal/session/pin.go`) | 10⁶ (~20 bits) | Until the session ends or `reminal repin` | Memory; sealed on disk for restore and `reminal info` (§6.2) |
+| `expose` PIN | 12 chars, Crockford base32 (`internal/session/pin.go`) | 32¹² ≈ 1.2 × 10¹⁸ (60 bits) | One port-forward | Memory; bcrypt hash at the relay |
 | Device owner key | Ed25519 | 128-bit security | Until revoked | `~/.reminal/device_ed25519.sealed`, encrypted (§6.2) |
 | Machine identity key | Ed25519 | 128-bit security | Until re-provisioned | Host key store, mode 0600 |
 | Session key | 256-bit random (`internal/crypto/box.go`) | 256 bits | One agent run | Memory only, both ends |
@@ -224,8 +225,9 @@ therefore relayed through the Durable Object as base64-encoded **plaintext**
 (`cloudflare/src/session.ts`), and the relay can observe them.
 
 What still protects it: TLS on every hop; an optional bcrypt-hashed PIN gate
-enforced at the relay, with a 5-attempt lockout and a 5-minute cooldown; and an
-HMAC-signed, `HttpOnly` `Secure` `SameSite=Lax` session cookie scoped to that
+enforced at the relay, on a 12-character base32 PIN, with a lockout per source and per port that doubles on each one (5 minutes, then 10, up to a day; a source that has got the PIN right before is held only by its own wrong PINs); and
+a cookie per visitor (an HMAC over a random visitor ID and its issue time, honoured
+for 30 days at most), `HttpOnly` `Secure` `SameSite=Lax` and scoped to that
 session's path only.
 
 **Guidance:** treat `reminal expose` as equivalent to putting the service behind a
@@ -245,7 +247,7 @@ reattachment (`cloudflare/src/session.ts`):
 | `token` | High-entropy reattach credential, so only the original agent can reclaim a room |
 | `pinHash` | Legacy bcrypt credential, superseded by `token`; also gates `expose` |
 | `agentAuthed`, `viewerAuthed` | Whether a room has a live agent holding it |
-| `failedAttempts`, `lockedUntil` | Lockout state for the `expose` PIN gate |
+| `gateSources`, `gateTunnel`, `gateKnown` | Lockout state for the `expose` PIN gate: counts per salted address hash and for the port, and the salted hashes of addresses that got the PIN right |
 | `tunnelMeta` | Port, gate mode, and cookie signing key for an active port-forward |
 
 **No session content is stored at any point.** There is no scrollback, no frame

@@ -1,8 +1,10 @@
 import { closeBack } from "./closeback";
 import type { Attachment, TunnelMeta } from "./types";
 import { ALARM_ARMS, armAlarm, type AlarmArms } from "./alarm";
-
-const MAX_ATTEMPTS = 5;
+import {
+  NO_SOURCE, VISITOR_MAX_AGE_S, gateRight, gateWait, gateWrong, legacyCookie, normalizePIN, timingSafeEqual, toHex,
+  visitorCookie, visitorCookieOK, type GateState, type Strikes,
+} from "./gate";
 
 // PIN handshakes are paced per address: a room passes on at most
 // HANDSHAKE_BURST from one address (IPv6: one /64), then one per
@@ -17,7 +19,6 @@ const HANDSHAKE_REFILL_MS = 60 * 1000;
 // same way, more loosely: a switch is one of each.
 const PARK_BURST = 60;
 const PARK_REFILL_MS = 1000;
-const LOCKOUT_MS = 5 * 60 * 1000;
 
 // How long a room is kept alive after the agent disconnects, giving the
 // same agent a chance to reattach across a network blip.
@@ -86,7 +87,6 @@ const WS_OPEN_TIMEOUT_MS = 10 * 1000;
 // Cookie name scoped per-session so multiple port-forwards can each
 // have their own auth state in a single browser. See authCookieName.
 const AUTH_COOKIE_PREFIX = "reminal_auth_";
-const COOKIE_MAX_AGE = 30 * 24 * 3600; // 30 days
 
 export class SessionRoom {
   private state: DurableObjectState;
@@ -95,8 +95,8 @@ export class SessionRoom {
   // /__auth POSTs would otherwise (a) run many compares at once, pegging the CPU
   // until the isolate is reset — returning 500s to visitors AND dropping the
   // agent's control socket — and (b) race the failure counter's read-modify-write
-  // so the 5-attempt lockout never engages within the burst, turning "5 guesses
-  // per 5 min" into "N concurrent guesses per 5 min". Chaining each attempt
+  // so the lockout never engages within the burst, turning "5 guesses before a
+  // wait" into "N concurrent guesses". Chaining each attempt
   // through this promise makes the check-compare-record section atomic and bounds
   // concurrent compares to one; once locked, later attempts take the fast 429 path
   // with no compare. Instance memory, like pendingTunnelReqs — a fresh DO resets
@@ -677,7 +677,11 @@ export class SessionRoom {
     const reqChunk = Array.isArray(info.caps) && info.caps.includes("req_chunk");
     const wsSubproto = Array.isArray(info.caps) && info.caps.includes("ws_subproto");
 
-    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey, reqChunk, wsSubproto };
+    // A tunnel registered before visitor cookies keeps taking the cookie its
+    // visitors already hold, for a while (see visitorAuthed). A new one, or a
+    // new PIN, never takes it.
+    const legacyUntil = prev && prev.signingKey === signingKey ? prev.legacyUntil : 0;
+    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey, reqChunk, wsSubproto, legacyUntil };
     await this.state.storage.put("tunnelMeta", meta);
   }
 
@@ -787,10 +791,7 @@ export class SessionRoom {
     // Non-public tunnels: a WebSocket can't render the HTML PIN gate, so the
     // visitor must already hold the auth cookie from a normal page load.
     if (!meta.public) {
-      const cookies = parseCookies(request.headers.get("Cookie") ?? "");
-      const cookieVal = cookies[authCookieName(sessionId, hostMode)] ?? "";
-      const expected = await hmacHex(meta.signingKey, "ok");
-      if (!timingSafeEqual(cookieVal, expected)) {
+      if (!(await this.visitorAuthed(request, sessionId, meta, hostMode))) {
         return new Response("reminal: authentication required\n", { status: 401 });
       }
       if (fromAnotherTunnel(request)) {
@@ -981,10 +982,7 @@ export class SessionRoom {
 
     // Public tunnels skip the gate entirely.
     if (!meta.public) {
-      const cookies = parseCookies(request.headers.get("Cookie") ?? "");
-      const cookieVal = cookies[authCookieName(sessionId, hostMode)] ?? "";
-      const expected = await hmacHex(meta.signingKey, "ok");
-      if (!timingSafeEqual(cookieVal, expected)) {
+      if (!(await this.visitorAuthed(request, sessionId, meta, hostMode))) {
         // In host-mode the visitor's real path is `rest`; in path-mode it's the
         // full /p/<id>/… pathname. Either way keep the query.
         // Only a real page load should get the HTML gate. An app's XHR/fetch
@@ -1365,28 +1363,39 @@ export class SessionRoom {
     // declaration): concurrent attempts must not race the counter or run bcrypt
     // in parallel. Acquire by chaining onto the previous attempt; release in a
     // finally so a throw can't wedge the gate.
+    const src = (await addressTag(request.headers.get("cf-connecting-ip") ?? "", await this.tagSalt())) ?? NO_SOURCE;
     const prevAttempt = this.authGate;
     let releaseGate!: () => void;
     this.authGate = new Promise<void>((r) => { releaseGate = r; });
     let gateResponse: Response | null;
     try {
       await prevAttempt;
-      const m = await this.loadMeta();
-      if (m.lockedUntil && Date.now() < m.lockedUntil) {
-        gateResponse = new Response(pinGatePage(sessionId, to, "Too many failed attempts — try again in a few minutes.", authAction), {
+      const now = Date.now();
+      const stored = await this.state.storage.get(["gateSources", "gateTunnel", "gateKnown"]);
+      const g: GateState = {
+        sources: (stored.get("gateSources") as Record<string, Strikes> | undefined) ?? {},
+        tunnel: stored.get("gateTunnel") as Strikes | undefined,
+        known: (stored.get("gateKnown") as Record<string, number> | undefined) ?? {},
+      };
+      const wait = gateWait(g, src, now);
+      if (wait > 0) {
+        gateResponse = new Response(pinGatePage(sessionId, to, `Too many failed attempts. Try again in ${waitText(wait)}.`, authAction), {
           status: 429,
-          headers: { "Content-Type": "text/html; charset=utf-8" },
+          headers: { "Content-Type": "text/html; charset=utf-8", "Retry-After": String(Math.ceil(wait / 1000)) },
         });
       } else {
         const { compare } = await import("bcryptjs");
-        if (!pin || !(await compare(pin, meta.pinHash))) {
-          await this.recordFailure();
+        if (!pin || !(await compare(normalizePIN(pin), meta.pinHash))) {
+          const w = gateWrong(g, src, now);
+          await this.state.storage.put({ gateSources: w.sources, gateTunnel: w.tunnel });
           gateResponse = new Response(pinGatePage(sessionId, to, "Incorrect PIN.", authAction), {
             status: 401,
             headers: { "Content-Type": "text/html; charset=utf-8" },
           });
         } else {
-          await this.resetFailures();
+          const r = gateRight(g, src, now);
+          await this.state.storage.put({ gateSources: r.sources, gateKnown: r.known });
+          await this.state.storage.delete(["failedAttempts", "lockedUntil"]); // the counter before these
           gateResponse = null; // success — fall through to issue the auth cookie
         }
       }
@@ -1395,11 +1404,11 @@ export class SessionRoom {
     }
     if (gateResponse) return gateResponse;
 
-    const cookieVal = await hmacHex(meta.signingKey, "ok");
+    const cookieVal = await visitorCookie(meta.signingKey, Date.now());
     const cookie =
       `${authCookieName(sessionId, hostMode)}=${cookieVal}; ` +
       `Path=${root}; ` +
-      `Max-Age=${COOKIE_MAX_AGE}; ` +
+      `Max-Age=${VISITOR_MAX_AGE_S}; ` +
       `HttpOnly; Secure; SameSite=Lax`;
     // Defensive: only redirect same-origin. Host-mode allows any absolute path
     // on the tunnel's own origin; path-mode stays confined to /p/<id>/.
@@ -1567,33 +1576,35 @@ export class SessionRoom {
   }
 
   private async loadMeta() {
-    const [agentAuthed, viewerAuthed, lockedUntil, failedAttempts] = await Promise.all([
+    const [agentAuthed, viewerAuthed] = await Promise.all([
       this.state.storage.get<boolean>("agentAuthed"),
       this.state.storage.get<boolean>("viewerAuthed"),
-      this.state.storage.get<number>("lockedUntil"),
-      this.state.storage.get<number>("failedAttempts"),
     ]);
-    return {
-      agentAuthed: !!agentAuthed,
-      viewerAuthed: !!viewerAuthed,
-      lockedUntil: lockedUntil ?? 0,
-      failedAttempts: failedAttempts ?? 0,
-    };
+    return { agentAuthed: !!agentAuthed, viewerAuthed: !!viewerAuthed };
   }
 
-  private async recordFailure() {
-    const meta = await this.loadMeta();
-    let attempts = meta.failedAttempts + 1;
-    if (attempts >= MAX_ATTEMPTS) {
-      await this.state.storage.put("lockedUntil", Date.now() + LOCKOUT_MS);
-      attempts = 0;
+  // visitorAuthed reports whether request carries a cookie that lets its
+  // visitor past the PIN gate: a visitor cookie still within its age, or, on a
+  // tunnel registered before visitor cookies, the one cookie its visitors were
+  // given then, until VISITOR_MAX_AGE_S after this relay first saw it. The
+  // grace keeps those visitors in without letting that cookie last forever.
+  private async visitorAuthed(request: Request, sessionId: string, meta: TunnelMeta, hostMode: boolean): Promise<boolean> {
+    const cookies = parseCookies(request.headers.get("Cookie") ?? "");
+    const value = cookies[authCookieName(sessionId, hostMode)] ?? "";
+    if (!value) return false;
+    const now = Date.now();
+    if (await visitorCookieOK(meta.signingKey, value, now)) return true;
+    if (meta.legacyUntil === 0) return false;
+    if (!timingSafeEqual(value, await legacyCookie(meta.signingKey))) return false;
+    let until = meta.legacyUntil;
+    if (until === undefined) {
+      until = now + VISITOR_MAX_AGE_S * 1000;
+      const stored = await this.state.storage.get<TunnelMeta>("tunnelMeta");
+      if (stored && stored.signingKey === meta.signingKey && stored.legacyUntil === undefined) {
+        await this.state.storage.put("tunnelMeta", { ...stored, legacyUntil: until });
+      }
     }
-    await this.state.storage.put("failedAttempts", attempts);
-  }
-
-  private async resetFailures() {
-    await this.state.storage.put("failedAttempts", 0);
-    await this.state.storage.delete("lockedUntil");
+    return now < until;
   }
 }
 
@@ -1636,30 +1647,6 @@ export function addressGroup(ip: string): string {
   const t = tail ? tail.split(":") : [];
   const full = ip.includes("::") ? [...h, ...Array(8 - h.length - t.length).fill("0"), ...t] : h;
   return full.slice(0, 4).map((x) => (parseInt(x || "0", 16) || 0).toString(16)).join(":") + "::/64";
-}
-
-async function hmacHex(keyHex: string, message: string): Promise<string> {
-  const keyBytes = fromHex(keyHex);
-  const key = await crypto.subtle.importKey(
-    "raw", keyBytes.buffer as ArrayBuffer, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
-  );
-  const data = new TextEncoder().encode(message);
-  const sig = await crypto.subtle.sign("HMAC", key, data.buffer as ArrayBuffer);
-  return toHex(new Uint8Array(sig));
-}
-
-// timingSafeEqual compares two strings without short-circuiting on the first
-// differing character, for secret tokens (the auth-cookie HMAC). A plain !==
-// returns as soon as it finds a mismatch, so the time it takes leaks how long a
-// prefix matched — in principle letting a network attacker recover the expected
-// value one character at a time. The length is not secret (the HMAC hex length is
-// fixed and public), so an early length check is fine; the content compare is not
-// short-circuited. Matches === semantics exactly for equal-length inputs.
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
 }
 
 // loopbackLocationPath returns the path+query of a Location header value IFF it
@@ -1748,18 +1735,6 @@ function selfHostLocationPath(loc: string, publicHost: string | null): string | 
     return null;
   }
   return u.hostname.toLowerCase() === want ? u.pathname + u.search : null;
-}
-
-function toHex(b: Uint8Array): string {
-  let s = "";
-  for (let i = 0; i < b.length; i++) s += b[i].toString(16).padStart(2, "0");
-  return s;
-}
-
-function fromHex(s: string): Uint8Array {
-  const out = new Uint8Array(s.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
-  return out;
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -1870,7 +1845,7 @@ function pinGatePage(sessionId: string, to: string, errorMsg: string, authAction
   const escTo = escapeHtml(to);
   const escAction = escapeHtml(authAction);
   const escErr = errorMsg ? `<p class="err">${escapeHtml(errorMsg)}</p>` : "";
-  // Inline page; reads URL fragment (#p=NNNNNN) and auto-submits so the
+  // Inline page; reads URL fragment (#p=<PIN>) and auto-submits so the
   // QR-code / quick-link flow is one-tap. Fragment never leaves the
   // browser (referer / logs are safe).
   return `<!doctype html>
@@ -1901,12 +1876,12 @@ function pinGatePage(sessionId: string, to: string, errorMsg: string, authAction
   <p class="sub">PIN required to reach <code>${sessionId}</code></p>
   ${escErr}
   <input type="hidden" name="to" value="${escTo}">
-  <input name="pin" type="text" inputmode="numeric" autocomplete="off" autofocus placeholder="PIN" required>
+  <input name="pin" type="text" autocapitalize="characters" autocorrect="off" spellcheck="false" autocomplete="off" autofocus placeholder="PIN" required>
   <button type="submit">Continue</button>
   <p class="foot">A reminal port forward sits behind this page.</p>
 </form>
 <script>
-  // Auto-fill from URL fragment (#p=NNNNNN) and submit. Fragments never
+  // Auto-fill from URL fragment (#p=<PIN>) and submit. Fragments never
   // leave the browser, so links can safely embed the PIN.
   (function(){
     var m = (location.hash || '').match(/[#&]p=([^&]+)/);
@@ -1919,6 +1894,15 @@ function pinGatePage(sessionId: string, to: string, errorMsg: string, authAction
   })();
 </script>
 </body></html>`;
+}
+
+// waitText is a wait as the gate says it: in minutes, or hours once it is
+// over one.
+function waitText(ms: number): string {
+  const min = Math.ceil(ms / 60000);
+  if (min < 60) return min === 1 ? "1 minute" : `${min} minutes`;
+  const h = Math.ceil(min / 60);
+  return h === 1 ? "1 hour" : `${h} hours`;
 }
 
 function notFoundPage(): string {

@@ -193,10 +193,11 @@ that require it.
 *Capability:* reaches the public `/p/<id>/` URL.
 
 *Mitigations:* an unguessable session ID in the path; an optional bcrypt PIN gate
-with a 5-attempt lockout and 5-minute cooldown; an HMAC-signed `HttpOnly` `Secure`
-`SameSite=Lax` cookie scoped to that session's path; a per-registration signing key
-so a stale cookie from a reused session ID grants nothing; and a 30-second upstream
-timeout.
+on a 12-character base32 PIN (60 bits), with a lockout per source and per port that doubles on each one (5 minutes, then 10, up to a day; a source that has got the PIN right before is held only by its own wrong PINs); a cookie per
+visitor, an HMAC over a random visitor ID and when it was issued, which the relay
+honours for 30 days at most, `HttpOnly` `Secure` `SameSite=Lax` and scoped to that
+session's path; a per-registration signing key so a stale cookie from a reused
+session ID grants nothing; and a 30-second upstream timeout.
 
 *Residual risk:* the forwarded traffic is **plaintext to the relay** (architecture
 §5.3). Anything the forwarded service exposes is exposed with it — reminal adds a

@@ -145,7 +145,7 @@ Full detail in [architecture §4](architecture.md#4-key-establishment).
 | IAM.5 | Credential revocation | Yes — `Ctrl+C` destroys session credentials instantly. Owner devices are individually revocable, including self-revocation from any browser; revocation tombstones override the root-owned owner list and survive its restoration from backup |
 | IAM.6 | Privilege separation for enrollment | Yes — the authorised owner list is root-owned, so enrollment requires `sudo` and an unprivileged local process cannot enroll itself |
 | IAM.7 | Credential expiry | Yes — session credentials live only as long as the agent process. Owner keys persist until revoked |
-| IAM.8 | Brute-force protection | Yes — an agent-side token bucket bounds PIN guessing to ~6 attempts per minute, all necessarily online; the `expose` gate additionally enforces a 5-attempt lockout with a 5-minute cooldown. Analysis: [brute-force economics](threat-model.md#brute-force-economics) |
+| IAM.8 | Brute-force protection | Yes — an agent-side token bucket bounds PIN guessing to ~6 attempts per minute, all necessarily online; the `expose` gate additionally enforces a lockout per source and per port that doubles on each one, up to a day, on a 60-bit PIN. Analysis: [brute-force economics](threat-model.md#brute-force-economics) |
 
 ## Infrastructure and network security
 

@@ -73,7 +73,7 @@ Per active session, the Durable Object stores only routing and lockout state:
 | `token` | High-entropy reattach credential |
 | `pinHash` | Legacy bcrypt credential; also gates `expose` |
 | `agentAuthed`, `viewerAuthed` | Whether a live agent holds the room |
-| `failedAttempts`, `lockedUntil` | Lockout state for the `expose` PIN gate |
+| `gateSources`, `gateTunnel`, `gateKnown` | Lockout state for the `expose` PIN gate (salted address hashes, never addresses) |
 | `tunnelMeta` | Port, gate mode, cookie signing key for an active port-forward |
 
 **No session content is stored at any point** — no scrollback, no frame buffer, no
