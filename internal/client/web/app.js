@@ -5531,9 +5531,20 @@
       return btoa(binary);
     }
 
+    // A sealed frame's payload once this page has opened it (unsealIn):
+    // only what openedFrame made is taken as opened. Anything else that is
+    // not ciphertext — an object a message carries in its JSON — is refused,
+    // never passed through as if it had been decrypted.
+    const openedFrames = new WeakSet();
+    function openedFrame(bytes) {
+      const d = { __plain: bytes };
+      openedFrames.add(d);
+      return d;
+    }
     async function decrypt(key, encoded) {
       // A sealed frame arrives already opened (unsealIn); pass it through.
-      if (encoded && encoded.__plain) return encoded.__plain;
+      if (encoded && typeof encoded === 'object' && openedFrames.has(encoded)) return encoded.__plain;
+      if (typeof encoded !== 'string') throw new Error('not an encrypted payload');
       const raw = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
       const nonce = raw.slice(0, 12);
       const ct = raw.slice(12);
@@ -5636,7 +5647,7 @@
               st.inLast = ctr;
               const out = { type: msg.inner };
               if (typeof msg.seq === 'number') out.seq = msg.seq;
-              if (pt[0] === 1) out.data = { __plain: pt.slice(1) };
+              if (pt[0] === 1) out.data = openedFrame(pt.slice(1));
               else if (pt[0] === 2) out.data = new TextDecoder().decode(pt.slice(1));
               return out;
             } catch (_) { return null; }
@@ -9150,7 +9161,7 @@
       // COPY it, not to type, and on a phone the keyboard covers the output you
       // were reading.
       //
-      // Why it came up at all (traced with ?kbdlog): Android keeps focus on
+      // Why it came up at all: Android keeps focus on
       // xterm's hidden textarea after you collapse the keyboard, so a long-press
       // blurs a still-focused input and focus is handed back a moment later --
       // and refocusing an input is what re-opens the keyboard. xterm itself is
@@ -10055,47 +10066,6 @@
     let pendingLaunch = null;    // { before:Set<id>, appName, until } — auto-open the window a launch creates
     let winListWaiters = [];     // resolvers awaiting the next window_list reply (for a fresh baseline)
     const wkey = document.getElementById('wkey');
-    // TEMPORARY diagnostic (?kbdlog=1): on-screen log of every event the OS
-    // delivers to the hidden key input — for debugging iOS backspace repeat on
-    // a device with no devtools. Strip before release.
-    window.kbdlog = () => {};
-    if (new URLSearchParams(location.search).has('kbdlog')) {
-      const box = document.createElement('div');
-      box.style.cssText = 'position:fixed;left:4px;top:60px;z-index:99999;background:rgba(0,0,0,.88);color:#7ee787;font:10px/1.35 monospace;padding:6px 8px;max-width:94vw;white-space:pre;pointer-events:none;border-radius:6px';
-      document.addEventListener('DOMContentLoaded', () => document.body.appendChild(box));
-      if (document.body) document.body.appendChild(box);
-      const lines = [];
-      window.kbdlog = (m) => {
-        lines.push((performance.now() / 1000 % 100).toFixed(2) + ' ' + m);
-        while (lines.length > 18) lines.shift();
-        box.textContent = lines.join('\n');
-      };
-      window.kbdlog('KBD LOG READY — open a window pane, toggle its keyboard on, then press keys');
-      // Where does focus actually go? (document-level, catches everything)
-      document.addEventListener('focusin', (e) => {
-        const t = e.target;
-        window.kbdlog('focusin → ' + (t.id ? '#' + t.id : t.tagName));
-      }, true);
-      document.addEventListener('focusout', (e) => {
-        const t = e.target;
-        window.kbdlog('focusout ← ' + (t.id ? '#' + t.id : t.tagName));
-      }, true);
-      // Did the soft keyboard open/close? (viewport shrinks when the IME shows)
-      if (window.visualViewport) {
-        visualViewport.addEventListener('resize', () => {
-          window.kbdlog('viewport h=' + Math.round(visualViewport.height));
-        });
-      }
-      for (const ev of ['keydown', 'keyup', 'beforeinput', 'input', 'compositionstart', 'compositionend', 'focus', 'blur']) {
-        wkey.addEventListener(ev, (e) => {
-          window.kbdlog(ev
-            + (e.key !== undefined ? ' k=' + e.key : '')
-            + (e.inputType ? ' it=' + e.inputType : '')
-            + (e.data != null ? ' d=' + JSON.stringify(e.data).slice(0, 12) : '')
-            + ' len=' + wkey.value.length + ' sel=' + wkey.selectionStart);
-        }, true);
-      }
-    }
     const panes = new Map();     // window id -> { el, img, w, lastUrl }
     let focusedPaneId = null;
     let spawnOffset = 0;         // cascade newly-opened panes
@@ -10998,7 +10968,6 @@
       kbdBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         setKbdMode(!pane.kbdMode, true);
-        window.kbdlog('KBD TOGGLE ' + (pane.kbdMode ? 'on' : 'off') + ' ' + w.id);
         savePaneLayout();   // remembered like the window's position and size
       });
       // Reopening a remembered layout restores the mode ARMED BUT SILENT: the
@@ -12601,8 +12570,7 @@
     wkey.addEventListener('input', (e) => {
       const text = wkey.value; wkey.value = '';
       if (!focusedPaneId) return;
-      if (e.inputType === 'deleteContentBackward') { window.kbdlog('SEND delete'); sendWin('window_input', { id: focusedPaneId, kind: 'key', special: 'delete' }); return; }
-      if (text) window.kbdlog('SEND text ' + JSON.stringify(text).slice(0, 16));
+      if (e.inputType === 'deleteContentBackward') { sendWin('window_input', { id: focusedPaneId, kind: 'key', special: 'delete' }); return; }
       // Send the text as text, not as a stream of single characters. The host
       // types whatever it is given in one call, and that call is an osascript
       // costing ~100ms whether it carries one character or a hundred — so a

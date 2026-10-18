@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,9 +36,9 @@ import (
 // replay; this bounds how long we must remember one.
 const ownerActionSkew = 2 * time.Minute
 
-// ownerNonceMax caps the replay set. Well above any plausible burst of real
-// requests, and the window is short, so eviction cannot make a replay succeed
-// in practice — but the bound must exist or a spammer grows it forever.
+// ownerNonceMax caps how many proofs one device has spent in the window. Well
+// above any plausible burst of real requests; it bounds the set (512 a device)
+// without letting one device's proofs crowd out another owner's.
 const ownerNonceMax = 512
 
 type ownerNonces struct {
@@ -63,9 +64,10 @@ func ownerNoncesFile() string {
 	return filepath.Join(dir, "owner-nonces.json")
 }
 
-// use records a nonce, reporting "" when it was fresh, or why not. A repeat
-// is a replay.
-func (n *ownerNonces) use(nonce string, now time.Time) string {
+// use records a nonce a device spent, reporting "" when it was fresh, or why
+// not. A repeat is a replay. Keyed by the device and the nonce's bytes (both
+// in their one canonical spelling), and capped a device at a time.
+func (n *ownerNonces) use(device, nonce string, now time.Time) string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.seen == nil {
@@ -88,15 +90,23 @@ func (n *ownerNonces) use(nonce string, now time.Time) string {
 			delete(n.seen, k)
 		}
 	}
-	if _, dup := n.seen[nonce]; dup {
+	key := device + "|" + nonce
+	if _, dup := n.seen[key]; dup {
 		return "this owner proof has already been used"
 	}
-	if len(n.seen) >= ownerNonceMax {
-		// Full of live entries: refuse rather than evict. Evicting under
-		// pressure is precisely how an attacker would make room for a replay.
-		return "this owner proof has already been used"
+	// That device full of live entries: refuse it rather than evict (evicting
+	// under pressure is how a replay would be made room for) — it alone, so
+	// no other owner is kept out by it.
+	mine := 0
+	for k := range n.seen {
+		if strings.HasPrefix(k, device+"|") {
+			mine++
+		}
 	}
-	n.seen[nonce] = now
+	if mine >= ownerNonceMax {
+		return "this owner device has made too many requests; try again in a few minutes"
+	}
+	n.seen[key] = now
 	if n.file != "" && !n.saveFile() {
 		delete(n.seen, nonce)
 		return "this machine could not record the proof; try again"
@@ -168,6 +178,12 @@ func (a *Agent) verifyOwnerAction(p ownerProof, action string) string {
 	if err != nil || len(nonce) < 16 {
 		return "the owner proof is missing a usable nonce"
 	}
+	// One spelling of it: the decoder skips line breaks and ignores unused
+	// trailing bits, so the same bytes have other spellings — each would be a
+	// new entry below for the one signed nonce.
+	if base64.StdEncoding.EncodeToString(nonce) != p.Nonce {
+		return "the owner proof's nonce is not in its standard form"
+	}
 	now := time.Now()
 	if d := now.Sub(time.Unix(p.Unix, 0)); d > ownerActionSkew || d < -ownerActionSkew {
 		return "the owner proof is stale; try again"
@@ -182,7 +198,7 @@ func (a *Agent) verifyOwnerAction(p ownerProof, action string) string {
 	}
 	// Last, so a forged proof can never consume a nonce and lock out the real
 	// one by filling the set.
-	if why := a.ownerNonces.use(p.Nonce, now); why != "" {
+	if why := a.ownerNonces.use(base64.StdEncoding.EncodeToString(pub), p.Nonce, now); why != "" {
 		return why
 	}
 	return ""
