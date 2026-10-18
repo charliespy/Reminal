@@ -2,20 +2,21 @@ module reminal
 
 go 1.26.0
 
-toolchain go1.26.6
+toolchain go1.26.9
 
 require (
 	github.com/charmbracelet/ultraviolet v0.0.0-20260622092850-f39628c8a989
 	github.com/charmbracelet/x/vt v0.0.0-20260628005914-6eb80f72a239
 	github.com/creack/pty v1.1.21
 	github.com/gorilla/websocket v1.5.3
+	github.com/gtank/ristretto255 v0.2.0
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/webrtc/v4 v4.2.16
-	golang.org/x/crypto v0.56.0
-	golang.org/x/net v0.57.0
-	golang.org/x/sys v0.47.0
-	golang.org/x/term v0.45.0
+	golang.org/x/crypto v0.57.0
+	golang.org/x/net v0.60.0
+	golang.org/x/sys v0.48.0
+	golang.org/x/term v0.46.0
 )
 
 require (
@@ -29,7 +30,6 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gtank/ristretto255 v0.2.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
