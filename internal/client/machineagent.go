@@ -323,10 +323,14 @@ func (a *Agent) allowOwnerHandshake() bool {
 // the device is asked to wait (own_busy's retry_ms): from the machine
 // channel's bucket, or a session's fixed pace.
 func (a *Agent) takeOwnerHandshake() (bool, time.Duration) {
-	if a.dirLimits != nil {
-		return a.dirLimits.hshake.take(time.Now())
+	now := time.Now()
+	if a.ownClock != nil {
+		now = a.ownClock()
 	}
-	if a.allowOwnerVerify(time.Now()) {
+	if a.dirLimits != nil {
+		return a.dirLimits.hshake.take(now)
+	}
+	if a.allowOwnerVerify(now) {
 		return true, 0
 	}
 	return false, ownerBusyRetry
