@@ -94,6 +94,11 @@ func (n *ownerNonces) use(device, nonce string, now time.Time) string {
 	if _, dup := n.seen[key]; dup {
 		return "this owner proof has already been used"
 	}
+	// A file written before entries were kept per device holds the nonce
+	// alone; a proof taken then is still taken for the rest of its window.
+	if _, dup := n.seen[nonce]; dup {
+		return "this owner proof has already been used"
+	}
 	// That device full of live entries: refuse it rather than evict (evicting
 	// under pressure is how a replay would be made room for) — it alone, so
 	// no other owner is kept out by it.

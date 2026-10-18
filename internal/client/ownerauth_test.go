@@ -277,3 +277,25 @@ func TestAProofNotRecordedIsNotKeptAsTaken(t *testing.T) {
 		t.Fatalf("an unrecorded proof was kept: %v", n.seen)
 	}
 }
+
+func TestAProofTakenBeforeTheUpgradeIsStillTaken(t *testing.T) {
+	isolateHome(t)
+	file := filepath.Join(t.TempDir(), "owner-nonces.json")
+	// As the daemon before per-device keys wrote it: the nonce alone.
+	b, _ := json.Marshal(map[string]int64{"nonce1": time.Now().Unix()})
+	if err := os.WriteFile(file, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := &ownerNonces{file: file}
+	if why := n.use("dev", "nonce1", time.Now()); !strings.Contains(why, "already been used") {
+		t.Fatalf("a proof taken before the upgrade was taken again: %q", why)
+	}
+	if why := n.use("dev", "nonce2", time.Now()); why != "" {
+		t.Fatalf("a fresh proof was refused: %q", why)
+	}
+	// Once its window has passed, the old entry is let go like any other.
+	later := time.Now().Add(ownerActionSkew*2 + time.Minute)
+	if why := n.use("dev", "nonce1", later); why != "" {
+		t.Fatalf("an entry past its window still refused a proof: %q", why)
+	}
+}
