@@ -178,6 +178,11 @@ func TestUnenrolledDeviceGetsSilence(t *testing.T) {
 func TestOverTheAllowanceTheAgentSaysBusy(t *testing.T) {
 	isolateHome(t)
 	a := ownerAgent(t)
+	// The allowance's clock held still: the burst drains the bucket however
+	// long it takes to verify (under -race, 32 handshakes took 22 s, and the
+	// bucket refilled one a second, so the call over it was let through).
+	at := time.Now()
+	a.ownClock = func() time.Time { return at }
 	_, priv, _ := ed25519.GenerateKey(rand.Reader) // unprovable: never refunded
 	conn, got := ownerConn(t)
 

@@ -229,6 +229,10 @@ type Agent struct {
 	ownMu     sync.Mutex
 	ownTokens float64
 	ownLast   time.Time
+	// ownClock is the owner-handshake allowance's clock: the wall clock when
+	// nil. A test holds it still, so how long a burst takes (a slow -race
+	// run took 22 s for 32) never refills the bucket it is draining.
+	ownClock func() time.Time
 
 	// localActive gates whether pumpPTY echoes shell output to the host's
 	// stdout. Set when Run() puts the local terminal into raw-attached mode
