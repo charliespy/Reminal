@@ -354,6 +354,9 @@ func agentTargets() []agentTarget {
 					{Event: "Stop", State: "done"},                // turn finished, with what it left running
 					// One of its own subagents finished: what is still running.
 					{Event: "SubagentStop", State: "subagent"},
+					// Up and reading its input: started, or resumed (a long
+					// conversation loads for a while first).
+					{Event: "SessionStart", State: "ready"},
 				},
 			},
 		},
