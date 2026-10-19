@@ -213,6 +213,7 @@ type Agent struct {
 	kexLongTokens float64                  // the long-term allowance; see kexLongBurst
 	kexSrc        map[string]*kexSrcBucket // per-source share; see allowKexFrom
 	kexProven     map[string]time.Time     // sources that proved the PIN; see markProvenSource
+	kexOwed       map[string]int           // a proven source's answered handshakes yet to prove it; see kexOwedMax
 	kexLastSrc    string                   // the two most recent distinct sources (otherSourceSeen)
 	kexLastAt     time.Time
 	kexPrevSrc    string
@@ -3798,6 +3799,17 @@ const (
 
 const kexBackoffNotice = "  [%s] Someone is guessing this session's PIN: new PIN connections now wait (up to an hour). Devices that already connected, and owner devices, are not affected.\n"
 
+// kexOwedMax is how many answered handshakes a proven source may have that
+// have not proved the PIN, before it is no longer taken as proven. The relay
+// tags each handshake with its source, so a relay guessing the PIN itself
+// could tag its guesses with a source that proved it and skip the backoff;
+// the same goes, more weakly, for a stranger behind a NAT shared with a
+// proven phone. A real viewer's handshake proves the PIN a moment later
+// (markProvenSource), paying its debt; a guess never does. So a borrowed
+// source buys kexOwedMax guesses, then is unproven until a real viewer proves
+// the PIN from it again, which pays back only one.
+const kexOwedMax = 3
+
 type kexBackoff struct {
 	free  float64       // what is left of the allowance
 	at    time.Time     // when free was last brought up to date; zero: never used
@@ -3880,12 +3892,17 @@ func (a *Agent) otherSourceSeen(src string, now time.Time) bool {
 }
 
 // markProvenSource records that src proved the PIN, once per stream. The
-// handshake that proved it was no guess, so its share of the backoff's
-// allowance comes back, untagged ("") or not.
+// handshake that proved it was no guess: one from a proven source pays its
+// debt (kexOwed), and any other, untagged ("") or not, gets its share of the
+// backoff's allowance back.
 func (a *Agent) markProvenSource(src string) {
 	a.kexMu.Lock()
 	defer a.kexMu.Unlock()
-	a.kexBackoff.refund()
+	if a.kexOwed[src] > 0 {
+		a.kexOwed[src]-- // a proven source's handshake: it took nothing to give back
+	} else {
+		a.kexBackoff.refund()
+	}
 	if src == "" {
 		return
 	}
@@ -3901,6 +3918,7 @@ func (a *Agent) markProvenSource(src string) {
 			}
 		}
 		delete(a.kexProven, oldest)
+		delete(a.kexOwed, oldest)
 	}
 	a.kexProven[src] = time.Now()
 }
@@ -3942,6 +3960,11 @@ func (a *Agent) allowKexLocked(now time.Time, src string) (ok bool, retry time.D
 	a.kexLast = now
 
 	proven := src != "" && a.isProvenSource(src)
+	if proven && a.kexOwed[src] >= kexOwedMax {
+		delete(a.kexProven, src)
+		delete(a.kexOwed, src)
+		proven = false
+	}
 	if !proven && now.Before(a.kexBackoff.until) {
 		return false, a.kexBackoff.until.Sub(now), false
 	}
@@ -3995,7 +4018,12 @@ func (a *Agent) allowKexLocked(now time.Time, src string) (ok bool, retry time.D
 	if b != nil {
 		b.tokens = max(0, b.tokens-1)
 	}
-	if !proven {
+	if proven {
+		if a.kexOwed == nil {
+			a.kexOwed = map[string]int{}
+		}
+		a.kexOwed[src]++
+	} else {
 		tell = a.kexBackoff.answered(now)
 	}
 	return true, 0, tell

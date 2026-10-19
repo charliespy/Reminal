@@ -146,6 +146,8 @@ func TestKexSteadySourceKeepsBeingAnswered(t *testing.T) {
 		if ok, _ := a.allowKexFrom(now, "steady"); ok {
 			got++
 			last = now
+			a.markProvenSource("steady") // and proves it again
+
 		} else if g := now.Sub(last); g > longestGap {
 			longestGap = g
 		}
@@ -198,7 +200,9 @@ func TestKexBackoffSparesProvenSources(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	for i := 0; i < 200; i++ {
 		a.allowKexFrom(now, "guesser")
-		a.allowKexFrom(now, "friend")
+		if ok, _ := a.allowKexFrom(now, "friend"); ok {
+			a.markProvenSource("friend")
+		}
 		now = now.Add(kexLongRefill)
 	}
 	if ok, _ := a.allowKexFrom(now, "newcomer"); ok || a.kexBackoff.wait != kexBackoffMax {
@@ -263,5 +267,42 @@ func TestKexBackoffForgivesQuiet(t *testing.T) {
 	}
 	if b.kexBackoff.free < kexLongBurst-1 {
 		t.Fatalf("proven handshakes spent the allowance: %v left", b.kexBackoff.free)
+	}
+}
+
+// The relay names each handshake's source, so a relay guessing the PIN could
+// name a source that proved it. That source keeps being answered during the
+// backoff only while its handshakes go on proving the PIN.
+func TestKexBackoffCannotBeSkippedByBorrowingAProvenSource(t *testing.T) {
+	a := &Agent{}
+	a.markProvenSource("phone")
+	now := time.Unix(1_700_000_000, 0)
+	for i := 0; i < 200; i++ {
+		a.allowKexFrom(now, "guesser")
+		now = now.Add(kexLongRefill)
+	}
+	// The real phone: each handshake opens a frame, so it is never held.
+	for i := 0; i < 20; i++ {
+		if ok, _ := a.allowKexFrom(now, "phone"); !ok {
+			t.Fatalf("the real phone was held at its connect %d", i)
+		}
+		a.markProvenSource("phone")
+		a.allowKexFrom(now, "guesser") // still at it
+		now = now.Add(kexLongRefill)
+	}
+	if !now.Before(a.kexBackoff.until) {
+		t.Fatal("the backoff is not holding unproven sources")
+	}
+	// Guesses tagged as the phone, as fast as they come: answered kexOwedMax
+	// times, then held like any other unproven source.
+	borrowed := 0
+	for i := 0; i < 50; i++ {
+		if ok, _ := a.allowKexFrom(now, "phone"); ok {
+			borrowed++
+		}
+		now = now.Add(time.Second)
+	}
+	if borrowed != kexOwedMax {
+		t.Fatalf("guesses under a proven source's name: %d answered, want %d", borrowed, kexOwedMax)
 	}
 }

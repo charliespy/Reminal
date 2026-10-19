@@ -96,7 +96,12 @@ per 3 minutes), and an escalating backoff for handshakes from sources that have
 not proved the PIN: 30 of them, back at one an hour, then a wait before the next
 that doubles from 3 minutes up to an hour, each quiet hour after a wait taking
 one doubling off. That is about **24 sustained guesses per day**. Sources that
-have proved the PIN skip the backoff; owner devices never use the PIN. The
+have proved the PIN skip the backoff; owner devices never use the PIN. The relay
+names each handshake's source, so a relay guessing the PIN could name a proven
+one; but a source keeps the exemption only while its handshakes go on proving
+the PIN (at most 3 may be outstanding), and only a real viewer's proof earns it
+back, one handshake each. That buys such a relay a few guesses per real
+connection on top of the 24. The
 trade-off: a stranger who keeps guessing can make a first-time PIN user wait up
 to an hour, and the session's terminal is told when that starts.
 
