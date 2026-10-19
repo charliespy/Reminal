@@ -570,6 +570,7 @@ func (a *Agent) noteShells(n, agents int) {
 // and the screen's guess stood in for the harness's word indefinitely.
 func (a *Agent) noteForeground(fg string, pgrp int) {
 	a.metaMu.Lock()
+	prev := a.attnFG
 	changed := fg != a.attnFG
 	if _, was := resumers[a.attnFG]; changed && was {
 		if _, still := resumers[fg]; !still {
@@ -592,6 +593,12 @@ func (a *Agent) noteForeground(fg string, pgrp int) {
 	a.metaMu.Unlock()
 	if !changed {
 		return
+	}
+	// An agent came to the front, or left it: its restore record says so
+	// now, not at the next timed save — a machine that goes down seconds
+	// after an agent started must still bring the agent back.
+	if isResumer(prev) || isResumer(fg) {
+		go a.saveRestore()
 	}
 	a.metaDirty.Store(true)
 	if a.metaKick != nil {
