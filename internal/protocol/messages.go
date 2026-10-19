@@ -444,6 +444,14 @@ type Message struct {
 	// predates sealed frames.
 	Frames int    `json:"frames,omitempty"`
 	Seal   string `json:"seal,omitempty"`
+	// FramesData and FramesSig carry the same offer bound into what is
+	// authenticated, beside the unbound form an agent from before it answers:
+	// on a pake_init, the CPace element made with the sid that names sealed
+	// frames (crypto.FramesLabel); on an own_init, the device's signature over
+	// the transcript that names them. An agent that knows them answers that
+	// form, sealed, with its answer to the offer bound in too.
+	FramesData string `json:"frames_data,omitempty"`
+	FramesSig  string `json:"frames_sig,omitempty"`
 	// Src, on a pake_init the relay forwards, is an opaque tag for the
 	// address it came from, set by the relay (any value a viewer sent is
 	// replaced), so the agent can pace handshakes per source.

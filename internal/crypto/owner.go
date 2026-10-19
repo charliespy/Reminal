@@ -61,11 +61,40 @@ func OwnerClientTranscript(sessionID string, viewerEph, devicePub []byte) []byte
 	return ownerHash(ownerClientTag, sessionID, viewerEph, devicePub)
 }
 
+// FramesLabel marks a handshake in which the viewer offered sealed frames.
+// It is part of what both ends authenticate — the PIN handshake's CPace sid,
+// the device's and the machine's owner transcripts — so a relay that strips
+// the offer, or the agent's answer to it, breaks the handshake instead of
+// quietly dropping the connection to the unsealed form.
+const FramesLabel = "frames-v1"
+
+// OwnerClientTranscriptFor is OwnerClientTranscript with the sealed-frames
+// offer bound in when the device makes it (frames). Without it the transcript
+// is exactly OwnerClientTranscript's, as a device from before sealed frames
+// signs it.
+func OwnerClientTranscriptFor(sessionID string, viewerEph, devicePub []byte, frames bool) []byte {
+	if !frames {
+		return OwnerClientTranscript(sessionID, viewerEph, devicePub)
+	}
+	return ownerHash(ownerClientTag, sessionID, viewerEph, devicePub, []byte(FramesLabel))
+}
+
 // OwnerServerTranscript is what the MACHINE signs in own_resp — it binds BOTH
 // ephemerals and BOTH identities, so the device can confirm it's the real host
 // (verified against the pinned machine key) and not a relay in the middle.
 func OwnerServerTranscript(sessionID string, viewerEph, agentEph, devicePub, machinePub []byte) []byte {
 	return ownerHash(ownerServerTag, sessionID, viewerEph, agentEph, devicePub, machinePub)
+}
+
+// OwnerServerTranscriptFor is OwnerServerTranscript answering a device that
+// offered sealed frames (frames): the machine also signs the sealed-frames
+// answer it gives (seal, the encrypted stream and counter), so a relay cannot
+// take it out. Without the offer it is exactly OwnerServerTranscript's.
+func OwnerServerTranscriptFor(sessionID string, viewerEph, agentEph, devicePub, machinePub []byte, frames bool, seal string) []byte {
+	if !frames {
+		return OwnerServerTranscript(sessionID, viewerEph, agentEph, devicePub, machinePub)
+	}
+	return ownerHash(ownerServerTag, sessionID, viewerEph, agentEph, devicePub, machinePub, []byte(FramesLabel), []byte(seal))
 }
 
 // ownerActionTag domain-separates a privileged ACTION request from the

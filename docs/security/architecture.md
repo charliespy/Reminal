@@ -66,7 +66,7 @@ outside that boundary.
 | Credential | Form | Entropy | Lifetime | Storage |
 |---|---|---|---|---|
 | Session ID | 8 chars, 32-symbol unambiguous alphabet (`internal/session/id.go`) | 32⁸ ≈ 1.1 × 10¹² (~40 bits) | One agent run | Memory only |
-| PIN | 6 digits (`internal/session/pin.go`) | 10⁶ (~20 bits) | Until the session ends or `reminal repin` | Memory; sealed on disk for restore and `reminal info` (§6.2) |
+| PIN | 8 digits for a new session; one started before keeps its 6 (`internal/session/pin.go`) | 10⁸ (~27 bits); 10⁶ (~20 bits) for 6 | Until the session ends or `reminal repin` | Memory; sealed on disk for restore and `reminal info` (§6.2) |
 | `expose` PIN | 12 chars, Crockford base32 (`internal/session/pin.go`) | 32¹² ≈ 1.2 × 10¹⁸ (60 bits) | One port-forward | Memory; bcrypt hash at the relay |
 | Device owner key | Ed25519 | 128-bit security | Until revoked | `~/.reminal/device_ed25519.sealed`, encrypted (§6.2) |
 | Machine identity key | Ed25519 | 128-bit security | Until re-provisioned | Host key store, mode 0600 |

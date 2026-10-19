@@ -179,13 +179,17 @@ func dialDirectoryOwner(machinePub ed25519.PublicKey, timeout time.Duration) (*d
 		return nil, nil, err
 	}
 	viewerEph := eph.PublicKey().Bytes()
+	// Signed twice, as a session's owner handshake is: the transcript as
+	// before, and the one naming sealed frames.
 	sig := crypto.SignOwner(deviceKey, crypto.OwnerClientTranscript(dirID, viewerEph, devicePub))
+	framesSig := crypto.SignOwner(deviceKey, crypto.OwnerClientTranscriptFor(dirID, viewerEph, devicePub, true))
 	if err := writeDir(conn, protocol.Message{
 		Type:      protocol.TypeOwnerInit,
 		ExID:      exHex,
 		Data:      base64.StdEncoding.EncodeToString(viewerEph),
 		DevicePub: base64.StdEncoding.EncodeToString(devicePub),
 		DeviceSig: base64.StdEncoding.EncodeToString(sig),
+		FramesSig: base64.StdEncoding.EncodeToString(framesSig),
 		Frames:    1,
 	}); err != nil {
 		conn.Close()
@@ -533,8 +537,8 @@ func readOwnerResp(conn *dirConn, dirID, exHex string, exID, viewerEph, devicePu
 			return fmt.Errorf("directory: bad machine signature")
 		}
 		// Verify against the machine key we already hold. Any other signer fails.
-		if !crypto.VerifyOwner(ed25519.PublicKey(machinePub),
-			crypto.OwnerServerTranscript(dirID, viewerEph, agentEph, devicePub, machinePub), machineSig) {
+		bound, ok := ownerAnswerVerifies(dirID, viewerEph, agentEph, devicePub, machinePub, machineSig, msg.Seal)
+		if !ok {
 			return fmt.Errorf("directory: machine signature invalid — refusing")
 		}
 		// The self-reported key must also be the one we expect (defence in depth;
@@ -562,7 +566,7 @@ func readOwnerResp(conn *dirConn, dirID, exHex string, exID, viewerEph, devicePu
 		if err != nil {
 			return err
 		}
-		seal, err := newViewerSeal(sessionKey, shared, exID, msg.Seal)
+		seal, err := admitSeal(sessionKey, shared, exID, msg.Seal, bound, "m:"+base64.StdEncoding.EncodeToString(machinePub))
 		if err != nil {
 			return err
 		}

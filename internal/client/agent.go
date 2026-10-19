@@ -213,11 +213,13 @@ type Agent struct {
 	kexLongTokens float64                  // the long-term allowance; see kexLongBurst
 	kexSrc        map[string]*kexSrcBucket // per-source share; see allowKexFrom
 	kexProven     map[string]time.Time     // sources that proved the PIN; see markProvenSource
+	kexOwed       map[string]int           // a proven source's answered handshakes yet to prove it; see kexOwedMax
 	kexLastSrc    string                   // the two most recent distinct sources (otherSourceSeen)
 	kexLastAt     time.Time
 	kexPrevSrc    string
 	kexPrevAt     time.Time
 	kexLast       time.Time
+	kexBackoff    kexBackoff // escalating wait for unproven sources; see kexBackoffFirst
 
 	// Owner handshakes get their own allowance. An own_init is not a PIN
 	// guess: it carries an Ed25519 signature over a transcript bound to this
@@ -697,7 +699,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 	if opts.Machine {
 		return newMachineAgent(version, opts.DaemonHost)
 	}
-	pin, err := session.NewPIN(6)
+	pin, err := session.NewPIN(session.PINLength)
 	if err != nil {
 		return nil, err
 	}
@@ -3404,7 +3406,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// (TestPakeInitIsAnsweredOnTheReader). An owner handshake below is
 			// answered off the reader, and the viewer asks again for a screen
 			// that came before its key.
-			a.handlePakeInit(conn, msg.ExID, msg.Data, msg.Frames, msg.Src)
+			a.handlePakeInit(conn, msg.ExID, msg.Data, msg.FramesData, msg.Frames, msg.Src)
 		case protocol.TypeKexInit:
 			// Superseded by pake_init and no longer answered. A viewer that
 			// only sends this needs updating to connect with a PIN.
@@ -3774,6 +3776,96 @@ const (
 	kexReserve     = 1.0 / 3
 )
 
+// The escalating backoff. A handshake from a source that has not proved the
+// PIN is one guess, and those draw on an allowance of their own: kexLongBurst,
+// back at one per kexBackoffMax. With it spent, each further one makes
+// unproven sources wait before the next: kexBackoffFirst, then twice that, up
+// to kexBackoffMax. Every kexBackoffMax of quiet after a wait ends takes one
+// doubling back off; the allowance refills only once they are all gone. A
+// handshake whose stream then proves the PIN (markProvenSource) was no guess,
+// and gives its share back. So a guesser who never stops is held to about one
+// a kexBackoffMax: some 24 a day, against the 480 the long-term allowance
+// alone let through.
+//
+// It cannot tell a slow guesser from a person who has yet to prove the PIN, so
+// a stranger who keeps guessing can make a FIRST-time PIN user wait up to
+// kexBackoffMax. Sources that have proved the PIN, and owner (PIN-free)
+// devices, are never held by it, and the session's terminal is told once each
+// time it starts (kexBackoffNotice).
+const (
+	kexBackoffFirst = kexLongRefill
+	kexBackoffMax   = time.Hour
+)
+
+const kexBackoffNotice = "  [%s] Someone is guessing this session's PIN: new PIN connections now wait (up to an hour). Devices that already connected, and owner devices, are not affected.\n"
+
+// kexOwedMax is how many answered handshakes a proven source may have that
+// have not proved the PIN, before it is no longer taken as proven. The relay
+// tags each handshake with its source, so a relay guessing the PIN itself
+// could tag its guesses with a source that proved it and skip the backoff;
+// the same goes, more weakly, for a stranger behind a NAT shared with a
+// proven phone. A real viewer's handshake proves the PIN a moment later
+// (markProvenSource), paying its debt; a guess never does. So a borrowed
+// source buys kexOwedMax guesses, then is unproven until a real viewer proves
+// the PIN from it again, which pays back only one.
+const kexOwedMax = 3
+
+type kexBackoff struct {
+	free  float64       // what is left of the allowance
+	at    time.Time     // when free was last brought up to date; zero: never used
+	level int           // doublings: 0 is no wait
+	until time.Time     // unproven sources wait until then
+	wait  time.Duration // the wait that ends at until
+	told  bool          // the terminal has been told about this one
+}
+
+// update forgives one doubling per kexBackoffMax of quiet after the wait,
+// then, with none left, refills the allowance for the time gone by.
+func (b *kexBackoff) update(now time.Time) {
+	if b.at.IsZero() {
+		b.free, b.at = kexLongBurst, now
+		return
+	}
+	if b.level > 0 && now.After(b.until) {
+		if n := int(now.Sub(b.until) / kexBackoffMax); n > 0 {
+			b.level = max(0, b.level-n)
+			if b.level == 0 {
+				b.wait, b.told = 0, false
+			}
+		}
+	}
+	if b.level == 0 {
+		b.free = min(kexLongBurst, b.free+now.Sub(b.at).Seconds()/kexBackoffMax.Seconds())
+	}
+	b.at = now
+}
+
+// answered counts one answered unproven handshake; it reports whether this
+// one started a wait the terminal has not been told about.
+func (b *kexBackoff) answered(now time.Time) bool {
+	b.update(now)
+	if b.free >= 1 {
+		b.free--
+		return false
+	}
+	b.level++
+	b.wait = kexBackoffFirst << min(b.level-1, 20)
+	if b.wait > kexBackoffMax || b.wait <= 0 {
+		b.wait = kexBackoffMax
+	}
+	b.until = now.Add(b.wait)
+	tell := !b.told
+	b.told = true
+	return tell
+}
+
+// refund gives back the share of a handshake that turned out to be no guess.
+func (b *kexBackoff) refund() {
+	if !b.at.IsZero() && b.level == 0 {
+		b.free = min(kexLongBurst, b.free+1)
+	}
+}
+
 type kexSrcBucket struct {
 	tokens float64
 	at     time.Time
@@ -3799,13 +3891,21 @@ func (a *Agent) otherSourceSeen(src string, now time.Time) bool {
 	return a.kexPrevSrc != "" && a.kexPrevSrc != src && now.Sub(a.kexPrevAt) < window
 }
 
-// markProvenSource records that src proved the PIN. "" is nothing.
+// markProvenSource records that src proved the PIN, once per stream. The
+// handshake that proved it was no guess: one from a proven source pays its
+// debt (kexOwed), and any other, untagged ("") or not, gets its share of the
+// backoff's allowance back.
 func (a *Agent) markProvenSource(src string) {
+	a.kexMu.Lock()
+	defer a.kexMu.Unlock()
+	if a.kexOwed[src] > 0 {
+		a.kexOwed[src]-- // a proven source's handshake: it took nothing to give back
+	} else {
+		a.kexBackoff.refund()
+	}
 	if src == "" {
 		return
 	}
-	a.kexMu.Lock()
-	defer a.kexMu.Unlock()
 	if a.kexProven == nil {
 		a.kexProven = map[string]time.Time{}
 	}
@@ -3818,6 +3918,7 @@ func (a *Agent) markProvenSource(src string) {
 			}
 		}
 		delete(a.kexProven, oldest)
+		delete(a.kexOwed, oldest)
 	}
 	a.kexProven[src] = time.Now()
 }
@@ -3837,7 +3938,17 @@ func (a *Agent) allowKex(now time.Time) bool {
 // is how long until one is likely to be there.
 func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Duration) {
 	a.kexMu.Lock()
-	defer a.kexMu.Unlock()
+	ok, retry, tell := a.allowKexLocked(now, src)
+	a.kexMu.Unlock()
+	if tell {
+		a.notify(kexBackoffNotice, now.Format("15:04:05"))
+	}
+	return ok, retry
+}
+
+// allowKexLocked is allowKexFrom with kexMu held; tell is whether to say the
+// backoff has started.
+func (a *Agent) allowKexLocked(now time.Time, src string) (ok bool, retry time.Duration, tell bool) {
 	if a.kexLast.IsZero() {
 		a.kexTokens = kexBurst
 		a.kexLongTokens = kexLongBurst
@@ -3849,6 +3960,14 @@ func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Dur
 	a.kexLast = now
 
 	proven := src != "" && a.isProvenSource(src)
+	if proven && a.kexOwed[src] >= kexOwedMax {
+		delete(a.kexProven, src)
+		delete(a.kexOwed, src)
+		proven = false
+	}
+	if !proven && now.Before(a.kexBackoff.until) {
+		return false, a.kexBackoff.until.Sub(now), false
+	}
 	pressure := a.kexLongTokens < kexLongBurst/2
 	var b *kexSrcBucket
 	if src != "" {
@@ -3874,7 +3993,7 @@ func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Dur
 			b.tokens = min(share, b.tokens+now.Sub(b.at).Seconds()/kexSrcRefill.Seconds())
 			b.at = now
 			if pressure && b.tokens < 1 && a.otherSourceSeen(src, now) {
-				return false, time.Duration((1 - b.tokens) * float64(kexSrcRefill))
+				return false, time.Duration((1 - b.tokens) * float64(kexSrcRefill)), false
 			}
 		}
 	}
@@ -3892,14 +4011,22 @@ func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Dur
 		if wait < time.Second {
 			wait = time.Second
 		}
-		return false, wait
+		return false, wait, false
 	}
 	a.kexTokens--
 	a.kexLongTokens--
 	if b != nil {
 		b.tokens = max(0, b.tokens-1)
 	}
-	return true, 0
+	if proven {
+		if a.kexOwed == nil {
+			a.kexOwed = map[string]int{}
+		}
+		a.kexOwed[src]++
+	} else {
+		tell = a.kexBackoff.answered(now)
+	}
+	return true, 0, tell
 }
 
 // ownVerifyBurst is how many owner handshakes we will verify back-to-back.
@@ -3956,7 +4083,13 @@ const pakeChannel = "reminal-session-v3"
 
 // pakeSID binds a handshake to this session and to this exchange, so an element
 // from one handshake is no use in any other.
-func pakeSID(sessionID string, exID []byte) []byte {
+func pakeSID(sessionID string, exID []byte, frames bool) []byte {
+	if frames {
+		// The sealed-frames offer, bound into the key itself — first, so no
+		// ex_id a relay makes up can turn the sid as before into this one
+		// (a session id is never the label).
+		return append([]byte(crypto.FramesLabel+"|"+sessionID+"|"), exID...)
+	}
 	return append([]byte(sessionID+"|"), exID...)
 }
 
@@ -3964,7 +4097,7 @@ func pakeSID(sessionID string, exID []byte) []byte {
 // session key, wrapped under the key we both derive. Past its allowance it
 // answers pake_busy; on any other failure it is silent and the viewer times
 // out.
-func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, frames int, src string) {
+func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64, framesB64 string, frames int, src string) {
 	if ok, retry := a.allowKexFrom(time.Now(), src); !ok {
 		// Say so, so the viewer waits and tries again instead of timing out.
 		_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypePakeBusy, ExID: exIDHex, RetryMS: int(retry / time.Millisecond)})
@@ -3974,11 +4107,21 @@ func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, fr
 	if err != nil {
 		return
 	}
-	viewerElem, err := base64.StdEncoding.DecodeString(dataB64)
+	// The sealed-frames offer bound into the key (FramesData, the element
+	// made with the sid that names it) is the one answered when it comes and
+	// this agent seals: the answer to it is then as authenticated as the key.
+	// Without it, the element as before — a viewer that does not bind its
+	// offer, or predates sealed frames — answered as it always was.
+	bound := frames > 0 && framesB64 != "" && a.frameKeys() != nil
+	elemB64 := dataB64
+	if bound {
+		elemB64 = framesB64
+	}
+	viewerElem, err := base64.StdEncoding.DecodeString(elemB64)
 	if err != nil || len(viewerElem) != crypto.CPaceElementBytes {
 		return
 	}
-	st, mine, err := crypto.NewCPace([]byte(a.pin), []byte(pakeChannel), pakeSID(a.sessionID, exID), false)
+	st, mine, err := crypto.NewCPace([]byte(a.pin), []byte(pakeChannel), pakeSID(a.sessionID, exID, bound), false)
 	if err != nil {
 		return
 	}
@@ -3992,13 +4135,17 @@ func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, fr
 	}
 	// Before the answer: an older viewer's resume can follow it at once.
 	a.handshakeWithout(frames)
-	_ = a.writeMsg(conn, protocol.Message{
+	resp := protocol.Message{
 		Type: protocol.TypePakeResp,
 		ExID: exIDHex,
 		Data: base64.StdEncoding.EncodeToString(mine),
 		Wrap: base64.StdEncoding.EncodeToString(wrapped),
 		Seal: a.sealInfoFor(frames, key, exID, src),
-	})
+	}
+	if bound {
+		resp.Frames = 1 // which element was answered; the key says it anyway
+	}
+	_ = a.writeMsg(conn, resp)
 }
 
 // handleOwnerInit completes one PIN-free (owner) handshake for an enrolled
@@ -4040,8 +4187,18 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 		})
 		return
 	}
-	// 1. Prove the sender controls this device key for THIS exchange.
-	if !crypto.VerifyOwner(devicePub, crypto.OwnerClientTranscript(a.sessionID, viewerEph, devicePub), deviceSig) {
+	// 1. Prove the sender controls this device key for THIS exchange. The
+	//    sealed-frames offer signed in (FramesSig, over the transcript that
+	//    names it) is the one taken when it comes and this agent seals; the
+	//    answer to it is then signed with the rest. Without it, the transcript
+	//    as before — a device that does not bind its offer, or predates it.
+	bound := msg.Frames > 0 && msg.FramesSig != "" && a.frameKeys() != nil
+	if bound {
+		if deviceSig, err = base64.StdEncoding.DecodeString(msg.FramesSig); err != nil {
+			return
+		}
+	}
+	if !crypto.VerifyOwner(devicePub, crypto.OwnerClientTranscriptFor(a.sessionID, viewerEph, devicePub, bound), deviceSig) {
 		return
 	}
 	// 2. And that the device is enrolled as an owner of this machine.
@@ -4072,7 +4229,9 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 		return
 	}
 	machinePub := machineKey.Public().(ed25519.PublicKey)
-	machineSig := crypto.SignOwner(machineKey, crypto.OwnerServerTranscript(a.sessionID, viewerEph, agentEph, devicePub, machinePub))
+	//    Offered sealed frames, the answer to that is signed with it.
+	seal := a.sealInfoFor(msg.Frames, shared, exID, msg.Src)
+	machineSig := crypto.SignOwner(machineKey, crypto.OwnerServerTranscriptFor(a.sessionID, viewerEph, agentEph, devicePub, machinePub, bound, seal))
 	// 5. Deliver the session key (same one every viewer shares).
 	wrapped, err := crypto.WrapSessionKey(shared, exID, a.sessionKey)
 	if err != nil {
@@ -4086,7 +4245,8 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 		MachinePub: base64.StdEncoding.EncodeToString(machinePub),
 		MachineSig: base64.StdEncoding.EncodeToString(machineSig),
 		Wrap:       base64.StdEncoding.EncodeToString(wrapped),
-		Seal:       a.sealInfoFor(msg.Frames, shared, exID, msg.Src),
+		Seal:       seal,
+		Frames:     map[bool]int{true: 1}[bound], // which transcript was signed
 	})
 }
 

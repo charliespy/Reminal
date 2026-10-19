@@ -3301,6 +3301,41 @@
     const RISTRETTO_SRI = 'sha384-WLPjvwtTUQIPQoBW7B5gFQWHWWlAgJCIm1zMvS7MOJAZpawKsB0KUTl020csajQu';
     const CPACE_DSI = 'CPaceRistretto255';
     const PAKE_CHANNEL = 'reminal-session-v3';
+    // What a handshake that offers sealed frames binds in: the CPace sid's
+    // last part, and a field of each owner transcript (crypto.FramesLabel).
+    const FRAMES_LABEL = 'frames-v1';
+    // Sealed frames are offered twice in a handshake: bound into what is
+    // authenticated (FRAMES_LABEL) and unbound, as an agent from before the
+    // binding answers. An answer to the unbound form cannot be told from one
+    // a relay brought about by stripping the bound offer, so this browser
+    // remembers the sessions ("s:") and machines ("m:") it has seen seal, and
+    // refuses an unsealed answer from them. SEALED_FRAMES_REQUIRED refuses one
+    // from any agent: the one line to set once agents from before sealed
+    // frames are gone.
+    const SEALED_FRAMES_REQUIRED = false;
+    const SEALED_PEERS_KEY = 'reminal-sealed-peers-v1';
+    function sealedPeers() {
+      try { const m = JSON.parse(localStorage.getItem(SEALED_PEERS_KEY) || '{}'); return m && typeof m === 'object' ? m : {}; } catch (_) { return {}; }
+    }
+    function sealedSeen(peer) { return !!(peer && sealedPeers()[peer]); }
+    // At most the newest 2000 kept: a cap on what every handshake reads, never
+    // an expiry (one would reopen the downgrade).
+    function noteSealed(peer) {
+      if (!peer) return;
+      try {
+        let m = sealedPeers();
+        m[peer] = Math.floor(Date.now() / 1000);
+        const ks = Object.keys(m);
+        if (ks.length > 2000) {
+          ks.sort((a, b) => m[b] - m[a] || (a < b ? -1 : 1));
+          const kept = {};
+          for (const k of ks.slice(0, 2000)) kept[k] = m[k];
+          kept[peer] = m[peer];
+          m = kept;
+        }
+        localStorage.setItem(SEALED_PEERS_KEY, JSON.stringify(m));
+      } catch (_) {}
+    }
     let _ristrettoPromise = null;
     function loadRistretto() {
       if (_ristrettoPromise) return _ristrettoPromise;
@@ -3432,18 +3467,23 @@
       const exIDBytes = crypto.getRandomValues(new Uint8Array(16));
       const exID = Array.from(exIDBytes)
         .map(b => b.toString(16).padStart(2, '0')).join('');
+      // Two elements, one handshake: the sid as before (an agent from before
+      // the sealed-frames binding answers it) and the sid naming sealed
+      // frames (one that knows it answers that, sealed, the answer keyed in).
       const sid = concatBytes(utf8(String(sessionId).toUpperCase() + '|'), exIDBytes);
       const cp = await cpaceStart(utf8(pinValue), utf8(PAKE_CHANNEL), sid, true);
+      const cpF = await cpaceStart(utf8(pinValue), utf8(PAKE_CHANNEL), concatBytes(utf8(FRAMES_LABEL + '|' + String(sessionId).toUpperCase() + '|'), exIDBytes), true);
       // Keep this attempt alongside any earlier one — completeKex accepts a
       // reply to whichever is answered first.
       if (sock !== ws || sock.readyState !== WebSocket.OPEN) return; // superseded while deriving
-      kexAttempts.set(exID, { cp, exIDBytes });
+      kexAttempts.set(exID, { cp, cpF, exIDBytes });
       kexExID = exID;
 
       sock.send(JSON.stringify({
         type: 'pake_init',
         ex_id: exID,
         data: u8ToBase64(cp.mine),
+        frames_data: u8ToBase64(cpF.mine),
         frames: 1,
       }));
       sendEarlyResume(sock, exID);
@@ -3486,35 +3526,32 @@
         return;
       }
       dbg('  pake_resp matched — deriving key…');
-      // Throws on an element that does not decode or is the identity.
-      const shared = await cpaceFinish(att.cp, base64ToU8(msg.data || ''));
-      const sharedKey = await crypto.subtle.importKey(
-        'raw', shared, 'HKDF', false, ['deriveBits']
-      );
-      const wrapKeyBits = await crypto.subtle.deriveBits(
-        {
-          name: 'HKDF', hash: 'SHA-256',
-          salt: att.exIDBytes,
-          info: new TextEncoder().encode('reminal-wrap-v2'),
-        },
-        sharedKey,
-        256,
-      );
-      const wrapKey = await crypto.subtle.importKey(
-        'raw', wrapKeyBits, { name: 'AES-GCM' }, false, ['decrypt']
-      );
       const wrapped = base64ToU8(msg.wrap || '');
       if (wrapped.length < 12 + 16) throw new Error('wrap too short');
       const wrapNonce = wrapped.slice(0, 12);
       const wrapCT = wrapped.slice(12);
-      // AES-GCM tag failure here means the agent and we derived different
-      // keys from CPace: a wrong PIN on one side or the other.
-      const sessionKeyRaw = new Uint8Array(
-        await crypto.subtle.decrypt(
-          { name: 'AES-GCM', iv: wrapNonce }, wrapKey, wrapCT
-        )
-      );
-      const st = await openSealInfo(shared, att.exIDBytes, msg.seal, sessionKeyRaw);
+      // The bound element answered, or the one as before: whichever key
+      // unwraps the session key is the one the agent used. An AES-GCM tag
+      // failure under both means the agent and we derived different keys from
+      // CPace: a wrong PIN on one side or the other.
+      let shared = null, sessionKeyRaw = null, bound = false, lastErr = null;
+      for (const [cp, isBound] of [[att.cpF, true], [att.cp, false]]) {
+        if (!cp) continue;
+        // Throws on an element that does not decode or is the identity.
+        const sh = await cpaceFinish(cp, base64ToU8(msg.data || ''));
+        const sharedKey = await crypto.subtle.importKey('raw', sh, 'HKDF', false, ['deriveBits']);
+        const wrapKeyBits = await crypto.subtle.deriveBits(
+          { name: 'HKDF', hash: 'SHA-256', salt: att.exIDBytes, info: new TextEncoder().encode('reminal-wrap-v2') },
+          sharedKey, 256);
+        const wrapKey = await crypto.subtle.importKey('raw', wrapKeyBits, { name: 'AES-GCM' }, false, ['decrypt']);
+        try {
+          sessionKeyRaw = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: wrapNonce }, wrapKey, wrapCT));
+          shared = sh; bound = isBound;
+          break;
+        } catch (e) { lastErr = e; }
+      }
+      if (!sessionKeyRaw) throw lastErr || new Error('handshake did not open');
+      const st = await admitSeal(shared, att.exIDBytes, msg.seal, sessionKeyRaw, bound, 's:' + String(sessionId).toUpperCase());
       const key = await crypto.subtle.importKey(
         'raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
       );
@@ -3732,8 +3769,7 @@
         const viewerEph = eph.pub;
         const exIDBytes = crypto.getRandomValues(new Uint8Array(16));
         const exID = Array.from(exIDBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-        const tr = await ownerTranscript('reminal-owner-cli-v1', sessionId, [viewerEph, dk.pubRaw]);
-        const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
+        const sigs = await ownerInitSigs(dk, sessionId, viewerEph);
         ownerAttempts.set(exID, { eph, exIDBytes, viewerEph, devicePubRaw: dk.pubRaw });
         dbg('▶ own_init sent ex=' + exID.slice(0, 6));
         if (sock !== ws || sock.readyState !== WebSocket.OPEN) return true; // superseded: the new socket handshakes itself
@@ -3741,7 +3777,8 @@
           type: 'own_init', ex_id: exID,
           data: u8ToBase64(viewerEph),
           device_pub: u8ToBase64(dk.pubRaw),
-          device_sig: u8ToBase64(sig),
+          device_sig: sigs.device_sig,
+          frames_sig: sigs.frames_sig,
           frames: 1,
         }));
         sendEarlyResume(sock, exID);
@@ -3785,9 +3822,10 @@
       const machineSig = base64ToU8(msg.machine_sig || '');
       if (agentEph.length !== 32 || machinePub.length !== 32) throw new Error('bad key length');
       // 1. Verify the machine's signature over both ephemerals + both identities.
-      const tr = await ownerTranscript('reminal-owner-srv-v1', sessionId, [att.viewerEph, agentEph, att.devicePubRaw, machinePub]);
-      const macKey = await crypto.subtle.importKey('raw', machinePub, { name: 'Ed25519' }, false, ['verify']);
-      if (!(await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, tr))) {
+      //    Signed with the answer to the sealed-frames offer (bound), or over
+      //    the transcript as before by an agent that predates it.
+      const bound = await ownerAnswerBound(sessionId, att.viewerEph, agentEph, att.devicePubRaw, machinePub, machineSig, msg.seal);
+      if (bound === null) {
         throw new Error('machine signature invalid — refusing (possible relay tampering)');
       }
       // 2. The machine must be one this browser trusts: the one it met on this
@@ -3808,7 +3846,7 @@
       if (wrapped.length < 12 + 16) throw new Error('wrap too short');
       const sessionKeyRaw = new Uint8Array(await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
-      const st = await openSealInfo(shared, att.exIDBytes, msg.seal, sessionKeyRaw);
+      const st = await admitSeal(shared, att.exIDBytes, msg.seal, sessionKeyRaw, bound, 'm:' + machineB64);
       const key = await crypto.subtle.importKey('raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
       // Install the key only for the connection and attempt it was made for.
       if (ws !== sock || sessionId !== sid || cryptoKey || ownerAttempts.get(msg.ex_id) !== att) return;
@@ -4011,10 +4049,9 @@
               const eph = await newEphemeralX25519();
               const exIDBytes = crypto.getRandomValues(new Uint8Array(16));
               const exID = Array.from(exIDBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-              const tr = await ownerTranscript('reminal-owner-cli-v1', dirID, [eph.pub, dk.pubRaw]);
-              const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
+              const sigs = await ownerInitSigs(dk, dirID, eph.pub);
               att = { eph, exIDBytes, exID, viewerEph: eph.pub, devicePubRaw: dk.pubRaw };
-              sock.send(JSON.stringify({ type: 'own_init', ex_id: exID, data: u8ToBase64(eph.pub), device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig), frames: 1 }));
+              sock.send(JSON.stringify({ type: 'own_init', ex_id: exID, data: u8ToBase64(eph.pub), device_pub: u8ToBase64(dk.pubRaw), device_sig: sigs.device_sig, frames_sig: sigs.frames_sig, frames: 1 }));
               state = 'own';
               return;
             }
@@ -4027,9 +4064,8 @@
               if (agentEph.length !== 32 || machinePub.length !== 32) return done(new Error('bad key length'));
               // Must be the machine we asked for, and its signature must verify.
               if (u8ToBase64(machinePub) !== machineB64Cmp) return done(new Error('unexpected machine identity'));
-              const tr = await ownerTranscript('reminal-owner-srv-v1', dirID, [att.viewerEph, agentEph, att.devicePubRaw, machinePub]);
-              const macKey = await crypto.subtle.importKey('raw', machinePub, { name: 'Ed25519' }, false, ['verify']);
-              if (!(await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, tr))) return done(new Error('machine signature invalid'));
+              const bound = await ownerAnswerBound(dirID, att.viewerEph, agentEph, att.devicePubRaw, machinePub, machineSig, msg.seal);
+              if (bound === null) return done(new Error('machine signature invalid'));
               const shared = await att.eph.deriveShared(agentEph);
               const sharedKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
               const wrapBits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: att.exIDBytes, info: new TextEncoder().encode('reminal-wrap-v2') }, sharedKey, 256);
@@ -4037,7 +4073,7 @@
               const wrapped = base64ToU8(msg.wrap || '');
               if (wrapped.length < 28) return done(new Error('wrap too short'));
               const skRaw = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
-              ch.seal = await openSealInfo(shared, att.exIDBytes, msg.seal, skRaw);
+              ch.seal = await admitSeal(shared, att.exIDBytes, msg.seal, skRaw, bound, 'm:' + u8ToBase64(machinePub));
               box = await crypto.subtle.importKey('raw', skRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
               ch.key = box;
               if (opts.spawn) {
@@ -5124,10 +5160,9 @@
             const eph = await newEphemeralX25519();
             const exIDBytes = crypto.getRandomValues(new Uint8Array(16));
             const exID = Array.from(exIDBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-            const tr = await ownerTranscript('reminal-owner-cli-v1', dirID, [eph.pub, dk.pubRaw]);
-            const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
+            const sigs = await ownerInitSigs(dk, dirID, eph.pub);
             att = { eph, exIDBytes, exID, viewerEph: eph.pub, devicePubRaw: dk.pubRaw };
-            sock.send(JSON.stringify({ type: 'own_init', ex_id: exID, data: u8ToBase64(eph.pub), device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig), frames: 1 }));
+            sock.send(JSON.stringify({ type: 'own_init', ex_id: exID, data: u8ToBase64(eph.pub), device_pub: u8ToBase64(dk.pubRaw), device_sig: sigs.device_sig, frames_sig: sigs.frames_sig, frames: 1 }));
             hs = 'own';
             return;
           }
@@ -5147,9 +5182,8 @@
             if (agentEph.length !== 32 || machinePub.length !== 32) throw new Error('bad key length');
             // Must be the machine we asked for, and its signature must verify.
             if (u8ToBase64(machinePub) !== machineB64Cmp) throw new Error('unexpected machine identity');
-            const tr = await ownerTranscript('reminal-owner-srv-v1', dirID, [att.viewerEph, agentEph, att.devicePubRaw, machinePub]);
-            const macKey = await crypto.subtle.importKey('raw', machinePub, { name: 'Ed25519' }, false, ['verify']);
-            if (!(await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, tr))) throw new Error('machine signature invalid');
+            const bound = await ownerAnswerBound(dirID, att.viewerEph, agentEph, att.devicePubRaw, machinePub, machineSig, msg.seal);
+            if (bound === null) throw new Error('machine signature invalid');
             const shared = await att.eph.deriveShared(agentEph);
             const sharedKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
             const wrapBits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: att.exIDBytes, info: new TextEncoder().encode('reminal-wrap-v2') }, sharedKey, 256);
@@ -5157,7 +5191,7 @@
             const wrapped = base64ToU8(msg.wrap || '');
             if (wrapped.length < 28) throw new Error('wrap too short');
             const skRaw = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
-            ch.seal = await openSealInfo(shared, att.exIDBytes, msg.seal, skRaw);
+            ch.seal = await admitSeal(shared, att.exIDBytes, msg.seal, skRaw, bound, 'm:' + u8ToBase64(machinePub));
             w.box = await crypto.subtle.importKey('raw', skRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
             ch.key = w.box;
             clearTimeout(timer);
@@ -5531,9 +5565,20 @@
       return btoa(binary);
     }
 
+    // A sealed frame's payload once this page has opened it (unsealIn):
+    // only what openedFrame made is taken as opened. Anything else that is
+    // not ciphertext — an object a message carries in its JSON — is refused,
+    // never passed through as if it had been decrypted.
+    const openedFrames = new WeakSet();
+    function openedFrame(bytes) {
+      const d = { __plain: bytes };
+      openedFrames.add(d);
+      return d;
+    }
     async function decrypt(key, encoded) {
       // A sealed frame arrives already opened (unsealIn); pass it through.
-      if (encoded && encoded.__plain) return encoded.__plain;
+      if (encoded && typeof encoded === 'object' && openedFrames.has(encoded)) return encoded.__plain;
+      if (typeof encoded !== 'string') throw new Error('not an encrypted payload');
       const raw = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
       const nonce = raw.slice(0, 12);
       const ct = raw.slice(12);
@@ -5574,6 +5619,40 @@
     // The handshake answer's seal info: our stream, and the agent counter it
     // has already passed. Encrypted under the handshake's own key, so it is
     // what the agent sent. null when the agent predates sealed frames.
+    // A handshake's sealed-frames answer as this browser takes it: the bound
+    // offer answered must carry it; an unbound answer is taken sealed when it
+    // carries it, and unsealed only from a peer never seen to seal.
+    async function admitSeal(shared, exIDBytes, sealed, sessionKeyRaw, bound, peer) {
+      if (!sealed) {
+        if (bound) throw new Error('no sealed frames in an answer to the offer of them');
+        if (SEALED_FRAMES_REQUIRED || sealedSeen(peer)) throw new Error('this machine answered with sealed frames before and now does not — refused');
+        return null;
+      }
+      const st = await openSealInfo(shared, exIDBytes, sealed, sessionKeyRaw);
+      noteSealed(peer);
+      return st;
+    }
+    // An owner handshake's two device signatures: over the transcript as
+    // before, and over the one naming sealed frames.
+    async function ownerInitSigs(dk, sid, viewerEph) {
+      const tr = await ownerTranscript('reminal-owner-cli-v1', sid, [viewerEph, dk.pubRaw]);
+      const trF = await ownerTranscript('reminal-owner-cli-v1', sid, [viewerEph, dk.pubRaw, utf8(FRAMES_LABEL)]);
+      return {
+        device_sig: u8ToBase64(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr))),
+        frames_sig: u8ToBase64(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, trF))),
+      };
+    }
+    // The machine's signature on an owner answer: over the transcript with the
+    // answer to the offer signed in (true), over the one as before (false), or
+    // neither (null).
+    async function ownerAnswerBound(sid, viewerEph, agentEph, devicePubRaw, machinePub, machineSig, seal) {
+      const macKey = await crypto.subtle.importKey('raw', machinePub, { name: 'Ed25519' }, false, ['verify']);
+      const trF = await ownerTranscript('reminal-owner-srv-v1', sid, [viewerEph, agentEph, devicePubRaw, machinePub, utf8(FRAMES_LABEL), utf8(seal || '')]);
+      if (await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, trF)) return true;
+      const tr = await ownerTranscript('reminal-owner-srv-v1', sid, [viewerEph, agentEph, devicePubRaw, machinePub]);
+      if (await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, tr)) return false;
+      return null;
+    }
     async function openSealInfo(shared, exIDBytes, sealed, sessionKeyRaw) {
       if (!sealed) return null;
       const ikm = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
@@ -5636,7 +5715,7 @@
               st.inLast = ctr;
               const out = { type: msg.inner };
               if (typeof msg.seq === 'number') out.seq = msg.seq;
-              if (pt[0] === 1) out.data = { __plain: pt.slice(1) };
+              if (pt[0] === 1) out.data = openedFrame(pt.slice(1));
               else if (pt[0] === 2) out.data = new TextDecoder().decode(pt.slice(1));
               return out;
             } catch (_) { return null; }
@@ -9150,7 +9229,7 @@
       // COPY it, not to type, and on a phone the keyboard covers the output you
       // were reading.
       //
-      // Why it came up at all (traced with ?kbdlog): Android keeps focus on
+      // Why it came up at all: Android keeps focus on
       // xterm's hidden textarea after you collapse the keyboard, so a long-press
       // blurs a still-focused input and focus is handed back a moment later --
       // and refocusing an input is what re-opens the keyboard. xterm itself is
@@ -10055,47 +10134,6 @@
     let pendingLaunch = null;    // { before:Set<id>, appName, until } — auto-open the window a launch creates
     let winListWaiters = [];     // resolvers awaiting the next window_list reply (for a fresh baseline)
     const wkey = document.getElementById('wkey');
-    // TEMPORARY diagnostic (?kbdlog=1): on-screen log of every event the OS
-    // delivers to the hidden key input — for debugging iOS backspace repeat on
-    // a device with no devtools. Strip before release.
-    window.kbdlog = () => {};
-    if (new URLSearchParams(location.search).has('kbdlog')) {
-      const box = document.createElement('div');
-      box.style.cssText = 'position:fixed;left:4px;top:60px;z-index:99999;background:rgba(0,0,0,.88);color:#7ee787;font:10px/1.35 monospace;padding:6px 8px;max-width:94vw;white-space:pre;pointer-events:none;border-radius:6px';
-      document.addEventListener('DOMContentLoaded', () => document.body.appendChild(box));
-      if (document.body) document.body.appendChild(box);
-      const lines = [];
-      window.kbdlog = (m) => {
-        lines.push((performance.now() / 1000 % 100).toFixed(2) + ' ' + m);
-        while (lines.length > 18) lines.shift();
-        box.textContent = lines.join('\n');
-      };
-      window.kbdlog('KBD LOG READY — open a window pane, toggle its keyboard on, then press keys');
-      // Where does focus actually go? (document-level, catches everything)
-      document.addEventListener('focusin', (e) => {
-        const t = e.target;
-        window.kbdlog('focusin → ' + (t.id ? '#' + t.id : t.tagName));
-      }, true);
-      document.addEventListener('focusout', (e) => {
-        const t = e.target;
-        window.kbdlog('focusout ← ' + (t.id ? '#' + t.id : t.tagName));
-      }, true);
-      // Did the soft keyboard open/close? (viewport shrinks when the IME shows)
-      if (window.visualViewport) {
-        visualViewport.addEventListener('resize', () => {
-          window.kbdlog('viewport h=' + Math.round(visualViewport.height));
-        });
-      }
-      for (const ev of ['keydown', 'keyup', 'beforeinput', 'input', 'compositionstart', 'compositionend', 'focus', 'blur']) {
-        wkey.addEventListener(ev, (e) => {
-          window.kbdlog(ev
-            + (e.key !== undefined ? ' k=' + e.key : '')
-            + (e.inputType ? ' it=' + e.inputType : '')
-            + (e.data != null ? ' d=' + JSON.stringify(e.data).slice(0, 12) : '')
-            + ' len=' + wkey.value.length + ' sel=' + wkey.selectionStart);
-        }, true);
-      }
-    }
     const panes = new Map();     // window id -> { el, img, w, lastUrl }
     let focusedPaneId = null;
     let spawnOffset = 0;         // cascade newly-opened panes
@@ -10998,7 +11036,6 @@
       kbdBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         setKbdMode(!pane.kbdMode, true);
-        window.kbdlog('KBD TOGGLE ' + (pane.kbdMode ? 'on' : 'off') + ' ' + w.id);
         savePaneLayout();   // remembered like the window's position and size
       });
       // Reopening a remembered layout restores the mode ARMED BUT SILENT: the
@@ -12601,8 +12638,7 @@
     wkey.addEventListener('input', (e) => {
       const text = wkey.value; wkey.value = '';
       if (!focusedPaneId) return;
-      if (e.inputType === 'deleteContentBackward') { window.kbdlog('SEND delete'); sendWin('window_input', { id: focusedPaneId, kind: 'key', special: 'delete' }); return; }
-      if (text) window.kbdlog('SEND text ' + JSON.stringify(text).slice(0, 16));
+      if (e.inputType === 'deleteContentBackward') { sendWin('window_input', { id: focusedPaneId, kind: 'key', special: 'delete' }); return; }
       // Send the text as text, not as a stream of single characters. The host
       // types whatever it is given in one call, and that call is an osascript
       // costing ~100ms whether it carries one character or a hundred — so a

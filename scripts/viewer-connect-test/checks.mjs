@@ -183,5 +183,89 @@ const out = [];
   out.push(`TEST 6  status: link with session "${linked}", blank "${blank}", session typed "${typed}", cleared "${cleared}"   ${ok ? 'PASS' : 'FAIL'}`);
   await ctx.close();
 }
+// ---- TEST 7: the sealed-frames offer is bound into the PIN handshake ----
+// A relay that strips the bound offer (frames_data, frames) from a pake_init:
+// a session this browser has seen seal is refused; a first contact is taken
+// unsealed (the stated residual). Playwright stands in for that relay.
+const stripping = (field) => async (p) => {
+  await p.routeWebSocket(/.*/, ws => {
+    const server = ws.connectToServer();
+    ws.onMessage(m => {
+      let j = null;
+      try { j = JSON.parse(m); } catch (_) {}
+      if (j && (j.type === 'pake_init' || j.type === 'own_init')) { delete j[field]; delete j.frames; m = JSON.stringify(j); }
+      server.send(m);
+    });
+    server.onMessage(m => ws.send(m));
+  });
+};
+const sealedNow = p => p.evaluate(() => ({ key: !!cryptoKey, sealed: !!sealState, peers: (() => { try { return JSON.parse(localStorage.getItem('reminal-sealed-peers-v1') || '{}'); } catch (_) { return {}; } })() }));
+{
+  const ctx = await b.newContext({ ...devices['Desktop Chrome'] });
+  await ctx.addInitScript(() => { try { localStorage.setItem('reminal-tour-v1', 'skipped'); } catch (_) {} });
+  // Live, waited for: the connected state itself, not a fixed delay. Long
+  // enough for a handshake the agent paces (pake_busy: earlier tests spent
+  // this source's PIN allowance on the same sessions) to come round.
+  const live = p => p.waitForFunction(() => inputLive(), null, { timeout: 90000 }).then(() => true, () => false);
+  const said = p => p.evaluate(() => (document.getElementById('status') || {}).textContent || '').catch(() => '');
+  // Whole: bound, sealed, remembered.
+  const p1 = await ctx.newPage();
+  await p1.goto(`${BASE}/?s=${A}#p=${APIN}`, { waitUntil: 'domcontentloaded' });
+  const up1 = await live(p1);
+  const r1 = await sealedNow(p1);
+  await p1.close();
+  // Stripped, for a session seen to seal: refused.
+  const p2 = await ctx.newPage();
+  await stripping('frames_data')(p2);
+  await p2.goto(`${BASE}/?s=${A}#p=${APIN}`, { waitUntil: 'domcontentloaded' });
+  await p2.waitForTimeout(8000);
+  const r2 = await sealedNow(p2);
+  await p2.close();
+  await ctx.close();
+  // Stripped, first contact (a fresh browser): taken unsealed.
+  const ctx2 = await b.newContext({ ...devices['Desktop Chrome'] });
+  await ctx2.addInitScript(() => { try { localStorage.setItem('reminal-tour-v1', 'skipped'); } catch (_) {} });
+  const p3 = await ctx2.newPage();
+  await stripping('frames_data')(p3);
+  await p3.goto(`${BASE}/?s=${B}#p=${BPIN}`, { waitUntil: 'domcontentloaded' });
+  const up3 = await live(p3);
+  const r3 = await sealedNow(p3);
+  const why3 = up3 ? '' : ' (status: "' + await said(p3) + '")';
+  await ctx2.close();
+  const ok = up1 && r1.sealed && !!r1.peers['s:' + A] && !r2.key && up3 && r3.key && !r3.sealed;
+  if (!ok) process.exitCode = 1;
+  out.push(`TEST 7  PIN: whole sealed=${r1.sealed} remembered=${!!r1.peers['s:' + A]}; stripped after sealing keyed=${r2.key} (refused); stripped first contact live=${up3}${why3} sealed=${r3.sealed}   ${ok ? 'PASS' : 'FAIL'}`);
+}
+
+// ---- TEST 8: the owner handshake binds its offer too ----
+{
+  const ctx = await b.newContext({ ...devices['Desktop Chrome'] });
+  await ctx.addInitScript(() => { try { localStorage.setItem('reminal-tour-v1', 'skipped'); } catch (_) {} });
+  const p = await ctx.newPage();
+  p.on('dialog', d => d.accept());
+  await p.goto(`${BASE}/?debug=true`, { waitUntil: 'domcontentloaded' });
+  await p.evaluate(async ([pk, raw]) => {
+    const bin = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+    const privateKey = await crypto.subtle.importKey('pkcs8', bin(pk), { name: 'Ed25519' }, false, ['sign']);
+    const publicKey = await crypto.subtle.importKey('raw', bin(raw), { name: 'Ed25519' }, true, ['verify']);
+    await idbPut(await openOwnDB(), 'device', { privateKey, publicKey });
+  }, [OWNER_PKCS8, OWNER_RAW]);
+  await p.evaluate(id => connectOwned(id), A);
+  const up1 = await p.waitForFunction(() => inputLive(), null, { timeout: 30000 }).then(() => true, () => false);
+  const r1 = await sealedNow(p);
+  const machineSeen = Object.keys(r1.peers).some(k => k.startsWith('m:'));
+  await p.close();
+  const p2 = await ctx.newPage();
+  p2.on('dialog', d => d.accept());
+  await stripping('frames_sig')(p2);
+  await p2.goto(`${BASE}/?debug=true`, { waitUntil: 'domcontentloaded' });
+  await p2.evaluate(id => connectOwned(id), A);
+  await p2.waitForTimeout(8000);
+  const r2 = await sealedNow(p2);
+  await ctx.close();
+  const ok = up1 && r1.sealed && machineSeen && !r2.key;
+  if (!ok) process.exitCode = 1;
+  out.push(`TEST 8  owner: whole sealed=${r1.sealed} machine remembered=${machineSeen}; stripped after sealing keyed=${r2.key} (refused)   ${ok ? 'PASS' : 'FAIL'}`);
+}
 console.log(out.join('\n'));
 await b.close();

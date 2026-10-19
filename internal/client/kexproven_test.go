@@ -65,6 +65,9 @@ func simulate(n int, proven bool) (answered int, longestGap time.Duration) {
 		if ok, _ := a.allowKexFrom(now, "H"); ok {
 			answered++
 			last = now
+			if proven {
+				a.markProvenSource("H") // its viewer opens a frame: it had the PIN
+			}
 		} else if g := now.Sub(last); g > longestGap {
 			longestGap = g
 		}
@@ -102,7 +105,7 @@ func TestKexProvenNeedsThePIN(t *testing.T) {
 	shared := make([]byte, 32)
 	exID := []byte("0123456789abcdef")
 	v := &Viewer{box: box}
-	if err := v.setSeal(key, shared, exID, a.sealInfoFor(1, shared, exID, "ATTACKER")); err != nil {
+	if err := v.acceptSeal(key, shared, exID, a.sealInfoFor(1, shared, exID, "ATTACKER"), true, ""); err != nil {
 		t.Fatal(err)
 	}
 	// Bare read-only request.

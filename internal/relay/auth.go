@@ -52,6 +52,12 @@ func credentialMatches(want, token, pinHash string) bool {
 	return false
 }
 
+// secretEqual compares two agent credentials in time that does not depend on
+// where they first differ, so timing a mismatch reveals nothing of the secret.
+func secretEqual(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
 func hashHex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])

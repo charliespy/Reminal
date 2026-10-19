@@ -16,7 +16,7 @@ const b = await chromium.launch();
 const page = await b.newPage();
 await page.goto('http://127.0.0.1:8099/');
 const out = await page.evaluate(async () => {
-  // No host: payloads arrive as a sealed frame's do once opened ({__plain}),
+  // No host: payloads arrive as a sealed frame's do once opened (openedFrame),
   // and what would be written to the terminal or sent to the host is
   // recorded.
   cryptoKey = {};
@@ -34,9 +34,9 @@ const out = await page.evaluate(async () => {
     const b = new Uint8Array(4 + h.length + chunk.length);
     new DataView(b.buffer).setUint32(0, h.length);
     b.set(h, 4); b.set(chunk, 4 + h.length);
-    return { __plain: b };
+    return openedFrame(b);
   };
-  const data = (seq, s) => handleMessage({ type: 'data', seq, data: { __plain: enc(s) } });
+  const data = (seq, s) => handleMessage({ type: 'data', seq, data: openedFrame(enc(s)) });
   const reset = () => { painted.length = 0; resumes.length = 0; lastSeq = 0; awaitingSnapshotUntil = Date.now() + 15000; snapAsm = null; snapLive = null; snapPartsOff = false; };
   const label = (p) => p === '\x1b[!p\x1b[r' ? 'RESET' : p.startsWith('\x1b[2J') ? (p.includes('line 1\r') ? 'HISTORY' : 'SCREEN') : p;
   const screenPart = (id, more) => part(id, 0, 0, enc('\x1b[2J\x1b[3JSCREEN'), viewerId, { screen: true, more });
@@ -132,6 +132,18 @@ const out = await page.evaluate(async () => {
   const buf = term.buffer.active;
   for (let i = 0; i < buf.length; i++) { const m = (buf.getLine(i)?.translateToString(true) || '').match(/^line (\d+)$/); if (m) seen.add(m[1]); }
   res.pacedGapRegion = { lines: seen.size };
+  // An opened frame is only what the page opened itself: an object a message
+  // carries in its JSON as if it were one ({"__plain": [...]}) is not taken
+  // as decrypted output, whatever it holds.
+  {
+    reset();
+    const before = painted.length;
+    let threw = false;
+    try { await decrypt({}, { __plain: [70, 79, 82, 71, 69, 68] }); } catch (_) { threw = true; }
+    try { await handleMessage({ type: 'data', seq: 200, data: { __plain: [70, 79, 82, 71, 69, 68] } }); } catch (_) {}
+    try { await handleMessage({ type: 'data', seq: 201, data: { __plain: Array.from(enc('FORGED')) } }); } catch (_) {}
+    res.notOpened = { threw, painted: painted.slice(before).filter((p) => p.includes('FORGED')).length };
+  }
   return res;
 });
 console.log(JSON.stringify(out));
@@ -154,6 +166,7 @@ const checks = [
   ['paced: a history that cannot be unpacked leaves the screen live, no plain snapshot asked', JSON.stringify(out.pacedBomb.order) === '["SCREEN","STILL"]' && out.pacedBomb.resumes === 0 && !out.pacedBomb.live && !out.pacedBomb.partsOff],
   ['paced: more output kept than a snapshot holds gives the history up', !out.pacedOverKept.live],
   ['paced: a scroll region set during the download does not swallow the history (all 50 lines in the terminal)', out.pacedGapRegion.lines === 50],
+  ['data as {"__plain": …} in a message is not taken as opened: decrypt refuses it, nothing painted', out.notOpened.threw && out.notOpened.painted === 0],
 ];
 for (const [n, ok] of checks) console.log((ok ? 'PASS  ' : 'FAIL  ') + n);
 await b.close(); srv.close();

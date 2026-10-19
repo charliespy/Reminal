@@ -11,6 +11,10 @@ import (
 
 const pinDigits = "0123456789"
 
+// PINLength is how many digits a new session's PIN has. ValidatePIN takes 6
+// to 8, so a session that already has a six-digit PIN keeps it.
+const PINLength = 8
+
 func NewPIN(length int) (string, error) {
 	pin := make([]byte, length)
 	max := big.NewInt(10)
