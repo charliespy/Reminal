@@ -218,6 +218,7 @@ type Agent struct {
 	kexPrevSrc    string
 	kexPrevAt     time.Time
 	kexLast       time.Time
+	kexBackoff    kexBackoff // escalating wait for unproven sources; see kexBackoffFirst
 
 	// Owner handshakes get their own allowance. An own_init is not a PIN
 	// guess: it carries an Ed25519 signature over a transcript bound to this
@@ -697,7 +698,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 	if opts.Machine {
 		return newMachineAgent(version, opts.DaemonHost)
 	}
-	pin, err := session.NewPIN(6)
+	pin, err := session.NewPIN(session.PINLength)
 	if err != nil {
 		return nil, err
 	}
@@ -3774,6 +3775,85 @@ const (
 	kexReserve     = 1.0 / 3
 )
 
+// The escalating backoff. A handshake from a source that has not proved the
+// PIN is one guess, and those draw on an allowance of their own: kexLongBurst,
+// back at one per kexBackoffMax. With it spent, each further one makes
+// unproven sources wait before the next: kexBackoffFirst, then twice that, up
+// to kexBackoffMax. Every kexBackoffMax of quiet after a wait ends takes one
+// doubling back off; the allowance refills only once they are all gone. A
+// handshake whose stream then proves the PIN (markProvenSource) was no guess,
+// and gives its share back. So a guesser who never stops is held to about one
+// a kexBackoffMax: some 24 a day, against the 480 the long-term allowance
+// alone let through.
+//
+// It cannot tell a slow guesser from a person who has yet to prove the PIN, so
+// a stranger who keeps guessing can make a FIRST-time PIN user wait up to
+// kexBackoffMax. Sources that have proved the PIN, and owner (PIN-free)
+// devices, are never held by it, and the session's terminal is told once each
+// time it starts (kexBackoffNotice).
+const (
+	kexBackoffFirst = kexLongRefill
+	kexBackoffMax   = time.Hour
+)
+
+const kexBackoffNotice = "  [%s] Someone is guessing this session's PIN: new PIN connections now wait (up to an hour). Devices that already connected, and owner devices, are not affected.\n"
+
+type kexBackoff struct {
+	free  float64       // what is left of the allowance
+	at    time.Time     // when free was last brought up to date; zero: never used
+	level int           // doublings: 0 is no wait
+	until time.Time     // unproven sources wait until then
+	wait  time.Duration // the wait that ends at until
+	told  bool          // the terminal has been told about this one
+}
+
+// update forgives one doubling per kexBackoffMax of quiet after the wait,
+// then, with none left, refills the allowance for the time gone by.
+func (b *kexBackoff) update(now time.Time) {
+	if b.at.IsZero() {
+		b.free, b.at = kexLongBurst, now
+		return
+	}
+	if b.level > 0 && now.After(b.until) {
+		if n := int(now.Sub(b.until) / kexBackoffMax); n > 0 {
+			b.level = max(0, b.level-n)
+			if b.level == 0 {
+				b.wait, b.told = 0, false
+			}
+		}
+	}
+	if b.level == 0 {
+		b.free = min(kexLongBurst, b.free+now.Sub(b.at).Seconds()/kexBackoffMax.Seconds())
+	}
+	b.at = now
+}
+
+// answered counts one answered unproven handshake; it reports whether this
+// one started a wait the terminal has not been told about.
+func (b *kexBackoff) answered(now time.Time) bool {
+	b.update(now)
+	if b.free >= 1 {
+		b.free--
+		return false
+	}
+	b.level++
+	b.wait = kexBackoffFirst << min(b.level-1, 20)
+	if b.wait > kexBackoffMax || b.wait <= 0 {
+		b.wait = kexBackoffMax
+	}
+	b.until = now.Add(b.wait)
+	tell := !b.told
+	b.told = true
+	return tell
+}
+
+// refund gives back the share of a handshake that turned out to be no guess.
+func (b *kexBackoff) refund() {
+	if !b.at.IsZero() && b.level == 0 {
+		b.free = min(kexLongBurst, b.free+1)
+	}
+}
+
 type kexSrcBucket struct {
 	tokens float64
 	at     time.Time
@@ -3799,13 +3879,16 @@ func (a *Agent) otherSourceSeen(src string, now time.Time) bool {
 	return a.kexPrevSrc != "" && a.kexPrevSrc != src && now.Sub(a.kexPrevAt) < window
 }
 
-// markProvenSource records that src proved the PIN. "" is nothing.
+// markProvenSource records that src proved the PIN, once per stream. The
+// handshake that proved it was no guess, so its share of the backoff's
+// allowance comes back, untagged ("") or not.
 func (a *Agent) markProvenSource(src string) {
+	a.kexMu.Lock()
+	defer a.kexMu.Unlock()
+	a.kexBackoff.refund()
 	if src == "" {
 		return
 	}
-	a.kexMu.Lock()
-	defer a.kexMu.Unlock()
 	if a.kexProven == nil {
 		a.kexProven = map[string]time.Time{}
 	}
@@ -3837,7 +3920,17 @@ func (a *Agent) allowKex(now time.Time) bool {
 // is how long until one is likely to be there.
 func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Duration) {
 	a.kexMu.Lock()
-	defer a.kexMu.Unlock()
+	ok, retry, tell := a.allowKexLocked(now, src)
+	a.kexMu.Unlock()
+	if tell {
+		a.notify(kexBackoffNotice, now.Format("15:04:05"))
+	}
+	return ok, retry
+}
+
+// allowKexLocked is allowKexFrom with kexMu held; tell is whether to say the
+// backoff has started.
+func (a *Agent) allowKexLocked(now time.Time, src string) (ok bool, retry time.Duration, tell bool) {
 	if a.kexLast.IsZero() {
 		a.kexTokens = kexBurst
 		a.kexLongTokens = kexLongBurst
@@ -3849,6 +3942,9 @@ func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Dur
 	a.kexLast = now
 
 	proven := src != "" && a.isProvenSource(src)
+	if !proven && now.Before(a.kexBackoff.until) {
+		return false, a.kexBackoff.until.Sub(now), false
+	}
 	pressure := a.kexLongTokens < kexLongBurst/2
 	var b *kexSrcBucket
 	if src != "" {
@@ -3874,7 +3970,7 @@ func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Dur
 			b.tokens = min(share, b.tokens+now.Sub(b.at).Seconds()/kexSrcRefill.Seconds())
 			b.at = now
 			if pressure && b.tokens < 1 && a.otherSourceSeen(src, now) {
-				return false, time.Duration((1 - b.tokens) * float64(kexSrcRefill))
+				return false, time.Duration((1 - b.tokens) * float64(kexSrcRefill)), false
 			}
 		}
 	}
@@ -3892,14 +3988,17 @@ func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Dur
 		if wait < time.Second {
 			wait = time.Second
 		}
-		return false, wait
+		return false, wait, false
 	}
 	a.kexTokens--
 	a.kexLongTokens--
 	if b != nil {
 		b.tokens = max(0, b.tokens-1)
 	}
-	return true, 0
+	if !proven {
+		tell = a.kexBackoff.answered(now)
+	}
+	return true, 0, tell
 }
 
 // ownVerifyBurst is how many owner handshakes we will verify back-to-back.

@@ -4,6 +4,7 @@
 package client
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,9 +128,12 @@ func TestKexSourceShareUnderPressure(t *testing.T) {
 }
 
 // Two sources over three hours, one asking every 10 s and one every 3 min:
-// the second keeps getting answered, with no long run of refusals.
+// the second keeps getting answered, with no long run of refusals. The second
+// has proved the PIN: one that never does looks just like a slow guesser, and
+// the escalating backoff (TestKexBackoffDoublesUpToAnHour) holds it.
 func TestKexSteadySourceKeepsBeingAnswered(t *testing.T) {
 	a := &Agent{}
+	a.markProvenSource("steady")
 	base := time.Now()
 	got, longestGap := 0, time.Duration(0)
 	last := base
@@ -148,5 +152,116 @@ func TestKexSteadySourceKeepsBeingAnswered(t *testing.T) {
 	}
 	if got < 30 || longestGap > 15*time.Minute {
 		t.Fatalf("steady source: %d of 60 answered, longest gap %v", got, longestGap)
+	}
+}
+
+// A source that keeps asking without ever proving the PIN is answered for the
+// long-term allowance, then waits longer each time: 3 minutes, 6, 12, 24, 48,
+// then an hour, never more. The terminal is told once.
+func TestKexBackoffDoublesUpToAnHour(t *testing.T) {
+	a := &Agent{}
+	now := time.Unix(1_700_000_000, 0)
+	var at []time.Time
+	tells := 0
+	for end := now.Add(10 * time.Hour); now.Before(end); now = now.Add(time.Second) {
+		a.kexMu.Lock()
+		ok, _, tell := a.allowKexLocked(now, "guesser")
+		a.kexMu.Unlock()
+		if ok {
+			at = append(at, now)
+		}
+		if tell {
+			tells++
+		}
+	}
+	if len(at) < kexLongBurst+9 {
+		t.Fatalf("answered only %d", len(at))
+	}
+	// at[kexLongBurst] is the first past the allowance: the wait follows it.
+	var gaps []string
+	for i := kexLongBurst + 1; i < kexLongBurst+9; i++ {
+		gaps = append(gaps, at[i].Sub(at[i-1]).Round(time.Minute).String())
+	}
+	if got, want := strings.Join(gaps, " "), "3m0s 6m0s 12m0s 24m0s 48m0s 1h0m0s 1h0m0s 1h0m0s"; got != want {
+		t.Fatalf("waits after the allowance: %s, want %s", got, want)
+	}
+	if tells != 1 {
+		t.Fatalf("the terminal was told %d times, want once", tells)
+	}
+}
+
+// While unproven sources wait, one that has proved the PIN is answered, and
+// its handshakes never count towards the wait.
+func TestKexBackoffSparesProvenSources(t *testing.T) {
+	a := &Agent{}
+	a.markProvenSource("friend")
+	now := time.Unix(1_700_000_000, 0)
+	for i := 0; i < 200; i++ {
+		a.allowKexFrom(now, "guesser")
+		a.allowKexFrom(now, "friend")
+		now = now.Add(kexLongRefill)
+	}
+	if ok, _ := a.allowKexFrom(now, "newcomer"); ok || a.kexBackoff.wait != kexBackoffMax {
+		t.Fatalf("a new source during the backoff: ok=%v, the wait %v", ok, a.kexBackoff.wait)
+	}
+	if ok, _ := a.allowKexFrom(now.Add(kexLongRefill), "friend"); !ok {
+		t.Fatal("a proven source was held by the backoff")
+	}
+}
+
+// A guesser that never stops gets about one handshake an hour once the
+// allowance is spent; pausing between them gains it nothing.
+func TestKexBackoffHoldsAPatientGuesser(t *testing.T) {
+	for _, pause := range []time.Duration{0, kexBackoffFirst, 10 * time.Minute, time.Hour} {
+		a := &Agent{}
+		now := time.Unix(1_700_000_000, 0)
+		answered := 0
+		for end := now.Add(4 * 24 * time.Hour); now.Before(end); {
+			ok, retry := a.allowKexFrom(now, "guesser")
+			if ok {
+				answered++
+				now = now.Add(pause + time.Second)
+			} else {
+				now = now.Add(retry)
+			}
+		}
+		if ceiling := kexLongBurst + 4*24 + 4; answered > ceiling {
+			t.Errorf("pausing %v: %d answered in four days, want at most %d", pause, answered, ceiling)
+		}
+	}
+}
+
+// Every hour of quiet after a wait takes one doubling back off; a source that
+// comes straight back is not forgiven. A handshake that proves the PIN gives
+// its share of the allowance back.
+func TestKexBackoffForgivesQuiet(t *testing.T) {
+	a := &Agent{}
+	now := time.Unix(1_700_000_000, 0)
+	for a.kexBackoff.level < 4 {
+		if ok, retry := a.allowKexFrom(now, "guesser"); !ok {
+			now = now.Add(retry)
+		} else {
+			now = now.Add(time.Second)
+		}
+	}
+	now = a.kexBackoff.until.Add(time.Minute)
+	a.allowKexFrom(now, "guesser")
+	if a.kexBackoff.level != 5 {
+		t.Fatalf("back after a minute: level %d, want 5", a.kexBackoff.level)
+	}
+	now = a.kexBackoff.until.Add(2*time.Hour + time.Minute)
+	a.allowKexFrom(now, "guesser")
+	if a.kexBackoff.level != 4 {
+		t.Fatalf("back after two quiet hours: level %d, want 4 (two forgiven, one more)", a.kexBackoff.level)
+	}
+
+	b := &Agent{}
+	for i := 0; i < kexLongBurst; i++ {
+		b.allowKexFrom(now, "")
+		b.markProvenSource("") // each one opened a frame: a person, not a guess
+		now = now.Add(kexLongRefill)
+	}
+	if b.kexBackoff.free < kexLongBurst-1 {
+		t.Fatalf("proven handshakes spent the allowance: %v left", b.kexBackoff.free)
 	}
 }
