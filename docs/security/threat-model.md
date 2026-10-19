@@ -60,6 +60,13 @@ attempt to impersonate either party.
   a viewer from before sealed frames is attached, the machine also writes the
   earlier form, and that form has fewer of these properties; updating every
   viewer removes it.
+- The offer of sealed frames, and the machine's answer to it, are bound into
+  what each handshake authenticates (the PIN handshake's key, the owner
+  handshake's signed transcripts), so a relay cannot strip them unseen. A
+  viewer remembers the sessions and machines it has seen seal, and refuses an
+  answer without sealed frames from them.
+- A captured owner handshake replayed is not answered: the machine remembers
+  the viewer keys it has answered (an hour).
 - The relay performs **no PIN verification and never receives the PIN**. This is a
   deliberate capability refusal: a relay able to check a PIN could brute-force it
   offline and could take part in the exchange as either side
@@ -81,7 +88,16 @@ refuse to route. **Plaintext visibility into `reminal expose` traffic**, which i
 not end-to-end encrypted (architecture §5.3). First-connection TOFU on the owner
 path: a relay that is malicious at the very first connection between a device and a
 machine can insert itself before any key is pinned, if the person confirms the
-machine it presents.
+machine it presents. Two residuals of the earlier, unsealed form, both ending
+when the machine stops writing it (with the switch that makes a viewer refuse
+any answer without sealed frames): a viewer's **first** contact with a session
+or machine it has never seen seal can still be dropped to the earlier form by
+the relay; and a PIN handshake that offers no sealed frames makes the machine
+write the earlier form beside the sealed one for 30 seconds before anyone has
+proved the PIN, so a relay can keep that copy being written. It is encrypted
+under the session key, a viewer that seals ignores it, and the machine takes
+none of its own messages back as input; what it exposes is an earlier-form
+viewer attached at the time.
 
 ### A3 — Attacker who knows the session ID but not the PIN
 
