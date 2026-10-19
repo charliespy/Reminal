@@ -41,4 +41,7 @@ export type TunnelMeta = {
   // before visitor cookies. 0: never (registered since). Absent: registered
   // before, not yet asked; the relay sets it the first time it is.
   legacyUntil?: number;
+  // Agent advertised "long_pin": its PIN is long enough that wrong PINs are
+  // held per source only (see gateWait). Absent on a short PIN.
+  longPin?: boolean;
 };

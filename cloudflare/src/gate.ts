@@ -6,7 +6,10 @@
 // Wrong PINs one source may make before it waits.
 export const GATE_SOURCE_FREE = 5;
 // Wrong PINs across every source before sources the tunnel has not seen get
-// the PIN right wait too. Much more than one source's allowance, so it takes
+// the PIN right wait too. Only for a short PIN: one IPv6 /48 is 65,536
+// sources, so per-source counts alone would let a six-digit PIN be tried a
+// third of the way through. A long PIN (60 bits) needs no such count, and
+// there it would only hand strangers a way to keep new visitors out. Much more than one source's allowance, so it takes
 // many addresses to reach, and a source that has opened the tunnel before is
 // never held by it: strangers guessing from everywhere cannot lock out the
 // people the tunnel was shared with.
@@ -84,9 +87,10 @@ export type GateState = { sources: Record<string, Strikes>; tunnel?: Strikes; kn
 
 // gateWait is how long src must wait before its next PIN is checked, in ms.
 // A source that has got the PIN right before waits only for its own wrong
-// PINs; any other waits for the tunnel's too.
-export function gateWait(g: GateState, src: string, now: number): number {
-  return Math.max(waitLeft(g.sources[src], now), src in g.known ? 0 : waitLeft(g.tunnel, now));
+// PINs; any other waits for the tunnel's too, when portWide (a short PIN).
+export function gateWait(g: GateState, src: string, now: number, portWide = true): number {
+  const tunnel = portWide && !(src in g.known) ? waitLeft(g.tunnel, now) : 0;
+  return Math.max(waitLeft(g.sources[src], now), tunnel);
 }
 
 // gateWrong is g once src has got the PIN wrong.

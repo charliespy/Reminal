@@ -676,12 +676,13 @@ export class SessionRoom {
     // rather than inheriting from prev — a downgrade must actually take effect.
     const reqChunk = Array.isArray(info.caps) && info.caps.includes("req_chunk");
     const wsSubproto = Array.isArray(info.caps) && info.caps.includes("ws_subproto");
+    const longPin = Array.isArray(info.caps) && info.caps.includes("long_pin");
 
     // A tunnel registered before visitor cookies keeps taking the cookie its
     // visitors already hold, for a while (see visitorAuthed). A new one, or a
     // new PIN, never takes it.
     const legacyUntil = prev && prev.signingKey === signingKey ? prev.legacyUntil : 0;
-    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey, reqChunk, wsSubproto, legacyUntil };
+    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey, reqChunk, wsSubproto, legacyUntil, longPin };
     await this.state.storage.put("tunnelMeta", meta);
   }
 
@@ -1377,7 +1378,7 @@ export class SessionRoom {
         tunnel: stored.get("gateTunnel") as Strikes | undefined,
         known: (stored.get("gateKnown") as Record<string, number> | undefined) ?? {},
       };
-      const wait = gateWait(g, src, now);
+      const wait = gateWait(g, src, now, !meta.longPin);
       if (wait > 0) {
         gateResponse = new Response(pinGatePage(sessionId, to, `Too many failed attempts. Try again in ${waitText(wait)}.`, authAction), {
           status: 429,

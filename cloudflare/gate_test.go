@@ -88,9 +88,9 @@ for (let i = 0; i < 400 && held < 0; i++) {
   if (g.gateWait(st, "newcomer", now) > 0) held = i;
 }
 console.log("newcomer held after " + held + " sources; owner waits " + g.gateWait(st, "owner", now) +
-  "; tunnel " + (g.gateWait(st, "newcomer", now) / 60000));
+  "; tunnel " + (g.gateWait(st, "newcomer", now) / 60000) + "; with a long PIN " + g.gateWait(st, "newcomer", now, false));
 `)
-	if want := "newcomer held after 12 sources; owner waits 0; tunnel 5"; got != want {
+	if want := "newcomer held after 12 sources; owner waits 0; tunnel 5; with a long PIN 0"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }

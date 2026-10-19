@@ -91,11 +91,25 @@ echo "wrong PINs from many addresses"
 codes=""; for n in $(seq 20 29); do for i in 1 2 3 4 5; do codes="$codes$(login 203.0.113.$n WRONGPIN0000) "; done; done
 echo "$codes" | grep -q 401 && ok "fifty more wrong PINs, from ten addresses" || bad "many addresses: $codes"
 got=$(login 203.0.113.99 "$PIN")
-[ "$got" = 429 ] && ok "an address the port has not let in now waits: $got" || bad "a new address: $got"
-got=$(login 198.51.100.7 "$PIN")
-[ "$got" = 302 ] && ok "one it has let in before does not: $got" || bad "an address let in before: $got"
+[ "$got" = 302 ] && ok "with a long PIN, a new address is not held by them: $got" || bad "a new address, long PIN: $got"
 [ "$(in_with "$CK1")" = 200 ] && ok "and a visitor holding a cookie is not asked at all" || bad "a visitor with a cookie was refused"
+reminal stop 9000 >/dev/null 2>&1
 
+echo "a forward with a six-digit PIN from before (carried across a restart)"
+for i in $(seq 1 30); do [ "$(c -o /dev/null -w '%{http_code}' "$W/")" = 200 ] || break; sleep 1; done
+SHORT=123456 SID=GATE6DGT
+HASH=$(node -e "process.stdout.write(require('/w/cloudflare/node_modules/bcryptjs').hashSync('$SHORT', 10))")
+REMINAL_EXPOSE_RESUME=1 REMINAL_EXPOSE_SESSION_ID=$SID REMINAL_EXPOSE_PIN=$SHORT REMINAL_EXPOSE_PIN_HASH=$HASH \
+  reminal expose 9000 > /tmp/expose6.txt 2>&1 || { cat /tmp/expose6.txt; exit 1; }
+HOST="port-$(echo "$SID" | tr 'A-Z' 'a-z').reminal.app"
+for i in $(seq 1 30); do [ "$(c -o /dev/null -w '%{http_code}' "$W/")" = 200 ] && break; sleep 1; done
+got=$(login 198.51.100.7 "$SHORT")
+[ "$got" = 302 ] && ok "its PIN still opens it: $got" || { bad "the six-digit PIN: $got"; cat /tmp/expose6.txt; }
+for n in $(seq 40 49); do for i in 1 2 3 4 5; do login 203.0.113.$n 000000 >/dev/null; done; done
+got=$(login 203.0.113.98 "$SHORT")
+[ "$got" = 429 ] && ok "fifty wrong PINs from ten addresses make a new address wait: $got" || bad "a new address, short PIN: $got"
+got=$(login 198.51.100.7 "$SHORT")
+[ "$got" = 302 ] && ok "but not one it has let in before: $got" || bad "an address let in before, short PIN: $got"
 reminal stop 9000 >/dev/null 2>&1
 echo
 [ "$fails" = 0 ] && echo "PASS" || { echo "FAIL ($fails)"; tail -20 /tmp/wrangler.log; exit 1; }
