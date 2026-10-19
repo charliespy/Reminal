@@ -70,12 +70,22 @@ var harnessLoginScreens = map[string]*regexp.Regexp{
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), and the steps of
 	// setting one up.
-	"qwen": regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey|^[^a-z0-9]*(connectaprovider|manuallyconnectalocalserver,proxy,orunsupportedprovider)[^a-z0-9]*$`),
+	"qwen": regexp.MustCompile(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|connectwithanexistingmodelstudioapikey|^[^a-z0-9]*(connectaprovider|manuallyconnectalocalserver,proxy,orunsupportedprovider)[^a-z0-9]*$|^[^a-z0-9]*(noauthtypeisselected\.pleaseconfigureanauthtype|noapikeyfound:setopenai_api_key)`),
+	// goose 1.55 with no provider: "error: No provider configured. Run
+	// 'goose configure' first." (it exits), and a provider whose key the
+	// service refused.
+	"goose": regexp.MustCompile(`^[^a-z0-9]*(error:)?(noproviderconfigured\.run.?gooseconfigure|providerisnotconfigured\.run.?gooseconfigure|authenticationfailed—checkyourapikey)`),
+	// Crush 0.98 with no provider: its first screen ("To start, let's choose
+	// a provider and model."), signing in to Hyper, and `crush run`'s error.
+	"crush": regexp.MustCompile(`^[^a-z0-9]*(tostart,let.?schooseaproviderandmodel|let.?sauthenticatewithhyper|noprovidersconfigured-pleaserun.?crush)`),
+	// OpenCode runs on a free built-in model with no login at all; a
+	// provider it was set up for and has no key for says so.
+	"opencode": regexp.MustCompile(`^[^a-z0-9]*[a-z0-9]*apikeyismissing\.passitusingthe`),
 	// Cursor CLI: its first screen with no login ("Press any key to log
 	// in..." — a key typed there starts signing in), and the sign-in itself.
 	// A key it was given and cannot use is read apart (harnessKeyRefusals):
 	// its words are common enough to come from anything.
-	"cursor-agent": regexp.MustCompile(`^[^a-z0-9]*(pressanykeytologin|ifyourbrowserdidn.?topen,clickthislinktologin:?|pressqtoshowaqrcodetologin)`),
+	"cursor-agent": regexp.MustCompile(`^[^a-z0-9]*(pressanykeytologin|ifyourbrowserdidn.?topen,clickthislinktologin:?|pressqtoshowaqrcodetologin|(error:)?authenticationrequired\.pleaserun.?agentlogin)`),
 	// pi with no model to run on (no provider logged in) says so on its own
 	// status line, the last on its screen: its context "0" and its model
 	// "unknown" ("0.0%/0 (auto)   unknown"). A message sent it is turned away

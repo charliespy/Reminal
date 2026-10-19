@@ -102,11 +102,16 @@ type Active struct {
 	// only the agent that owns the session knows when it changed.
 	AttnSince time.Time `json:"attn_since,omitzero"`
 	// Attn is the detected attention state of the session's foreground agent:
-	// "working", "input" (blocked awaiting the user), or "done". Empty when no
-	// agent TUI is active (a bare shell) or the serving build predates this
+	// "working", "input" (blocked awaiting the user), "done", "logged-out"
+	// (its agent needs a login) or "limited" (held back by its service's
+	// limit; see ResetsAt). Empty when no agent TUI is active (a bare shell) or the serving build predates this
 	// field. Heuristic — see internal/client/attention_probe.go. Surfaced by
 	// `reminal list` so you can tell which session needs you without attaching.
 	Attn string `json:"attn,omitempty"`
+	// ResetsAt is, while Attn is "limited" (the agent held back by its
+	// service's usage or rate limit), when its notice says the limit resets.
+	// Zero when it did not say, or for any other state.
+	ResetsAt time.Time `json:"resets_at,omitzero"`
 	// Shells is how many shells the foreground harness still has running. It
 	// sits BESIDE Attn rather than inside it: a turn that ended having left a
 	// build going is honestly "done", and folding that into "working" would

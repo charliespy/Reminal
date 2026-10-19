@@ -325,7 +325,23 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// same screen, before the attention state, because a logged-out agent
 		// takes a message, ends its turn and looks done; by the program that
 		// runs here, and its own hook, never by any login text on the screen.
-		a.noteHarnessHealth(render, prog, harnessAtWork(hs, now, settledMs))
+		atWork := harnessAtWork(hs, now, settledMs)
+		a.noteHarnessHealth(render, prog, atWork)
+		// And whether it is held back by its service's limit, from the same
+		// rows (harnesslimit.go). A new reset time read off the same notice
+		// is news for the record even when the state stays "limited".
+		// When its hook last said a turn began: kept beside the state, as a
+		// short turn's "done" overwrites its "working" before a read.
+		var turnAt time.Time
+		if hs != nil {
+			turnAt = hs.TurnAt
+			if hs.State == "working" && hs.TS.After(turnAt) {
+				turnAt = hs.TS // a hook too old to keep it
+			}
+		}
+		if a.noteHarnessLimit(harnessTail(stripANSI(render), harnessRowsFor(prog)), prog, atWork, turnAt) {
+			a.metaDirty.Store(true)
+		}
 		if hs != nil && prog != "" && (fgAt.IsZero() || !hs.TS.Before(fgAt)) {
 			hookSpoke[prog] = true
 		}
@@ -335,13 +351,17 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 			// It cannot work at all: that is what to report, not what it
 			// looked like it was doing when it took the message.
 			state, source = harnessLoggedOut, "screen(login)"
+		} else if limited, _ := a.harnessLimitedNow(); limited {
+			state, source = harnessLimited, "screen(limit)"
 		}
 		a.setAttnState(state)
 		next, ok := attnNextRead(now, lastChange, last, hs, fgPgrpSeen == 0 && a.term != nil)
 		// And when the login state waits on a read to settle (harnessReadAt):
 		// a screen that has gone still must still clear it.
-		if t := a.harnessReadAt(); t.After(now) && (!ok || t.Before(next)) {
-			next, ok = t.Add(time.Millisecond), true
+		for _, t := range []time.Time{a.harnessReadAt(), a.harnessLimitReadAt()} {
+			if t.After(now) && (!ok || t.Before(next)) {
+				next, ok = t.Add(time.Millisecond), true
+			}
 		}
 		if ok {
 			at(next)

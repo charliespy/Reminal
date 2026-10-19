@@ -25,6 +25,13 @@ type HookState struct {
 	// turn ended: nil when it said nothing about it (a harness, or a build,
 	// that does not), which is not the same as none.
 	Background *Background `json:"background,omitempty"`
+	// TurnAt is when the harness last said a turn began ("working"), kept
+	// through the states written after it: a turn over in a moment is
+	// overwritten by its "done" before anything reads it, and still a turn
+	// was taken — what says an agent at its limit is working again
+	// (internal/client/harnesslimit.go). Zero from a reminal too old to
+	// keep it.
+	TurnAt time.Time `json:"turn_at,omitzero"`
 }
 
 // Background is how many shells and subagents a harness still has running in
@@ -69,7 +76,13 @@ func WriteHookStateWith(id, state string, bg *Background) error {
 	if unlock, err := lockHookState(id); err == nil {
 		defer unlock()
 	}
-	return writeHookState(id, HookState{State: state, TS: time.Now(), Background: bg})
+	hs := HookState{State: state, TS: time.Now(), Background: bg}
+	if state == "working" {
+		hs.TurnAt = hs.TS
+	} else if prev := ReadHookStateAnyAge(id); prev != nil {
+		hs.TurnAt = prev.TurnAt
+	}
+	return writeHookState(id, hs)
 }
 
 // hookLockWait caps waiting for a session's hook record: a hook holds up the
