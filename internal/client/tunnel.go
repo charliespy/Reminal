@@ -247,7 +247,7 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 		if id, err = session.NewID(8); err != nil {
 			return nil, err
 		}
-		if pin, err = session.NewPIN(6); err != nil {
+		if pin, err = session.NewExposePIN(); err != nil {
 			return nil, err
 		}
 		if pinHash, err = session.HashPIN(pin); err != nil {
@@ -295,6 +295,18 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 		wsStreams:     make(map[string]*wsStream),
 		reqBodies:     make(map[string]chan []byte),
 	}, nil
+}
+
+// tunnelCaps is what a tunnel tells the relay it can do. "long_pin": its PIN
+// is a long one (session.NewExposePIN), so the relay's gate holds wrong PINs
+// per source only. A tunnel carried across a restart with a six-digit PIN
+// from before leaves it out, and keeps the port-wide count that PIN needs.
+func tunnelCaps(pin string) []string {
+	caps := []string{"req_chunk", "ws_subproto"}
+	if len(pin) >= session.ExposePINLength {
+		caps = append(caps, "long_pin")
+	}
+	return caps
 }
 
 // PublicURL is the URL visitors hit. On the hosted relay each tunnel gets its
@@ -514,7 +526,7 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		// (body_more + tunnel_req_body). Without it the relay must refuse an
 		// upload too big for one message rather than chunk it — an older agent
 		// silently drops the follow-on chunks and would write a TRUNCATED file.
-		"caps": []string{"req_chunk", "ws_subproto"},
+		"caps": tunnelCaps(t.pin),
 	})
 	if err := t.writeMsg(conn, protocol.Message{
 		Type: protocol.TypeTunnelRegister,
