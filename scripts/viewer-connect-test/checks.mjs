@@ -203,7 +203,11 @@ const sealedNow = p => p.evaluate(() => ({ key: !!cryptoKey, sealed: !!sealState
 {
   const ctx = await b.newContext({ ...devices['Desktop Chrome'] });
   await ctx.addInitScript(() => { try { localStorage.setItem('reminal-tour-v1', 'skipped'); } catch (_) {} });
-  const live = p => p.waitForFunction(() => inputLive(), null, { timeout: 30000 }).then(() => true, () => false);
+  // Live, waited for: the connected state itself, not a fixed delay. Long
+  // enough for a handshake the agent paces (pake_busy: earlier tests spent
+  // this source's PIN allowance on the same sessions) to come round.
+  const live = p => p.waitForFunction(() => inputLive(), null, { timeout: 90000 }).then(() => true, () => false);
+  const said = p => p.evaluate(() => (document.getElementById('status') || {}).textContent || '').catch(() => '');
   // Whole: bound, sealed, remembered.
   const p1 = await ctx.newPage();
   await p1.goto(`${BASE}/?s=${A}#p=${APIN}`, { waitUntil: 'domcontentloaded' });
@@ -226,10 +230,11 @@ const sealedNow = p => p.evaluate(() => ({ key: !!cryptoKey, sealed: !!sealState
   await p3.goto(`${BASE}/?s=${B}#p=${BPIN}`, { waitUntil: 'domcontentloaded' });
   const up3 = await live(p3);
   const r3 = await sealedNow(p3);
+  const why3 = up3 ? '' : ' (status: "' + await said(p3) + '")';
   await ctx2.close();
   const ok = up1 && r1.sealed && !!r1.peers['s:' + A] && !r2.key && up3 && r3.key && !r3.sealed;
   if (!ok) process.exitCode = 1;
-  out.push(`TEST 7  PIN: whole sealed=${r1.sealed} remembered=${!!r1.peers['s:' + A]}; stripped after sealing keyed=${r2.key} (refused); stripped first contact live=${up3} sealed=${r3.sealed}   ${ok ? 'PASS' : 'FAIL'}`);
+  out.push(`TEST 7  PIN: whole sealed=${r1.sealed} remembered=${!!r1.peers['s:' + A]}; stripped after sealing keyed=${r2.key} (refused); stripped first contact live=${up3}${why3} sealed=${r3.sealed}   ${ok ? 'PASS' : 'FAIL'}`);
 }
 
 // ---- TEST 8: the owner handshake binds its offer too ----
