@@ -235,6 +235,11 @@ type Agent struct {
 	// nil. A test holds it still, so how long a burst takes (a slow -race
 	// run took 22 s for 32) never refills the bucket it is draining.
 	ownClock func() time.Time
+	// ownSeen is the viewer ephemerals an owner handshake has lately been
+	// answered for. A device makes a fresh one for every connect, so one seen
+	// again is a replay of an own_init: not answered, its token not given
+	// back, and no window opened for viewers from before sealed frames.
+	ownSeen map[string]time.Time
 
 	// localActive gates whether pumpPTY echoes shell output to the host's
 	// stdout. Set when Run() puts the local terminal into raw-attached mode
@@ -4148,6 +4153,46 @@ func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64, framesB64
 	_ = a.writeMsg(conn, resp)
 }
 
+// ownerEphWindow is how long an answered owner handshake's viewer ephemeral
+// is remembered, and ownerEphMax how many at most (the oldest go first): a
+// replay later than that, or past that many, costs its token like any other
+// unproven attempt. An hour: a captured own_init replays at most that often.
+const (
+	ownerEphWindow = time.Hour
+	ownerEphMax    = 4096
+)
+
+// ownerEphFresh records eph as answered now, reporting false when it was
+// answered within ownerEphWindow: a replayed own_init.
+func (a *Agent) ownerEphFresh(eph []byte) bool {
+	now := time.Now()
+	if a.ownClock != nil {
+		now = a.ownClock()
+	}
+	a.ownMu.Lock()
+	defer a.ownMu.Unlock()
+	if a.ownSeen == nil {
+		a.ownSeen = map[string]time.Time{}
+	}
+	k := string(eph)
+	if t, ok := a.ownSeen[k]; ok && now.Sub(t) < ownerEphWindow {
+		return false
+	}
+	oldest, at := "", now
+	for kk, t := range a.ownSeen {
+		if now.Sub(t) >= ownerEphWindow {
+			delete(a.ownSeen, kk)
+		} else if t.Before(at) {
+			oldest, at = kk, t
+		}
+	}
+	if len(a.ownSeen) >= ownerEphMax && oldest != "" {
+		delete(a.ownSeen, oldest)
+	}
+	a.ownSeen[k] = now
+	return true
+}
+
 // handleOwnerInit completes one PIN-free (owner) handshake for an enrolled
 // device. Like handlePakeInit it's silent on every failure — a device that isn't
 // enrolled, or a forged signature, simply gets no reply and times out. The
@@ -4203,6 +4248,11 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 	}
 	// 2. And that the device is enrolled as an owner of this machine.
 	if ok, err := IsOwner(devicePub); err != nil || !ok {
+		return
+	}
+	// A proof seen before is a replay — it verifies, but its ephemeral's key
+	// is not the replayer's to use: answered not, and its token kept.
+	if !a.ownerEphFresh(viewerEph) {
 		return
 	}
 	// The proof held: this is an owner, not load. Give the token back so an
