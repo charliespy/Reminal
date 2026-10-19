@@ -185,6 +185,66 @@ func ReadHookStateAnyAge(id string) *HookState {
 	return &hs
 }
 
+// A harness that says when it is up and reading its input (Claude Code's
+// SessionStart: started, resumed, cleared) is ready from then: a line typed
+// before it — a resumed conversation still loading — may not be taken. Kept
+// apart from the turn's state: being up is not a turn, and must never read
+// as one begun.
+
+func hookReadyPath(id string) (string, error) {
+	p, err := hookStatePath(id)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(p), "hook-"+id+".ready"), nil
+}
+
+// MarkHookReady records that the session's harness said it is ready, now.
+func MarkHookReady(id string) error {
+	p, err := hookReadyPath(id)
+	if err != nil {
+		return err
+	}
+	if err := atrest.CheckWritable(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
+	}
+	// Written whole (a reader never sees half a time), as the turn's state is.
+	tmp, err := os.CreateTemp(filepath.Dir(p), "hook-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.WriteString(time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), p)
+}
+
+// HookReadyAt is when the session's harness last said it was ready; zero if
+// it never has (a harness, or an install, without the hook).
+func HookReadyAt(id string) time.Time {
+	p, err := hookReadyPath(id)
+	if err != nil {
+		return time.Time{}
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, string(raw))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 // ClearHookState removes a session's hook state (on session exit). Idempotent.
 func ClearHookState(id string) error {
 	p, err := hookStatePath(id)
@@ -192,6 +252,7 @@ func ClearHookState(id string) error {
 		return err
 	}
 	_ = os.Remove(filepath.Join(filepath.Dir(p), "hook-"+id+".lock"))
+	_ = os.Remove(filepath.Join(filepath.Dir(p), "hook-"+id+".ready"))
 	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

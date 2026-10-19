@@ -261,7 +261,7 @@ func backupOnce(path string, raw []byte) error {
 // else: reminal's path (bare, or quoted when it has spaces; .exe on Windows),
 // then `hook <state>`. A person's hook that merely mentions reminal, or runs
 // our command and then something more, is not ours.
-var reminalHookCmdRe = regexp.MustCompile("^\\s*(?:'(?:[^']*/)?reminal(?:\\.exe)?'|\"(?:[^\"$`]*[/\\\\])?reminal(?:\\.exe)?\"|(?:[^\\s'\"$`;&|<>()]*[/\\\\])?reminal(?:\\.exe)?) hook (?:working|input|done|notify)\\s*$")
+var reminalHookCmdRe = regexp.MustCompile("^\\s*(?:'(?:[^']*/)?reminal(?:\\.exe)?'|\"(?:[^\"$`]*[/\\\\])?reminal(?:\\.exe)?\"|(?:[^\\s'\"$`;&|<>()]*[/\\\\])?reminal(?:\\.exe)?) hook (?:working|input|done|notify|subagent|ready)\\s*$")
 
 // ourHookEntry says whether a config entry is one of ours: tagged with
 // hookMarker, or, since an agent may rewrite its settings and drop keys it
@@ -354,6 +354,9 @@ func agentTargets() []agentTarget {
 					{Event: "Stop", State: "done"},                // turn finished, with what it left running
 					// One of its own subagents finished: what is still running.
 					{Event: "SubagentStop", State: "subagent"},
+					// Up and reading its input: started, or resumed (a long
+					// conversation loads for a while first).
+					{Event: "SessionStart", State: "ready"},
 				},
 			},
 		},

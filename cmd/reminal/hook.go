@@ -32,7 +32,7 @@ import (
 func runHook(args []string) error {
 	if len(args) < 1 {
 		_, _ = io.Copy(io.Discard, os.Stdin) // don't leave the harness pipe blocked
-		return fmt.Errorf("usage: reminal hook <working|input|done|notify|subagent>")
+		return fmt.Errorf("usage: reminal hook <working|input|done|notify|subagent|ready>")
 	}
 	arg := strings.ToLower(strings.TrimSpace(args[0]))
 
@@ -68,6 +68,23 @@ func runHook(args []string) error {
 			hookDebugBackground(id, arg, bg)
 		}
 		state = arg
+	case "ready":
+		// The harness is up and reading its input (Claude Code's
+		// SessionStart). Not a turn's state: kept apart from it.
+		payload := readCappedStdin()
+		if id == "" {
+			return nil
+		}
+		if conv := convFromPayload(payload); conv != "" && convOwnSession(id) {
+			_ = session.WriteConv(id, conv)
+		}
+		if err := session.MarkHookReady(id); err != nil {
+			return err
+		}
+		if rec, err := session.ReadActiveByID(id); err == nil && rec.PID > 0 {
+			_, _ = sendControl(rec.PID, "attn", hookNudgeWait)
+		}
+		return nil
 	case "subagent":
 		// A subagent of its own finished (Claude Code's SubagentStop): what is
 		// still running now. Not a turn's state — one inside a turn finishing
@@ -84,7 +101,7 @@ func runHook(args []string) error {
 		state = classifyNotify(readCappedStdin(), id)
 	default:
 		go func() { _, _ = io.Copy(io.Discard, os.Stdin) }()
-		return fmt.Errorf("unknown state %q (want working|input|done|notify|subagent)", arg)
+		return fmt.Errorf("unknown state %q (want working|input|done|notify|subagent|ready)", arg)
 	}
 
 	if id == "" {

@@ -117,6 +117,21 @@ func TestOurHookCommandMatch(t *testing.T) {
 	}
 }
 
+// Every command integrate writes is ours by its command alone, so a rewrite
+// that drops the tags never leaves one to be added again on each integrate.
+func TestEveryHookWeWriteIsOursUntagged(t *testing.T) {
+	for _, a := range agentTargets() {
+		if a.hooks == nil {
+			continue
+		}
+		for _, e := range a.hooks.events {
+			if c := hookCommand("/usr/local/bin/reminal", e.State); !reminalHookCmdRe.MatchString(c) {
+				t.Errorf("%s %s: %q is not recognised as ours", a.Bin, e.Event, c)
+			}
+		}
+	}
+}
+
 // Antigravity's hooks go under reminal's own name in its hooks file, never
 // at the top (agy rejects such a file); entries an earlier reminal left at
 // the top are taken out, the person's own sets are kept, and re-running does
