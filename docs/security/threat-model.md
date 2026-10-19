@@ -65,8 +65,11 @@ attempt to impersonate either party.
   handshake's signed transcripts), so a relay cannot strip them unseen. A
   viewer remembers the sessions and machines it has seen seal, and refuses an
   answer without sealed frames from them.
-- A captured owner handshake replayed is not answered: the machine remembers
-  the viewer keys it has answered (an hour).
+- A captured owner handshake replayed is not answered again within an hour of
+  the first (the machine remembers the viewer keys it has answered for that
+  long). One replayed later is answered, but gives no key — the reply is
+  encrypted to an ephemeral key only the original device holds — and costs
+  one handshake; a timestamp in the owner transcript would end even that.
 - The relay performs **no PIN verification and never receives the PIN**. This is a
   deliberate capability refusal: a relay able to check a PIN could brute-force it
   offline and could take part in the exchange as either side
