@@ -29,9 +29,16 @@ type viewerSeal struct {
 var errSealedDowngrade = errors.New("the connection to that machine was interrupted — reconnecting")
 
 // newViewerSeal reads what a handshake answer said about sealed frames.
+// errSealMissing is a handshake answer without sealed frames.
+var errSealMissing = errors.New("handshake: that machine's answer has no sealed frames — if its reminal predates them, update it there and try again")
+
 func newViewerSeal(sessionKey, key, exID []byte, sealed string) (viewerSeal, error) {
+	// Every viewer here offers sealed frames, and the offer is bound into the
+	// handshake: an answer without them is an agent from before them, or one
+	// a relay took them out of — and the unsealed form is not one to fall
+	// back to unseen.
 	if sealed == "" {
-		return viewerSeal{}, nil
+		return viewerSeal{}, errSealMissing
 	}
 	info, err := crypto.OpenSealInfo(key, exID, sealed)
 	if err != nil {
@@ -106,15 +113,6 @@ func (v *Viewer) resetSeal() {
 	v.writeMu.Lock()
 	v.seal = viewerSeal{}
 	v.writeMu.Unlock()
-}
-
-// setSeal records what a handshake answer said about sealed frames.
-func (v *Viewer) setSeal(sessionKey, key, exID []byte, sealed string) error {
-	st, err := newViewerSeal(sessionKey, key, exID, sealed)
-	v.writeMu.Lock()
-	v.seal = st
-	v.writeMu.Unlock()
-	return err
 }
 
 // sealOut is viewerSeal.out for this viewer. Called with writeMu held.

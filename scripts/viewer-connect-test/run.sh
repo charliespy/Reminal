@@ -20,7 +20,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$(cd ../.. && pwd)
 PORT=${PORT:-18080}
-NAME=reminal-viewer-test
+# Its container and image, by name: one of this run's own (VIEWER_TEST_NAME to
+# choose it), so two runs at once on one machine never remove each other's.
+NAME=${VIEWER_TEST_NAME:-reminal-viewer-test-$$}
 PW=mcr.microsoft.com/playwright:v1.56.0-noble
 
 GOOS=linux GOARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
@@ -28,7 +30,7 @@ GOOS=linux GOARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
 docker build -q -t "$NAME" . >/dev/null
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" -p "$PORT:18080" "$NAME" >/dev/null
-trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -f "$PWD/reminal"' EXIT
+trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true; docker rmi "$NAME" >/dev/null 2>&1 || true; rm -f "$PWD/reminal"' EXIT
 docker exec -d "$NAME" sh -c 'reminal relay 18080 >/tmp/relay.log 2>&1'
 sleep 3
 docker exec "$NAME" sh -c 'cd /root && reminal new alpha >/dev/null 2>&1 && reminal new beta >/dev/null 2>&1'

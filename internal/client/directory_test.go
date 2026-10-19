@@ -83,7 +83,8 @@ func TestDirectoryRevokeSelfEndToEnd(t *testing.T) {
 	ve := eph.PublicKey().Bytes()
 	b64 := base64.StdEncoding.EncodeToString
 	sig := crypto.SignOwner(dk, crypto.OwnerClientTranscript(dirID, ve, devicePub))
-	writeDir(conn, protocol.Message{Type: protocol.TypeOwnerInit, ExID: exHex, Data: b64(ve), DevicePub: b64(devicePub), DeviceSig: b64(sig), Frames: 1})
+	fsig := crypto.SignOwner(dk, crypto.OwnerClientTranscriptFor(dirID, ve, devicePub, true))
+	writeDir(conn, protocol.Message{Type: protocol.TypeOwnerInit, ExID: exHex, Data: b64(ve), DevicePub: b64(devicePub), DeviceSig: b64(sig), FramesSig: b64(fsig), Frames: 1})
 	if err := readOwnerResp(conn, dirID, exHex, exID, ve, devicePub, machinePub, eph); err != nil {
 		t.Fatalf("handshake: %v", err)
 	}

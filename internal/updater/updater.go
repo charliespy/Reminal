@@ -213,8 +213,10 @@ func shouldCheck(currentVersion string) bool {
 // on-start checks, long for explicit `reminal upgrade`.
 func check(currentVersion string, timeout time.Duration) (latestTag string, build Build, critical bool, err error) {
 	if entry, ok := readCache(); ok && time.Since(entry.CheckedAt) < cacheTTL {
-		critical = entry.CriticalMin != "" && newer(currentVersion, entry.CriticalMin)
-		if critical || newer(currentVersion, entry.LatestTag) {
+		// Only ever a newer build: a forced-upgrade floor says how soon, never
+		// what — a latest no newer than this one is not installed over it.
+		if newer(currentVersion, entry.LatestTag) {
+			critical = entry.CriticalMin != "" && newer(currentVersion, entry.CriticalMin)
 			return entry.LatestTag, Build{URL: entry.AssetURL, SHA256: entry.SHA256}, critical, nil
 		}
 		return "", Build{}, false, nil
@@ -244,10 +246,12 @@ func check(currentVersion string, timeout time.Duration) (latestTag string, buil
 	// startup prompt read), with the build and the forced-upgrade floor along.
 	recordLatest(ctx, tag)
 	entry, _ := readCache()
-	critical = entry.CriticalMin != "" && newer(currentVersion, entry.CriticalMin)
-	if !critical && !newer(currentVersion, entry.LatestTag) {
+	// As above: newer, or nothing — a floor above this build with no newer
+	// latest to meet it is not a reason to install one that is older.
+	if !newer(currentVersion, entry.LatestTag) {
 		return "", Build{}, false, nil
 	}
+	critical = entry.CriticalMin != "" && newer(currentVersion, entry.CriticalMin)
 	if entry.AssetURL == "" {
 		return "", Build{}, false, errNoAssetForPlatform
 	}

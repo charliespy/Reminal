@@ -619,16 +619,24 @@ func (v *Viewer) negotiateSessionKey(conn *websocket.Conn) error {
 	if err != nil {
 		return fmt.Errorf("handshake: ex_id: %w", err)
 	}
-	st, mine, err := crypto.NewCPace([]byte(v.pin), []byte(pakeChannel), pakeSID(v.sessionID, exID), true)
+	// Two elements, one handshake: the sid as before (an agent from before
+	// the sealed-frames binding answers it) and the sid that names sealed
+	// frames (one that knows it answers that, sealed, the answer keyed in).
+	st, mine, err := crypto.NewCPace([]byte(v.pin), []byte(pakeChannel), pakeSID(v.sessionID, exID, false), true)
+	if err != nil {
+		return fmt.Errorf("handshake: %w", err)
+	}
+	stF, mineF, err := crypto.NewCPace([]byte(v.pin), []byte(pakeChannel), pakeSID(v.sessionID, exID, true), true)
 	if err != nil {
 		return fmt.Errorf("handshake: %w", err)
 	}
 	v.resetSeal()
 	initMsg := protocol.Message{
-		Type:   protocol.TypePakeInit,
-		ExID:   exIDHex,
-		Data:   base64.StdEncoding.EncodeToString(mine),
-		Frames: 1,
+		Type:       protocol.TypePakeInit,
+		ExID:       exIDHex,
+		Data:       base64.StdEncoding.EncodeToString(mine),
+		FramesData: base64.StdEncoding.EncodeToString(mineF),
+		Frames:     1,
 	}
 	if err := v.writeMsg(conn, initMsg); err != nil {
 		return fmt.Errorf("handshake: send: %w", err)
@@ -683,23 +691,21 @@ func (v *Viewer) negotiateSessionKey(conn *websocket.Conn) error {
 			if err != nil {
 				return fmt.Errorf("handshake: bad agent element encoding")
 			}
-			key, err := st.Finish(agentElem)
-			if err != nil {
-				return fmt.Errorf("handshake: %w", err)
-			}
 			wrapped, err := base64.StdEncoding.DecodeString(msg.Wrap)
 			if err != nil {
 				return fmt.Errorf("handshake: bad wrap encoding")
 			}
-			sessionKey, err := crypto.UnwrapSessionKey(key, exID, wrapped)
+			// The bound element answered, or the one as before: whichever
+			// key unwraps the session key is the one the agent used.
+			key, sessionKey, bound, err := pakeOpenEither(stF, st, agentElem, exID, wrapped)
 			if err != nil {
-				return fmt.Errorf("handshake failed: PIN mismatch")
+				return err
 			}
 			box, err := crypto.NewBox(sessionKey)
 			if err != nil {
 				return fmt.Errorf("handshake: box: %w", err)
 			}
-			if err := v.setSeal(sessionKey, key, exID, msg.Seal); err != nil {
+			if err := v.acceptSeal(sessionKey, key, exID, msg.Seal, bound, "s:"+v.sessionID); err != nil {
 				return err
 			}
 			v.box = box
@@ -733,7 +739,10 @@ func (v *Viewer) negotiateSessionKeyOwner(conn *websocket.Conn) error {
 		return fmt.Errorf("owner: ex_id: %w", err)
 	}
 	viewerEph := eph.PublicKey().Bytes()
+	// Signed twice: the transcript as before (an agent from before the
+	// sealed-frames binding checks that one) and the one naming sealed frames.
 	deviceSig := crypto.SignOwner(deviceKey, crypto.OwnerClientTranscript(v.sessionID, viewerEph, devicePub))
+	framesSig := crypto.SignOwner(deviceKey, crypto.OwnerClientTranscriptFor(v.sessionID, viewerEph, devicePub, true))
 	v.resetSeal()
 	if err := v.writeMsg(conn, protocol.Message{
 		Type:      protocol.TypeOwnerInit,
@@ -741,6 +750,7 @@ func (v *Viewer) negotiateSessionKeyOwner(conn *websocket.Conn) error {
 		Data:      base64.StdEncoding.EncodeToString(viewerEph),
 		DevicePub: base64.StdEncoding.EncodeToString(devicePub),
 		DeviceSig: base64.StdEncoding.EncodeToString(deviceSig),
+		FramesSig: base64.StdEncoding.EncodeToString(framesSig),
 		Frames:    1,
 	}); err != nil {
 		return fmt.Errorf("owner: send: %w", err)
@@ -783,8 +793,10 @@ func (v *Viewer) negotiateSessionKeyOwner(conn *websocket.Conn) error {
 			}
 			// Mutual auth: the machine must sign the transcript binding both
 			// ephemerals and both identities.
-			if !crypto.VerifyOwner(ed25519.PublicKey(machinePub),
-				crypto.OwnerServerTranscript(v.sessionID, viewerEph, agentEph, devicePub, machinePub), machineSig) {
+			//    Signed with the answer to the sealed-frames offer (bound), or
+			//    over the transcript as before by an agent that predates it.
+			bound, ok := ownerAnswerVerifies(v.sessionID, viewerEph, agentEph, devicePub, machinePub, machineSig, msg.Seal)
+			if !ok {
 				return fmt.Errorf("owner: machine signature invalid — refusing (possible relay tampering)")
 			}
 			if err := v.checkMachineIdentity(ed25519.PublicKey(machinePub)); err != nil {
@@ -814,7 +826,7 @@ func (v *Viewer) negotiateSessionKeyOwner(conn *websocket.Conn) error {
 			if err != nil {
 				return fmt.Errorf("owner: box: %w", err)
 			}
-			if err := v.setSeal(sessionKey, shared, exID, msg.Seal); err != nil {
+			if err := v.acceptSeal(sessionKey, shared, exID, msg.Seal, bound, "m:"+base64.StdEncoding.EncodeToString(machinePub)); err != nil {
 				return err
 			}
 			v.box = box
