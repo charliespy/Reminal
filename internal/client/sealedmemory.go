@@ -91,18 +91,11 @@ func noteSealed(peer string) {
 	}
 	sealedPeersMu.Lock()
 	defer sealedPeersMu.Unlock()
-	// Another process mid-write holds the lock a moment; past that, written
-	// without it (as before the lock), rather than not at all.
-	for i := 0; i < 50; i++ {
-		lock, held, err := tryLockFile(sealedPeersLock)
-		if err != nil {
-			break
-		}
-		if held {
-			defer unlockFile(lock)
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Held only for one read-modify-write of a small file: waited for, not
+	// polled. A lock that cannot be had at all (an unwritable home) is no
+	// reason not to remember.
+	if lock, err := lockFile(sealedPeersLock); err == nil {
+		defer unlockFile(lock)
 	}
 	m := readSealedPeers()
 	m[peer] = time.Now().Unix()
