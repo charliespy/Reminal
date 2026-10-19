@@ -377,6 +377,13 @@ type Agent struct {
 	// over the control socket and mirrored to viewers. Nil until first use.
 	notes *noteStore
 
+	// outageSaid is whether this relay outage has been told to the terminal
+	// yet. A session retries every 30s for as long as the relay is out of
+	// reach, and a line printed on every try scrolls away what the person
+	// had there: an outage is said once, and its end once. Only the Run
+	// loop touches it.
+	outageSaid bool
+
 	// currentConnMu guards currentConn so the SIGUSR1 handler can close
 	// the live WS the moment a pause is requested, instead of waiting up
 	// to readDeadline (60s) for the read to time out.
@@ -1191,7 +1198,10 @@ func (a *Agent) serveRelay(shellExit <-chan struct{}) error {
 			if wait < rateLimitMinWait {
 				wait = rateLimitMinWait
 			}
-			agentNotify("  reminal: %s\n", humanize(err))
+			if !a.outageSaid {
+				a.outageSaid = true
+				agentNotify("  reminal: %s\n", humanize(err))
+			}
 			select {
 			case <-shellExit:
 				return nil
@@ -1203,7 +1213,10 @@ func (a *Agent) serveRelay(shellExit <-chan struct{}) error {
 			continue
 		}
 
-		agentNotify("  reminal: %s Reconnecting in %v…\n", humanize(err), backoff)
+		if !a.outageSaid {
+			a.outageSaid = true
+			agentNotify("  reminal: %s Retrying until it is back.\n", humanize(err))
+		}
 
 		select {
 		case <-shellExit:
@@ -3143,6 +3156,10 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 		a.currentConnMu.Unlock()
 	}()
 	a.signalRegistered()
+	if a.outageSaid {
+		a.outageSaid = false
+		agentNotify("  reminal: back online.\n")
+	}
 	a.viewerSizeMu.Lock()
 	a.viewerCount = 0
 	a.viewerSizeMu.Unlock()

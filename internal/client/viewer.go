@@ -85,6 +85,10 @@ type Viewer struct {
 
 	writeMu   sync.Mutex
 	helloOnce sync.Once // first-connect "Connected …" line; suppressed on reconnect
+	// outageSaid is whether this outage has been told to the terminal yet:
+	// said once, not on every retry (see Agent.outageSaid). Only Run's loop
+	// and the runConnection it calls touch it.
+	outageSaid bool
 	// connectTime is set inside helloOnce; zero value means we never
 	// actually connected (auth failed immediately, etc.), so we skip the
 	// disconnect summary.
@@ -182,9 +186,9 @@ func (v *Viewer) Run() error {
 			if wait = rl.retryAfter; wait < rateLimitMinWait {
 				wait = rateLimitMinWait
 			}
-			v.notify(humanize(err)) // says the wait itself
+			v.sayOutage(humanize(err)) // says the wait itself
 		} else {
-			v.notify(fmt.Sprintf("%s Reconnecting in %v…", humanize(err), wait))
+			v.sayOutage(humanize(err) + " Retrying until it is back.")
 		}
 		time.Sleep(wait)
 		if backoff *= 2; backoff > maxBackoff {
@@ -274,7 +278,7 @@ func (v *Viewer) Run() error {
 		default:
 		}
 
-		if !first {
+		if !first && !v.outageSaid {
 			v.notify("Reconnecting…")
 		}
 
@@ -321,7 +325,7 @@ func (v *Viewer) Run() error {
 			if wait < rateLimitMinWait {
 				wait = rateLimitMinWait
 			}
-			v.notify(humanize(err))
+			v.sayOutage(humanize(err))
 			select {
 			case <-intCh:
 				fmt.Fprint(os.Stderr, "\r\n")
@@ -335,7 +339,7 @@ func (v *Viewer) Run() error {
 			continue
 		}
 
-		v.notify(fmt.Sprintf("%s Reconnecting in %v…", humanize(err), backoff))
+		v.sayOutage(humanize(err) + " Retrying until it is back.")
 
 		select {
 		case <-intCh:
@@ -444,6 +448,7 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 		v.notify(fmt.Sprintf("Connected to %s · handshake %v · AES-256-GCM end-to-end · Ctrl-] to disconnect",
 			v.sessionID, dialTime.Round(time.Millisecond)))
 	})
+	v.outageSaid = false
 	if isReconnect {
 		v.notify(fmt.Sprintf("Reconnected to %s — back online. Press Enter to refresh the prompt.",
 			v.sessionID))
@@ -1049,6 +1054,16 @@ func (v *Viewer) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
 
 // notify writes a one-line dim status to stderr. It uses \r and ANSI dim to
 // minimize disruption to the live terminal output below.
+// sayOutage tells the terminal why the relay can't be reached, once an
+// outage: the retries after it are quiet, until it is back.
+func (v *Viewer) sayOutage(text string) {
+	if v.outageSaid {
+		return
+	}
+	v.outageSaid = true
+	v.notify(text)
+}
+
 func (v *Viewer) notify(text string) {
 	fmt.Fprintf(os.Stderr, "\r\n\x1b[2m[reminal] %s\x1b[0m\r\n", text)
 }
