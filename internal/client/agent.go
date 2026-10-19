@@ -4029,9 +4029,9 @@ func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64, framesB64
 // ownerEphWindow is how long an answered owner handshake's viewer ephemeral
 // is remembered, and ownerEphMax how many at most (the oldest go first): a
 // replay later than that, or past that many, costs its token like any other
-// unproven attempt.
+// unproven attempt. An hour: a captured own_init replays at most that often.
 const (
-	ownerEphWindow = 10 * time.Minute
+	ownerEphWindow = time.Hour
 	ownerEphMax    = 4096
 )
 
