@@ -8,6 +8,7 @@ package client
 import (
 	"bufio"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -87,7 +88,7 @@ func prepareHandshake(cmd *exec.Cmd) (recv func(timeout time.Duration) (string, 
 				_ = conn.SetDeadline(deadline)
 				br := bufio.NewReader(conn)
 				pre, err := br.ReadString('\n')
-				if err != nil || strings.TrimSpace(pre) != "tok "+token {
+				if err != nil || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(pre)), []byte("tok "+token)) != 1 {
 					return "", errors.New("bad handshake preamble")
 				}
 				return br.ReadString('\n')

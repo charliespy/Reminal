@@ -390,14 +390,14 @@ func (s *Server) handleAuthLocked(r *room, role protocol.Role, msg protocol.Mess
 		switch {
 		case r.auth.token != "":
 			// Already migrated to a token — nothing else authenticates.
-			if msg.Token != r.auth.token {
+			if !secretEqual(msg.Token, r.auth.token) {
 				return "session credentials mismatch"
 			}
 		case r.auth.pinHash != "":
 			// Legacy session: require the same pin_hash. If the agent also
 			// brought a token, migrate to token-only and drop the pin_hash so
 			// the offline-crackable value stops living at the relay.
-			if msg.PinHash != r.auth.pinHash {
+			if !secretEqual(msg.PinHash, r.auth.pinHash) {
 				return "session credentials mismatch"
 			}
 			if msg.Token != "" {
