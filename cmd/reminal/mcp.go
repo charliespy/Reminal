@@ -543,6 +543,7 @@ func mcpToolList() []map[string]any {
 			"description": "Type keystrokes into a reminal session's live terminal (the PTY). " +
 				"Owned sessions: pass session id from list_sessions. Any other reminal: pass session + pin " +
 				"(or a join URL). Newlines become Enter. Set enter=true to press Return. " +
+				"To stop a running command, key=\"ctrl-c\" (control keys go in key, not keys). " +
 				"Does not return command output — follow with read_transcript if you own the session. " +
 				"Always confirm with read_transcript that the text was accepted and is not still sitting in " +
 				"the input box waiting for a Return — a busy agent or a slow redraw can swallow it; if it is, send " +
@@ -550,7 +551,8 @@ func mcpToolList() []map[string]any {
 				"To run a command in a session: send_keys, then read_transcript.",
 			"inputSchema": obj(map[string]any{
 				"session": str("Session id, or a join URL like https://live.reminal.app/?s=ID#p=PIN."),
-				"keys":    str("Characters to type. Use \\n for Enter. Ctrl-C is the U+0003 character."),
+				"keys":    str("Characters to type, taken literally (\\u0003 types those six characters). Use \\n for Enter."),
+				"key":     str("Keys to press by name before keys, e.g. \"ctrl-c\", \"ctrl-d\", \"ctrl-u\", \"esc\", \"tab\", \"shift-tab\", \"up\", \"down\", \"enter\"; several: \"esc esc\". keys may then be empty."),
 				"pin":     str("Session PIN. Required unless this device owns the machine (list_sessions) or the URL already has #p=."),
 				"enter": map[string]any{
 					"type":        "boolean",
@@ -558,7 +560,7 @@ func mcpToolList() []map[string]any {
 					"description": "If true, press Return after keys (run a line).",
 				},
 				"machine": str("Optional machine name or id when the session id exists on more than one owned box."),
-			}, "session", "keys"),
+			}, "session"),
 		},
 		mcpIssueTool(obj, str),
 		{
@@ -670,6 +672,7 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 			argStr(args, "session", argStr(args, "id", "")),
 			argStr(args, "machine", ""),
 			argStr(args, "keys", argStr(args, "text", "")),
+			argStr(args, "key", ""),
 			argStr(args, "pin", argStr(args, "PIN", "")),
 			argBool(args, "enter", false) || argBool(args, "newline", false),
 		)

@@ -27,16 +27,16 @@ func TestMCPToolListIncludesSessionTools(t *testing.T) {
 }
 
 func TestMCPSendKeysRequiresSessionAndKeys(t *testing.T) {
-	if _, err := mcpSendKeys("", "", "ls", "", false); err == nil {
+	if _, err := mcpSendKeys("", "", "ls", "", "", false); err == nil {
 		t.Fatal("expected session required")
 	}
-	if _, err := mcpSendKeys("VW65K9YU", "", "", "", false); err == nil {
+	if _, err := mcpSendKeys("VW65K9YU", "", "", "", "", false); err == nil {
 		t.Fatal("expected empty keys error")
 	}
 }
 
 func TestMCPSendKeysPINRejectsBadPIN(t *testing.T) {
-	if _, err := mcpSendKeys("ABCDEFGH", "", "ls", "12", true); err == nil {
+	if _, err := mcpSendKeys("ABCDEFGH", "", "ls", "", "12", true); err == nil {
 		t.Fatal("expected invalid PIN")
 	}
 }
@@ -137,4 +137,70 @@ func TestSendKeysReportsEveryReturn(t *testing.T) {
 			t.Errorf("keys=%q enter=%v: report %q", tc.keys, tc.enter, report)
 		}
 	}
+}
+
+// An agent that cannot put a raw control character in its call names the key:
+// Ctrl-C goes first, on its own, then the text, then the Return. keys stays
+// literal, so a backslash sequence someone meant to type is typed.
+func TestSendKeysNamedKeysGoFirstAndKeysStayLiteral(t *testing.T) {
+	for _, tc := range []struct {
+		keys, key string
+		enter     bool
+		want      []string
+	}{
+		{"", "ctrl-c", false, []string{"\x03"}},
+		{"", "Ctrl+C ctrl-c", false, []string{"\x03", "\x03"}},
+		{"ls", "ctrl-c", true, []string{"\x03", "ls", "\r"}},
+		{"", "esc,esc", false, []string{"\x1b", "\x1b"}},
+		{"", "ctrl-c", true, []string{"\x03", "\r"}},
+		{"echo hi\n", "ctrl-u", false, []string{"\x15", "echo hi\r"}},
+		{"ls", "", true, []string{"ls", "\r"}},
+		// Typed as written: nothing in keys is decoded.
+		{`\u0003 \x03 ^C C:\new`, "", false, []string{`\u0003 \x03 ^C C:\new`}},
+		{`ctrl-c`, "", false, []string{"ctrl-c"}},
+	} {
+		p, err := planSendKeys(tc.keys, tc.key, tc.enter)
+		if err != nil {
+			t.Fatalf("keys=%q key=%q: %v", tc.keys, tc.key, err)
+		}
+		var got []string
+		for _, d := range p.deliveries {
+			got = append(got, string(d))
+		}
+		if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+			t.Errorf("keys=%q key=%q enter=%v: sends %q, want %q", tc.keys, tc.key, tc.enter, got, tc.want)
+		}
+	}
+	for _, bad := range []struct{ keys, key string }{
+		{"", ""},
+		{"", "ctrl-cc"},
+		{"ls", "f13"},
+		{"", "ctrl-1"},
+		{"", "a b c d e f g h i"},
+	} {
+		if _, err := planSendKeys(bad.keys, bad.key, false); err == nil {
+			t.Errorf("keys=%q key=%q: no error", bad.keys, bad.key)
+		}
+	}
+}
+
+// The tool says how to send Ctrl-C, and send_keys no longer needs keys when
+// a key is named.
+func TestSendKeysToolNamesItsControlKeys(t *testing.T) {
+	for _, tool := range mcpToolList() {
+		if tool["name"] != "send_keys" {
+			continue
+		}
+		desc, _ := tool["description"].(string)
+		schema, _ := tool["inputSchema"].(map[string]any)
+		props, _ := schema["properties"].(map[string]any)
+		if !strings.Contains(desc, `key="ctrl-c"`) || props["key"] == nil {
+			t.Fatalf("send_keys does not say how to send Ctrl-C: %s", desc)
+		}
+		if req, _ := schema["required"].([]string); contains(req, "keys") {
+			t.Fatalf("keys is still required: %v", req)
+		}
+		return
+	}
+	t.Fatal("no send_keys tool")
 }

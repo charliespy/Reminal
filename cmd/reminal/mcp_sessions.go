@@ -359,35 +359,94 @@ func returnPressed(body, tail []byte) bool {
 	return tail != nil || bytes.HasSuffix(body, []byte{'\r'})
 }
 
-func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, error) {
+// sendKeysPlan is what one send_keys call delivers.
+type sendKeysPlan struct {
+	pressed    [][]byte // the keys named in key, one each
+	body, tail []byte   // the text, and the Return sent after it (nil: none)
+	// deliveries is everything sent, in order, a moment apart: the named
+	// keys, the text, then the Return.
+	deliveries [][]byte
+}
+
+// planSendKeys turns send_keys' arguments into what it sends. Keys named in
+// key are pressed first, each on its own (see client.NamedKeys): Ctrl-C to
+// stop what is running, Ctrl-U to clear the line, and then whatever keys
+// types — literally, a backslash sequence in it included.
+//
+// The Return travels as its own delivery a moment after the text — see
+// client.PrepareInjectKeysSplit. It has to be split here rather than at the
+// PTY, because the agent-side write for the PIN path is the same one that
+// carries live keystrokes from a browser viewer, and pausing before a
+// person's Enter would be a real regression.
+func planSendKeys(keys, key string, enter bool) (sendKeysPlan, error) {
+	var p sendKeysPlan
+	var err error
+	if p.pressed, err = client.NamedKeys(key); err != nil {
+		return p, err
+	}
+	switch {
+	case keys == "" && len(p.pressed) > 0:
+		// Only keys pressed by name, and perhaps a Return after them.
+		if enter {
+			p.tail = []byte{'\r'}
+		}
+	default:
+		if p.body, p.tail, err = client.PrepareInjectKeysSplit(keys, enter); err != nil {
+			return p, err
+		}
+	}
+	p.deliveries = append(p.deliveries, p.pressed...)
+	if len(p.body) > 0 {
+		p.deliveries = append(p.deliveries, p.body)
+	}
+	if p.tail != nil {
+		p.deliveries = append(p.deliveries, p.tail)
+	}
+	return p, nil
+}
+
+func mcpSendKeys(sessionSel, machineSel, keys, key, pin string, enter bool) (string, error) {
 	sessionSel = strings.TrimSpace(sessionSel)
 	machineSel = strings.TrimSpace(machineSel)
 	pin = strings.TrimSpace(pin)
 	if sessionSel == "" {
 		return "", fmt.Errorf("session is required (id from list_sessions, or a join URL)")
 	}
-	// The Return travels as its own delivery a moment after the text — see
-	// client.PrepareInjectKeysSplit. It has to be split here rather than at the
-	// PTY, because the agent-side write for the PIN path is the same one that
-	// carries live keystrokes from a browser viewer, and pausing before a
-	// person's Enter would be a real regression.
-	body, tail, err := client.PrepareInjectKeysSplit(keys, enter)
+	plan, err := planSendKeys(keys, key, enter)
 	if err != nil {
 		return "", err
 	}
-	// pressEnter delivers the Return over whichever transport just carried the
-	// text. A failure here is worth reporting: the text landed, so silently
-	// swallowing it would leave the caller believing a message was sent when it
-	// is actually sitting in the target's input box.
-	pressEnter := func(send func([]byte) error) error {
-		if tail == nil {
-			return nil
-		}
-		time.Sleep(client.EnterSettle)
-		if err := send(tail); err != nil {
-			return fmt.Errorf("typed the text but could not press Return: %w", err)
+	pressed, body, tail, deliveries := plan.pressed, plan.body, plan.tail, plan.deliveries
+	// sendRest sends what follows the first delivery. A failure here is worth
+	// reporting: what went before landed, so silently swallowing it would
+	// leave the caller believing a message was sent when it is actually
+	// sitting in the target's input box.
+	sendRest := func(send func([]byte) error) error {
+		for i, d := range deliveries[1:] {
+			time.Sleep(client.EnterSettle)
+			if err := send(d); err != nil {
+				if tail != nil && i == len(deliveries)-2 {
+					return fmt.Errorf("typed the text but could not press Return: %w", err)
+				}
+				return fmt.Errorf("sent part of it, then: %w", err)
+			}
 		}
 		return nil
+	}
+	report := func(target string) string {
+		if len(pressed) == 0 {
+			return typedReport(len(body), returnPressed(body, tail), target)
+		}
+		said := "Pressed " + strings.Join(client.KeyNames(key), " ") + " in " + target
+		switch {
+		case len(body) > 0 && returnPressed(body, tail):
+			return fmt.Sprintf("%s, then typed %d byte(s) and pressed Return. %s", said, len(body), confirmLanded)
+		case len(body) > 0:
+			return fmt.Sprintf("%s, then typed %d byte(s) (no Return — the text is in the input box, not submitted).", said, len(body))
+		case tail != nil:
+			return said + ", then Return. " + confirmLanded
+		}
+		return said + "."
 	}
 
 	id, urlPin := parseConnectTarget(sessionSel)
@@ -399,22 +458,22 @@ func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, 
 			id = strings.ToUpper(sessionSel)
 		}
 		send := func(b []byte) error { return client.SendKeysPIN(id, pin, b) }
-		if err := send(body); err != nil {
+		if err := send(deliveries[0]); err != nil {
 			return "", err
 		}
-		if err := pressEnter(send); err != nil {
+		if err := sendRest(send); err != nil {
 			return "", err
 		}
-		return typedReport(len(body), returnPressed(body, tail), id), nil
+		return report(id), nil
 	}
 
 	if machineSel == "" || machineLooksLocal(machineSel) {
 		send := func(b []byte) error { return injectLocalSession(sessionSel, b) }
-		if err := send(body); err == nil {
-			if err := pressEnter(send); err != nil {
+		if err := send(deliveries[0]); err == nil {
+			if err := sendRest(send); err != nil {
 				return "", err
 			}
-			return typedReport(len(body), returnPressed(body, tail), sessionSel), nil
+			return report(sessionSel), nil
 		} else if !errors.Is(err, errNotLocal) {
 			return "", err
 		}
@@ -428,20 +487,15 @@ func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, 
 	case 0:
 		return "", fmt.Errorf("no session matching %q — pass pin to type into an unowned reminal, or run list_sessions", sessionSel)
 	case 1:
-		out, err := sendOneKeys(refs[0], body)
-		if err != nil {
+		send := func(b []byte) error { _, e := sendOneKeys(refs[0], b); return e }
+		if err := send(deliveries[0]); err != nil {
 			return "", err
 		}
-		if err := pressEnter(func(b []byte) error { _, e := sendOneKeys(refs[0], b); return e }); err != nil {
+		if err := sendRest(send); err != nil {
 			return "", err
 		}
-		// sendOneKeys names the machine, which is worth keeping; say what
-		// happened to the Return alongside it.
-		out = strings.TrimSuffix(out, ".")
-		if !returnPressed(body, tail) {
-			return out + " (no Return — the text is in the input box, not submitted).", nil
-		}
-		return out + ", then pressed Return. " + confirmLanded, nil
+		// Name the machine, which is worth keeping.
+		return report(refs[0].s.ID + " on " + refs[0].m.Name), nil
 	default:
 		return "", ambiguousSession(sessionSel, refs)
 	}
