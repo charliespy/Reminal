@@ -74,6 +74,11 @@ type agentTarget struct {
 	// resume is the command that starts this agent again on its previous
 	// conversation — the restart hint shown after a setup.
 	resume string
+	// aroundAdd, when set, runs the `mcp add` (add) and finishes what it
+	// cannot fully make: a setting it has no flag for, which it also drops
+	// when it writes the entry over. Run on every add, so an entry an older
+	// reminal registered is brought up to date too.
+	aroundAdd func(home string, add func() error) error
 }
 
 func stdioEntry(exe string) map[string]any {
@@ -358,6 +363,7 @@ func agentTargets() []agentTarget {
 			cliRemove: []string{"mcp", "remove", mcpServerName},
 			checkTOML: ".codex/config.toml",
 			resume:    "codex resume --last",
+			aroundAdd: codexAddWithToolTimeout,
 		},
 		{
 			Name: "Antigravity CLI", Bin: "agy",
@@ -559,7 +565,12 @@ func runIntegrate(args []string) error {
 		case p.target.install != nil:
 			mcpErr = p.target.install(home, exe, remove)
 		case p.target.cliAdd != nil:
-			mcpErr = applyViaCLI(p, exe, remove)
+			add := func() error { return applyViaCLI(p, exe, remove) }
+			if !remove && p.target.aroundAdd != nil {
+				mcpErr = p.target.aroundAdd(home, add)
+			} else {
+				mcpErr = add()
+			}
 		default:
 			mcpErr = applyViaFile(p.target, home, exe, remove)
 		}
