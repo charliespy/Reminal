@@ -64,6 +64,9 @@ func (a *Agent) saveRestore() {
 	}
 	a.restoreMu.Lock()
 	defer a.restoreMu.Unlock()
+	if a.restoreSettled {
+		return // ended: a save started on the way out must not bring it back
+	}
 	a.metaMu.Lock()
 	name, cwd := a.name, a.cwd
 	a.metaMu.Unlock()
@@ -207,6 +210,27 @@ func (a *Agent) convSince(conv string, now time.Time) time.Time {
 	return a.restoreConvSince
 }
 
+// isResumer says prog (as the foreground reads it, a login shell's leading
+// "-" and all) is an agent a restore starts again.
+func isResumer(prog string) bool {
+	_, ok := resumers[strings.TrimPrefix(prog, "-")]
+	return ok
+}
+
+// saveRestoreIfNoConv saves the restore record when it names no
+// conversation yet: an agent just started, which its first hook says.
+func (a *Agent) saveRestoreIfNoConv() {
+	if a == nil {
+		return
+	}
+	a.restoreMu.Lock()
+	none := a.restoreConv == ""
+	a.restoreMu.Unlock()
+	if none {
+		a.saveRestore()
+	}
+}
+
 func (a *Agent) restoreLoop(stop <-chan struct{}) {
 	t := time.NewTicker(restoreSaveEvery)
 	defer t.Stop()
@@ -226,6 +250,10 @@ func (a *Agent) restoreLoop(stop <-chan struct{}) {
 // ended by a signal (the machine shutting down, a crash) is kept. `reminal
 // kill` and `reminal stop` forget it themselves.
 func (a *Agent) settleRestore() {
+	// No save from here on (saveRestore): one under way finishes first.
+	a.restoreMu.Lock()
+	a.restoreSettled = true
+	a.restoreMu.Unlock()
 	if a.stopSignal.Load() {
 		return
 	}

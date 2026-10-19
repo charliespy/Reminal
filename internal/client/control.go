@@ -179,6 +179,9 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 		// `reminal hook` wrote this session's state: read it now, not when
 		// the screen next moves.
 		a.kickAttention()
+		// An agent's hook, and its restore record has no conversation yet
+		// (it has only just started): saved now, so a restore resumes it.
+		go a.saveRestoreIfNoConv()
 		_, _ = fmt.Fprintln(conn, "ok")
 	case line == "note-acts":
 		// Drained by `reminal mcp` so viewer-side dismissals reach it.

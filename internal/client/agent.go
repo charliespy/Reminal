@@ -149,6 +149,10 @@ type Agent struct {
 	// restoreMu makes saveRestore one at a time, so two saves can never
 	// interleave their reads and writes of the restore state.
 	restoreMu sync.Mutex
+	// restoreSettled: the session ended and its record was settled
+	// (settleRestore); no save after it writes the record again. Under
+	// restoreMu.
+	restoreSettled bool
 
 	// screen is a headless terminal emulator fed the same plaintext output
 	// that goes to viewers. On a fresh attach we serialize its current state
