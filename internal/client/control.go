@@ -244,7 +244,7 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			_, _ = fmt.Fprintln(conn, "ok restarting")
 			return
 		}
-		pin, err := session.NewPIN(6)
+		pin, err := session.NewPIN(session.PINLength)
 		if err != nil {
 			a.rekeying.Store(false)
 			_, _ = fmt.Fprintln(conn, "error:", err)
@@ -301,7 +301,7 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 		// instead of the current one. The restart already gives the session a
 		// new encryption key and makes every viewer handshake again, so after
 		// it the old PIN opens nothing; owner devices reconnect on their own.
-		pin, err := session.NewPIN(6)
+		pin, err := session.NewPIN(session.PINLength)
 		if err != nil {
 			_, _ = fmt.Fprintln(conn, "error:", err)
 			return

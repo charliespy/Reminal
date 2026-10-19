@@ -65,6 +65,9 @@ func simulate(n int, proven bool) (answered int, longestGap time.Duration) {
 		if ok, _ := a.allowKexFrom(now, "H"); ok {
 			answered++
 			last = now
+			if proven {
+				a.markProvenSource("H") // its viewer opens a frame: it had the PIN
+			}
 		} else if g := now.Sub(last); g > longestGap {
 			longestGap = g
 		}

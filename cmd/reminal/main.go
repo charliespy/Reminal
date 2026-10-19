@@ -945,7 +945,7 @@ func printHelp() {
 		{"SHELL", "Shell to run (default: $SHELL, then zsh / bash / sh)"},
 	})
 
-	helpProse(w, "Security", "Each session needs a random 8-char id + 6-digit PIN, and terminal traffic is end-to-end encrypted — the relay can't read it. Inside a connect, local Ctrl+C goes to the remote shell; press Ctrl-] to disconnect the viewer cleanly (the host agent keeps running).")
+	helpProse(w, "Security", "Each session needs a random 8-char id + 8-digit PIN, and terminal traffic is end-to-end encrypted — the relay can't read it. Inside a connect, local Ctrl+C goes to the remote shell; press Ctrl-] to disconnect the viewer cleanly (the host agent keeps running).")
 	helpProse(w, "Naming", "Name a session (reminal new deploy) and use the name anywhere an id works — attach / kill / stop accept an exact id, an exact name, a unique id prefix, or a unique substring of the name / cwd / title.")
 
 	helpTable(w, "Examples", []helpRow{

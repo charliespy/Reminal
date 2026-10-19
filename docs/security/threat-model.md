@@ -90,18 +90,29 @@ machine it presents.
 *Mitigations:* the PIN selects the handshake's generator; a wrong PIN produces a
 different wrap key and the unwrap fails. Guessing is strictly online — each
 attempt requires a live handshake with the agent, and each handshake is exactly
-one guess — and rate-limited by two allowances in the agent
-(`internal/client/agent.go`): a short-term one (a burst of 8, one back per 10
-seconds) and a long-term one (a burst of 30, one back per 3 minutes), i.e. about
-**480 sustained guesses per day**.
+one guess — and rate-limited in the agent (`internal/client/agent.go`) by a short-term allowance
+(a burst of 8, one back per 10 seconds), a long-term one (a burst of 30, one back
+per 3 minutes), and an escalating backoff for handshakes from sources that have
+not proved the PIN: 30 of them, back at one an hour, then a wait before the next
+that doubles from 3 minutes up to an hour, each quiet hour after a wait taking
+one doubling off. That is about **24 sustained guesses per day**. Sources that
+have proved the PIN skip the backoff; owner devices never use the PIN. The relay
+names each handshake's source, so a relay guessing the PIN could name a proven
+one; but a source keeps the exemption only while its handshakes go on proving
+the PIN (at most 3 may be outstanding), and only a real viewer's proof earns it
+back, one handshake each. That buys such a relay a few guesses per real
+connection on top of the 24. The
+trade-off: a stranger who keeps guessing can make a first-time PIN user wait up
+to an hour, and the session's terminal is told when that starts.
 
 *Residual risk:* see below.
 
 #### Brute-force economics
 
-| Scenario | Search space | At ~480 guesses/day |
+| Scenario | Search space | At ~24 guesses/day |
 |---|---|---|
-| PIN only (session ID already known) | 10⁶ | ~2.9 years expected, ~5.7 years exhaustive |
+| PIN only (session ID already known), 8 digits | 10⁸ | ~5,700 years expected |
+| PIN only, a 6-digit PIN from before | 10⁶ | ~57 years expected |
 | Session ID only | 32⁸ ≈ 1.1 × 10¹² | Infeasible |
 | Both unknown | ~10¹⁸ | Infeasible |
 
