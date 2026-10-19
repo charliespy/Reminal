@@ -8,7 +8,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,11 +164,11 @@ func TestTheProofsOnDiskArePrunedPastTheWindow(t *testing.T) {
 	file := ownerNoncesFile()
 	n := &ownerNonces{file: file}
 	long := time.Now().Add(-ownerActionSkew * 3)
-	if why := n.use("old", long); why != "" {
+	if why := n.use("dev", "old", long); why != "" {
 		t.Fatal(why)
 	}
 	fresh := &ownerNonces{file: file}
-	if why := fresh.use("new", time.Now()); why != "" {
+	if why := fresh.use("dev", "new", time.Now()); why != "" {
 		t.Fatal(why)
 	}
 	b, err := os.ReadFile(file)
@@ -176,7 +179,7 @@ func TestTheProofsOnDiskArePrunedPastTheWindow(t *testing.T) {
 	if err := json.Unmarshal(b, &on); err != nil {
 		t.Fatal(err)
 	}
-	if _, kept := on["old"]; kept || len(on) != 1 {
+	if _, kept := on["dev|old"]; kept || len(on) != 1 {
 		t.Fatalf("on disk after the window: %v", on)
 	}
 }
@@ -193,7 +196,106 @@ func TestAProofIsNotTakenWithoutTheLock(t *testing.T) {
 	// flock is per open file description: a second open in this process
 	// contends as another process would.
 	n := &ownerNonces{file: ownerNoncesFile()}
-	if why := n.use("x", time.Now()); why == "" {
+	if why := n.use("dev", "x", time.Now()); why == "" {
 		t.Fatal("a proof was taken while another holder had the lock")
+	}
+}
+
+// One signed nonce has one spelling: its base64 with a line break in it, or
+// unused trailing bits set, decodes to the same bytes, and is refused rather
+// than taken as a new proof.
+func TestAProofsNonceIsTakenInOneSpellingOnly(t *testing.T) {
+	isolateHome(t)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if _, _, err := AddOwner(ownerID(pub), "test device"); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{sessionID: "SESSION1"}
+	p := signAction(t, priv, "SESSION1", "upgrade", time.Now().Unix())
+	if why := a.verifyOwnerAction(p, "upgrade"); why != "" {
+		t.Fatalf("first use refused: %s", why)
+	}
+	for i := 1; i <= 5; i++ {
+		q := p
+		q.Nonce = p.Nonce[:i] + "\n" + p.Nonce[i:]
+		if why := a.verifyOwnerAction(q, "upgrade"); why == "" {
+			t.Fatalf("the same proof was taken again with its nonce spelled %q", q.Nonce)
+		}
+	}
+}
+
+// A flood of one proof's other spellings takes nothing, and one device that
+// has spent its whole allowance in the window keeps only itself waiting:
+// another owner's proof is still taken.
+func TestOneDeviceCannotFillTheSetForAnother(t *testing.T) {
+	isolateHome(t)
+	pubA, privA, _ := ed25519.GenerateKey(rand.Reader)
+	pubB, privB, _ := ed25519.GenerateKey(rand.Reader)
+	for _, pub := range []ed25519.PublicKey{pubA, pubB} {
+		if _, _, err := AddOwner(ownerID(pub), "test device"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &Agent{sessionID: "S"}
+	p := signAction(t, privA, "S", "upgrade", time.Now().Unix())
+	for i := 0; i < ownerNonceMax+5; i++ {
+		q := p
+		q.Nonce = strings.Repeat("\n", i) + p.Nonce
+		_ = a.verifyOwnerAction(q, "upgrade")
+	}
+	if why := a.verifyOwnerAction(signAction(t, privA, "S", "upgrade", time.Now().Unix()), "upgrade"); why != "" {
+		t.Fatalf("other spellings of one proof used up its device's allowance: %s", why)
+	}
+	// Device A spends all it may in the window...
+	now := time.Now()
+	devA := base64.StdEncoding.EncodeToString(pubA)
+	for i := 0; i < ownerNonceMax; i++ {
+		_ = a.ownerNonces.use(devA, fmt.Sprintf("n%04d", i), now)
+	}
+	if why := a.verifyOwnerAction(signAction(t, privA, "S", "upgrade", now.Unix()), "upgrade"); why == "" {
+		t.Fatal("a device past its allowance was let through")
+	}
+	// ...and B, another owner, is not kept out by it.
+	if why := a.verifyOwnerAction(signAction(t, privB, "S", "upgrade", now.Unix()), "upgrade"); why != "" {
+		t.Fatalf("another owner was refused because one device filled the set: %s", why)
+	}
+}
+
+// A proof that could not be written down is not kept as taken: the same
+// device asking again with it is told the same (could not record), never
+// "already used".
+func TestAProofNotRecordedIsNotKeptAsTaken(t *testing.T) {
+	isolateHome(t)
+	n := &ownerNonces{file: filepath.Join(os.DevNull, "nope", "owner-nonces.json")} // cannot be written
+	for i := 0; i < 2; i++ {
+		why := n.use("dev", "nonce1", time.Now())
+		if !strings.Contains(why, "could not record") {
+			t.Fatalf("attempt %d: %q, want could not record", i+1, why)
+		}
+	}
+	if len(n.seen) != 0 {
+		t.Fatalf("an unrecorded proof was kept: %v", n.seen)
+	}
+}
+
+func TestAProofTakenBeforeTheUpgradeIsStillTaken(t *testing.T) {
+	isolateHome(t)
+	file := filepath.Join(t.TempDir(), "owner-nonces.json")
+	// As the daemon before per-device keys wrote it: the nonce alone.
+	b, _ := json.Marshal(map[string]int64{"nonce1": time.Now().Unix()})
+	if err := os.WriteFile(file, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := &ownerNonces{file: file}
+	if why := n.use("dev", "nonce1", time.Now()); !strings.Contains(why, "already been used") {
+		t.Fatalf("a proof taken before the upgrade was taken again: %q", why)
+	}
+	if why := n.use("dev", "nonce2", time.Now()); why != "" {
+		t.Fatalf("a fresh proof was refused: %q", why)
+	}
+	// Once its window has passed, the old entry is let go like any other.
+	later := time.Now().Add(ownerActionSkew*2 + time.Minute)
+	if why := n.use("dev", "nonce1", later); why != "" {
+		t.Fatalf("an entry past its window still refused a proof: %q", why)
 	}
 }
