@@ -137,3 +137,26 @@ func TestAHookStateIsNotUndoneByACountWrittenBackAroundIt(t *testing.T) {
 		t.Fatalf("a count written without the record's lock: %+v", hs)
 	}
 }
+
+// When a turn began is kept through the states after it: a short turn's
+// "done" overwrites its "working" before anything reads it.
+func TestHookStateKeepsWhenATurnBegan(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir) // Windows
+	const id = "TURNTEST"
+	if err := WriteHookStateWith(id, "done", nil); err != nil {
+		t.Fatal(err)
+	}
+	if hs := ReadHookStateAnyAge(id); hs == nil || !hs.TurnAt.IsZero() {
+		t.Fatalf("no turn yet, turn_at %+v", hs)
+	}
+	before := time.Now()
+	_ = WriteHookStateWith(id, "working", nil)
+	_ = WriteHookStateWith(id, "done", nil)
+	_ = WriteHookStateWith(id, "input", nil)
+	hs := ReadHookStateAnyAge(id)
+	if hs == nil || hs.State != "input" || hs.TurnAt.Before(before) || hs.TurnAt.After(hs.TS) {
+		t.Fatalf("turn_at not kept: %+v (turn began after %v)", hs, before)
+	}
+}

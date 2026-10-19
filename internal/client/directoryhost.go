@@ -465,6 +465,9 @@ func localDirSessions() []protocol.DirSession {
 		if !a.FgSince.IsZero() {
 			ds.FgSince = a.FgSince.Unix()
 		}
+		if a.Attn == "limited" && !a.ResetsAt.IsZero() {
+			ds.ResetsAt = a.ResetsAt.Unix()
+		}
 		if la := a.LastActive(); !la.IsZero() {
 			if secs := int64(now.Sub(la).Seconds()); secs > 0 {
 				ds.IdleSecs = secs

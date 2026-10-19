@@ -499,10 +499,14 @@ type DirSession struct {
 	Viewers  int    `json:"viewers,omitempty"`
 	IdleSecs int64  `json:"idle_secs,omitempty"` // seconds since last PTY activity
 	// Attn is the detected attention state of the session's foreground agent:
-	// "working", "input" (awaiting the user), or "done". Empty for a bare shell
-	// or a host too old to report it. Lets the fleet view show which session
-	// needs you. See internal/client/attention_probe.go (writer side).
+	// "working", "input" (awaiting the user), "done", "logged-out" (its agent
+	// needs a login) or "limited" (held back by its service's limit). Empty
+	// for a bare shell or a host too old to report it. Lets the fleet view
+	// show which session needs you. See internal/client/attention_probe.go (writer side).
 	Attn string `json:"attn,omitempty"`
+	// ResetsAt is, while Attn is "limited", when the agent's limit resets
+	// (unix seconds), as its notice said; zero when it did not say.
+	ResetsAt int64 `json:"resets_at,omitempty"`
 	// Shells is how many shells the session's harness still has running, beside
 	// Attn rather than folded into it — "done · 1 shell" is a finished turn that
 	// left work going, which is not the same as nothing to come back for.

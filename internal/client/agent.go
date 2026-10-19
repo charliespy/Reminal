@@ -318,6 +318,9 @@ type Agent struct {
 	// harness is whether the agent in this session can work at all — its
 	// login; guarded by metaMu (harnesshealth.go).
 	harness harnessHealth
+	// limit is whether the agent here is held back by its service's usage
+	// or rate limit, and until when; guarded by metaMu (harnesslimit.go).
+	limit harnessLimitState
 	// metaDirty is set by pumpPTY when title or lastActivity changed since
 	// the last on-disk flush; the meta-flush loop clears it when it writes.
 	// Keeps idle sessions from churning the active record.
@@ -1454,6 +1457,10 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	attnFGAt := a.attnFGAt
 	attnShells := a.attnShells
 	attnAgents := a.attnAgents
+	var resetsAt time.Time
+	if attn == harnessLimited {
+		resetsAt = a.limit.resetsAt
+	}
 	a.metaMu.Unlock()
 	if last.IsZero() {
 		last = a.startedAt
@@ -1475,6 +1482,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		LastInput:    lastIn,
 		Attn:         attn,
 		AttnSince:    attnSince,
+		ResetsAt:     resetsAt,
 		Fg:           attnFG,
 		FgSince:      attnFGAt,
 		Shells:       attnShells,

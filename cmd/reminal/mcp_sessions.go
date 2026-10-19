@@ -28,6 +28,14 @@ type mcpSessionRow struct {
 	Headless bool   `json:"headless,omitempty"`
 	Viewers  int    `json:"viewers,omitempty"`
 	IdleSecs int64  `json:"idle_secs,omitempty"`
+	// Attn is what the session's agent is doing, as the session detects it:
+	// "working", "input" (needs a person), "done", "logged-out" (needs a
+	// person to log it in) or "limited" (held back by its service's usage or
+	// rate limit). Empty for a plain shell.
+	Attn string `json:"attn,omitempty"`
+	// ResetsAt is, while Attn is "limited", when the limit resets (RFC3339),
+	// as the agent's own notice said; omitted when it did not say.
+	ResetsAt string `json:"resets_at,omitempty"`
 	// Shells is how many shells the session's harness still has running — a
 	// finished turn that left a build going reads "done" and is not finished.
 	Shells  int  `json:"shells,omitempty"`
@@ -195,6 +203,8 @@ func fleetMachineRow(m client.FleetMachine, currentID string) mcpMachineRow {
 			Headless: s.Headless,
 			Viewers:  s.Viewers,
 			IdleSecs: s.IdleSecs,
+			Attn:     s.Attn,
+			ResetsAt: resetsAtRFC3339(s.ResetsAt),
 			Shells:   s.Shells,
 			Current:  currentID != "" && strings.EqualFold(s.ID, currentID),
 		})
@@ -564,6 +574,17 @@ type transcriptRef struct {
 type transcriptMeta struct {
 	ID, Name, Path, Title, Machine string
 	Truncated                      bool
+	// Attn and ResetsAt as list_sessions has them, when known.
+	Attn, ResetsAt string
+}
+
+// resetsAtRFC3339 is a limit's reset time (unix seconds) for the wire; "" for
+// none.
+func resetsAtRFC3339(unix int64) string {
+	if unix <= 0 {
+		return ""
+	}
+	return time.Unix(unix, 0).Format(time.RFC3339)
 }
 
 var errNotLocal = fmt.Errorf("not a local session")
@@ -633,10 +654,14 @@ func readLocalTranscript(sessionSel string) (string, transcriptMeta, error) {
 	if err != nil {
 		return "", transcriptMeta{}, err
 	}
-	return text, transcriptMeta{
+	meta := transcriptMeta{
 		ID: a.ID, Name: a.Name, Path: a.Cwd, Title: a.Title,
-		Machine: "this machine", Truncated: truncated,
-	}, nil
+		Machine: "this machine", Truncated: truncated, Attn: a.Attn,
+	}
+	if a.Attn == "limited" && !a.ResetsAt.IsZero() {
+		meta.ResetsAt = a.ResetsAt.Format(time.RFC3339)
+	}
+	return text, meta, nil
 }
 
 func readOneTranscript(h transcriptRef) (string, error) {
@@ -645,6 +670,7 @@ func readOneTranscript(h transcriptRef) (string, error) {
 	}
 	meta := transcriptMeta{
 		ID: h.s.ID, Name: h.s.Name, Path: h.s.Cwd, Title: h.s.Title, Machine: h.m.Name,
+		Attn: h.s.Attn, ResetsAt: resetsAtRFC3339(h.s.ResetsAt),
 	}
 	if h.m.Local {
 		text, truncated, err := client.ReadAgentTranscriptFromID(h.s.ID)
@@ -682,6 +708,12 @@ func formatTranscriptJSON(meta transcriptMeta, text string) string {
 	}
 	if meta.Truncated {
 		row["truncated"] = true
+	}
+	if meta.Attn != "" {
+		row["attn"] = meta.Attn
+	}
+	if meta.ResetsAt != "" {
+		row["resets_at"] = meta.ResetsAt
 	}
 	body, err := json.MarshalIndent(row, "", "  ")
 	if err != nil {
