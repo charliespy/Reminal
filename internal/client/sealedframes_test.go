@@ -32,7 +32,7 @@ func sealedPair(t *testing.T) (*Agent, *Viewer) {
 		t.Fatal("agent issued no seal info")
 	}
 	v := &Viewer{box: box}
-	if err := v.setSeal(key, shared, exID, info); err != nil {
+	if err := v.acceptSeal(key, shared, exID, info, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	return a, v
@@ -267,7 +267,7 @@ func TestViewerRefusesFramesFromBeforeItJoined(t *testing.T) {
 	_, _ = rand.Read(shared)
 	exID := []byte("0123456789abcdef")
 	v := &Viewer{box: box}
-	if err := v.setSeal(key, shared, exID, a.sealInfoFor(1, shared, exID, "")); err != nil {
+	if err := v.acceptSeal(key, shared, exID, a.sealInfoFor(1, shared, exID, ""), true, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, _ := v.admitIn(earlier); ok {
@@ -301,7 +301,7 @@ func TestViewerTakesOnlySealedWhenSealing(t *testing.T) {
 func TestViewerReconnectsWhenAnswerAndFramesDisagree(t *testing.T) {
 	a, _ := sealedPair(t)
 	v := &Viewer{box: a.box}
-	if err := v.setSeal(a.sessionKey, nil, nil, ""); !errors.Is(err, errSealMissing) {
+	if err := v.acceptSeal(a.sessionKey, nil, nil, "", true, ""); !errors.Is(err, errSealMissing) {
 		t.Fatalf("an answer without seal info was taken: %v", err)
 	}
 	f := fromAgent(t, a, protocol.Message{Type: protocol.TypeData, Data: "x"})

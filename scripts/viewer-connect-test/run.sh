@@ -20,7 +20,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$(cd ../.. && pwd)
 PORT=${PORT:-18080}
-NAME=reminal-viewer-test
+# Its container and image, by name: VIEWER_TEST_NAME gives two runs at once
+# (two people's, on one machine) names of their own, so neither removes the other's.
+NAME=${VIEWER_TEST_NAME:-reminal-viewer-test}
 PW=mcr.microsoft.com/playwright:v1.56.0-noble
 
 GOOS=linux GOARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') \

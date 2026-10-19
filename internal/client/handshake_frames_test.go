@@ -4,10 +4,15 @@
 package client
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	"reminal/internal/crypto"
@@ -221,5 +226,43 @@ func TestTheOwnerHandshakeBindsItsSealedFrames(t *testing.T) {
 	a.handleOwnerInit(conn, old)
 	if reply, ok := nextOwnerMsg(t, got); !ok || reply.Type != protocol.TypeOwnerResp || reply.Seal != "" {
 		t.Fatalf("an older device was not answered as before: %+v", reply)
+	}
+}
+
+// What a viewer remembers is capped at the newest sealedPeersMax — the peer
+// just noted always among them — and never expires by age.
+func TestSealedPeersKeepTheNewestUnderTheirCap(t *testing.T) {
+	isolateHome(t)
+	m := map[string]int64{}
+	for i := 0; i < sealedPeersMax; i++ {
+		m["s:OLD"+strconv.Itoa(i)] = int64(1000 + i)
+	}
+	p, err := sealedPeersPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(m)
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noteSealed("s:NEW")
+	got := readSealedPeers()
+	if len(got) != sealedPeersMax || !sealedSeen("s:NEW") || sealedSeen("s:OLD0") || !sealedSeen("s:OLD1") {
+		t.Fatalf("kept %d; new %v, oldest %v, next %v", len(got), sealedSeen("s:NEW"), sealedSeen("s:OLD0"), sealedSeen("s:OLD1"))
+	}
+}
+
+// The bound sid starts with the label, so no ex_id a relay makes up turns
+// the sid as before into it: a session id is never the label.
+func TestNoExIDMakesTheUnboundSidTheBoundOne(t *testing.T) {
+	exID := make([]byte, 16)
+	bound := pakeSID("PAKETEST", exID, true)
+	for _, forged := range [][]byte{append(exID, []byte("|"+crypto.FramesLabel)...), []byte(crypto.FramesLabel + "|PAKETEST|")} {
+		if bytes.Equal(pakeSID("PAKETEST", forged, false), bound) {
+			t.Fatalf("an ex_id of %q makes the unbound sid the bound one", forged)
+		}
 	}
 }

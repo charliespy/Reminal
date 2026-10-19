@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -73,6 +74,15 @@ func sealedSeen(peer string) bool {
 	return ok
 }
 
+// sealedPeersMax is how many peers are kept, the newest: a cap on the file
+// every handshake reads, never an expiry — one would reopen the downgrade.
+const sealedPeersMax = 2000
+
+// sealedPeersLock serialises the file's read-modify-write across this user's
+// processes (the daemon, an MCP server, a viewer): one note never loses
+// another's.
+const sealedPeersLock = "sealed-peers.lock"
+
 // noteSealed records that peer answered sealed. Best-effort: not remembering
 // leaves the next first contact as open as this one was, nothing worse.
 func noteSealed(peer string) {
@@ -81,8 +91,37 @@ func noteSealed(peer string) {
 	}
 	sealedPeersMu.Lock()
 	defer sealedPeersMu.Unlock()
+	// Another process mid-write holds the lock a moment; past that, written
+	// without it (as before the lock), rather than not at all.
+	for i := 0; i < 50; i++ {
+		lock, held, err := tryLockFile(sealedPeersLock)
+		if err != nil {
+			break
+		}
+		if held {
+			defer unlockFile(lock)
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	m := readSealedPeers()
 	m[peer] = time.Now().Unix()
+	if len(m) > sealedPeersMax {
+		type kv struct {
+			k string
+			t int64
+		}
+		all := make([]kv, 0, len(m))
+		for k, t := range m {
+			all = append(all, kv{k, t})
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].t > all[j].t || (all[i].t == all[j].t && all[i].k < all[j].k) })
+		m = map[string]int64{}
+		for _, e := range all[:sealedPeersMax] {
+			m[e.k] = e.t
+		}
+		m[peer] = time.Now().Unix()
+	}
 	p, err := sealedPeersPath()
 	if err != nil {
 		return

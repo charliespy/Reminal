@@ -3957,13 +3957,13 @@ const pakeChannel = "reminal-session-v3"
 // pakeSID binds a handshake to this session and to this exchange, so an element
 // from one handshake is no use in any other.
 func pakeSID(sessionID string, exID []byte, frames bool) []byte {
-	sid := append([]byte(sessionID+"|"), exID...)
 	if frames {
-		// The sealed-frames offer, bound into the key itself: a relay that
-		// strips it leaves the two ends with different keys.
-		sid = append(append(sid, '|'), crypto.FramesLabel...)
+		// The sealed-frames offer, bound into the key itself — first, so no
+		// ex_id a relay makes up can turn the sid as before into this one
+		// (a session id is never the label).
+		return append([]byte(crypto.FramesLabel+"|"+sessionID+"|"), exID...)
 	}
-	return sid
+	return append([]byte(sessionID+"|"), exID...)
 }
 
 // handlePakeInit answers a viewer's PIN handshake with our CPace element and the

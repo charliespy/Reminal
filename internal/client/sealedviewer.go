@@ -115,15 +115,6 @@ func (v *Viewer) resetSeal() {
 	v.writeMu.Unlock()
 }
 
-// setSeal records what a handshake answer said about sealed frames.
-func (v *Viewer) setSeal(sessionKey, key, exID []byte, sealed string) error {
-	st, err := newViewerSeal(sessionKey, key, exID, sealed)
-	v.writeMu.Lock()
-	v.seal = st
-	v.writeMu.Unlock()
-	return err
-}
-
 // sealOut is viewerSeal.out for this viewer. Called with writeMu held.
 func (v *Viewer) sealOut(msg protocol.Message) ([]byte, error) { return v.seal.out(v.box, msg) }
 

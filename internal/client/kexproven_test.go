@@ -102,7 +102,7 @@ func TestKexProvenNeedsThePIN(t *testing.T) {
 	shared := make([]byte, 32)
 	exID := []byte("0123456789abcdef")
 	v := &Viewer{box: box}
-	if err := v.setSeal(key, shared, exID, a.sealInfoFor(1, shared, exID, "ATTACKER")); err != nil {
+	if err := v.acceptSeal(key, shared, exID, a.sealInfoFor(1, shared, exID, "ATTACKER"), true, ""); err != nil {
 		t.Fatal(err)
 	}
 	// Bare read-only request.

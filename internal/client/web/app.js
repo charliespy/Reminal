@@ -3318,9 +3318,23 @@
       try { const m = JSON.parse(localStorage.getItem(SEALED_PEERS_KEY) || '{}'); return m && typeof m === 'object' ? m : {}; } catch (_) { return {}; }
     }
     function sealedSeen(peer) { return !!(peer && sealedPeers()[peer]); }
+    // At most the newest 2000 kept: a cap on what every handshake reads, never
+    // an expiry (one would reopen the downgrade).
     function noteSealed(peer) {
       if (!peer) return;
-      try { const m = sealedPeers(); m[peer] = Math.floor(Date.now() / 1000); localStorage.setItem(SEALED_PEERS_KEY, JSON.stringify(m)); } catch (_) {}
+      try {
+        let m = sealedPeers();
+        m[peer] = Math.floor(Date.now() / 1000);
+        const ks = Object.keys(m);
+        if (ks.length > 2000) {
+          ks.sort((a, b) => m[b] - m[a] || (a < b ? -1 : 1));
+          const kept = {};
+          for (const k of ks.slice(0, 2000)) kept[k] = m[k];
+          kept[peer] = m[peer];
+          m = kept;
+        }
+        localStorage.setItem(SEALED_PEERS_KEY, JSON.stringify(m));
+      } catch (_) {}
     }
     let _ristrettoPromise = null;
     function loadRistretto() {
@@ -3458,7 +3472,7 @@
       // frames (one that knows it answers that, sealed, the answer keyed in).
       const sid = concatBytes(utf8(String(sessionId).toUpperCase() + '|'), exIDBytes);
       const cp = await cpaceStart(utf8(pinValue), utf8(PAKE_CHANNEL), sid, true);
-      const cpF = await cpaceStart(utf8(pinValue), utf8(PAKE_CHANNEL), concatBytes(sid, utf8('|' + FRAMES_LABEL)), true);
+      const cpF = await cpaceStart(utf8(pinValue), utf8(PAKE_CHANNEL), concatBytes(utf8(FRAMES_LABEL + '|' + String(sessionId).toUpperCase() + '|'), exIDBytes), true);
       // Keep this attempt alongside any earlier one — completeKex accepts a
       // reply to whichever is answered first.
       if (sock !== ws || sock.readyState !== WebSocket.OPEN) return; // superseded while deriving
