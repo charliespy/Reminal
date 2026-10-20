@@ -90,7 +90,7 @@ func (a *Agent) noteAgentVersion(fg string, pgrp int) {
 		// Run apart from this session: an agent that does not know the
 		// question starts instead, and its hooks are no session's
 		// (session.ProbeCommand).
-		out, err := session.ProbeCommand(ctx, cmd[0], append(cmd[1:], "--version")...).Output()
+		out, err := session.RunProbe(session.ProbeCommand(ctx, cmd[0], append(cmd[1:], "--version")...), false)
 		v := strings.TrimSpace(string(out))
 		if err != nil || v == "" || strings.ContainsAny(v, "\n=") || !strings.Contains(v, agentVersionSays[fg]) {
 			return // not the agent's own answer (review)

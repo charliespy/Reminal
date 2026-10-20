@@ -8,6 +8,7 @@ package session
 import (
 	"bytes"
 	"encoding/binary"
+	"strconv"
 
 	"golang.org/x/sys/unix"
 )
@@ -48,4 +49,24 @@ func processEnv(pid int) []string {
 		rest = rest[j+1:]
 	}
 	return env
+}
+
+// processSession is the session pid is in (its leader's pid); 0 when it
+// cannot be read.
+func processSession(pid int) int {
+	sid, err := unix.Getsid(pid)
+	if err != nil {
+		return 0
+	}
+	return sid
+}
+
+// probeIdent is what tells the process at pid from a later one given the
+// same pid: when it started, to the microsecond (procStartTime).
+func probeIdent(pid int) (string, bool) {
+	t, ok := procStartTime(pid)
+	if !ok {
+		return "", false
+	}
+	return strconv.FormatInt(t.UnixNano(), 10), true
 }

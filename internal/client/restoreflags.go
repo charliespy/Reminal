@@ -137,7 +137,7 @@ func agentHelp(bin string) string {
 		cmd = session.ProbeCommand(ctx, config.Shell(), "-lc", shellJoin(append([]string{bin}, args...)))
 	}
 	cmd.Env = append(cmd.Env, "NO_COLOR=1", "TERM=dumb", "CI=1")
-	out, _ := cmd.CombinedOutput()
+	out, _ := session.RunProbe(cmd, true)
 	return string(out)
 }
 

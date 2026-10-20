@@ -19,3 +19,12 @@ func Bound(cmd *exec.Cmd) {
 	setGroup(cmd)
 	cmd.WaitDelay = time.Second
 }
+
+// BoundSession is Bound with the child in a session of its own (setsid), led
+// by it: no controlling terminal it could stop on reading, and its session's
+// process group for a timeout to kill whole. Not with Bound as well: a
+// session's leader cannot be put in a group.
+func BoundSession(cmd *exec.Cmd) {
+	setSession(cmd)
+	cmd.WaitDelay = time.Second
+}

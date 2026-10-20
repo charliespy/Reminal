@@ -13,8 +13,8 @@ import (
 
 	"reminal/internal/atomicfile"
 	"reminal/internal/piext"
-	"reminal/internal/procgroup"
 	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 // ---- `reminal integrate --check` ------------------------------------------
@@ -363,8 +363,10 @@ func widenPATH(home string) {
 // loginPATH asks the user's login shell for its PATH; "" when that fails or
 // takes too long. The value is read between sentinels: an rc file that
 // prints a banner would otherwise put that banner at the head of PATH. The
-// shell runs in its own process group with a short wait on its pipes, so an
-// rc that starts something long-lived cannot hold a check open.
+// shell runs as a probe (session.ProbeCommand): in a session of its own with
+// a short wait on its pipes, so an rc that starts something long-lived
+// cannot hold a check open, and apart from any session integrate is run in,
+// so an agent an rc starts writes nothing of that session's.
 func loginPATH() string {
 	if runtime.GOOS == "windows" {
 		return ""
@@ -375,9 +377,7 @@ func loginPATH() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, shell, "-l", "-c", `printf '\n__REMINAL_PATH__%s__REMINAL_PATH__' "$PATH"`)
-	procgroup.Bound(cmd)
-	out, err := cmd.Output()
+	out, err := session.RunProbe(session.ProbeCommand(ctx, shell, "-l", "-c", `printf '\n__REMINAL_PATH__%s__REMINAL_PATH__' "$PATH"`), false)
 	if err != nil {
 		return ""
 	}
