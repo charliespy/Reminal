@@ -23,15 +23,41 @@ func TestProbeEnvLeavesOutEveryReminalVariable(t *testing.T) {
 	}
 }
 
+// helperSleepEnv makes this test binary, started again, only wait (helperSleep).
+const helperSleepEnv = "HOOKPROBE_TEST_SLEEP"
+
+// helperSleep is this test binary standing in for a program a probe runs:
+// started with helperSleepEnv set, it waits to be killed. Not /bin/sleep:
+// macOS keeps an Apple platform binary's environment from every other
+// process (kern.procargs2 gives none of it), the same user's too, so a mark
+// in one cannot be read from outside — the probe's session record
+// (RunProbe) is what says those.
+func helperSleep(ctx context.Context, probe bool) *exec.Cmd {
+	args := []string{"-test.run=^TestHelperSleep$"}
+	var cmd *exec.Cmd
+	if probe {
+		cmd = ProbeCommand(ctx, os.Args[0], args...)
+	} else {
+		cmd = exec.CommandContext(ctx, os.Args[0], args...)
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, helperSleepEnv+"=1")
+	return cmd
+}
+
+// TestHelperSleep is helperSleep's: it waits only when started as one.
+func TestHelperSleep(t *testing.T) {
+	if os.Getenv(helperSleepEnv) == "" {
+		t.Skip("only as a probe's stand-in")
+	}
+	time.Sleep(time.Minute)
+}
+
 // A process started as a probe carries its mark, read from outside it; one
 // started plainly does not.
 func TestAProbeIsMarkedSeenFromOutside(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("read from outside on Linux and macOS only")
-	}
-	sleep, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("no sleep")
 	}
 	start := func(cmd *exec.Cmd) int {
 		if err := cmd.Start(); err != nil {
@@ -41,8 +67,8 @@ func TestAProbeIsMarkedSeenFromOutside(t *testing.T) {
 		time.Sleep(100 * time.Millisecond) // its exec done
 		return cmd.Process.Pid
 	}
-	probe := start(ProbeCommand(context.Background(), sleep, "30"))
-	plain := start(exec.Command(sleep, "30"))
+	probe := start(helperSleep(context.Background(), true))
+	plain := start(helperSleep(context.Background(), false))
 	if !probeMarked(probe) {
 		t.Fatal("a probe not seen as one")
 	}
