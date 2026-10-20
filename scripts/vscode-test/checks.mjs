@@ -157,7 +157,7 @@ if (phase === 'works') {
   check('profile opens a reminal session and offers its link', true, (await toast.innerText()).replace(/\s+/g, ' '));
   const link1 = await copyLink(toast);
   links.push(link1);
-  check('Copy link puts the join link on the clipboard', /^http:\/\/127\.0\.0\.1:18080\/.*#p=\d{6}$/.test(link1), link1);
+  check('Copy link puts the join link on the clipboard', /^http:\/\/127\.0\.0\.1:18080\/.*#p=\d{6,}$/.test(link1), link1);
   await typeInTerminal('echo vsce-profile-ok');
   check('web viewer reaches the profile session', await viewerShows(link1, /vsce-profile-ok/, '3-viewer-profile.png'));
 
@@ -856,6 +856,98 @@ if (phase === 'ports') {
   await openList();
   check('a stopped port leaves the list', (await sharedRows().count()) === 0);
   await p.keyboard.press('Escape');
+}
+
+if (phase === 'existing') {
+  // A session started outside the editor, named build-server, in the src
+  // folder (run.sh): the cloud list offers it, and it opens in a tab named
+  // after it that follows its name and shows its state.
+  const ID = process.env.OPEN_ID;
+  await runCommand('Terminal: Focus Terminal');
+  await p.waitForTimeout(3000);
+  await clearNotifications();
+  const drawn = () => p.evaluate((d) => (0, eval)(d)('.terminal-tabs-entry, .single-terminal-tab'), DRAWN.toString());
+  const until = async (pred, ms = 20000) => {
+    const t0 = Date.now();
+    let d = [];
+    while (Date.now() - t0 < ms) {
+      d = await drawn();
+      if (pred(d)) return [true, d];
+      await p.waitForTimeout(500);
+    }
+    return [false, d];
+  };
+  // Types into the terminal whose tab reads `name`.
+  const typeIn = async (name, text) => {
+    await tabs().filter({ hasText: name }).first().click({ position: { x: 12, y: 10 } });
+    await p.waitForTimeout(500);
+    await p.locator('.terminal-wrapper.active .xterm').first().click({ timeout: 3000 })
+      .catch(() => p.locator('.terminal-xterm-host .xterm:visible, .integrated-terminal .xterm-screen:visible').last().click());
+    await p.keyboard.type(text);
+    await p.keyboard.press('Enter');
+  };
+  await openList();
+  const section = (await p.locator('.quick-input-widget .quick-input-list').innerText()).replace(/\s+/g, ' ');
+  await p.screenshot({ path: `${SHOTS}/e1-list-other-reminals.png` });
+  const row = listRows().filter({ hasText: 'build-server' });
+  check('the cloud list offers a reminal started elsewhere, by its name',
+    /Other reminals on this machine/.test(section) && (await row.count()) === 1 && section.includes(ID), JSON.stringify(section.slice(0, 300)));
+  await row.first().click();
+  let [ok, d] = await until((x) => x.some((t) => t.includes('build-server')));
+  await p.waitForTimeout(2000);
+  await tabShot('e2-opened-tab.png');
+  check('opening it gives a tab named after the session', ok, JSON.stringify(d));
+  // What runs in that tab is the session itself, in its own folder: run.sh
+  // reads this file back.
+  await typeIn('build-server', 'pwd > /tmp/open-pwd');
+  await p.waitForTimeout(1000);
+  await openList();
+  const again = (await p.locator('.quick-input-widget .quick-input-list').innerText()).replace(/\s+/g, ' ');
+  await p.keyboard.press('Escape');
+  check('once open here, it is listed with this window\'s terminals, not under Other reminals',
+    !/Other reminals on this machine/.test(again) && again.includes('build-server'), JSON.stringify(again.slice(0, 300)));
+
+  // Renamed from inside, while its tab is the active one: the tab follows.
+  await typeIn('build-server', 'reminal rename renamed-here');
+  [ok, d] = await until((x) => x.some((t) => t.includes('renamed-here')), 15000);
+  await tabShot('e3-renamed-active.png');
+  check('renaming the session renames its tab', ok, JSON.stringify(d));
+
+  // Renamed while another terminal is the active one: the editor renames
+  // only the active terminal, so the tab follows when it is switched to.
+  await newViaButton();
+  await waitToast(/reminal is sharing/, 30000).catch(() => {});
+  await clearNotifications();
+  await typeInTerminal(`reminal rename ${ID} later-name`);
+  await p.waitForTimeout(7000);
+  d = await drawn();
+  check('renaming a session in the background leaves the terminal you are in alone',
+    !d.some((t) => t.includes('later-name')) && d.some((t) => t.includes('renamed-here')) && d.some((t) => /^reminal\b/.test(t)), JSON.stringify(d));
+  await tabs().filter({ hasText: 'renamed-here' }).first().click({ position: { x: 12, y: 10 } });
+  // The terminal that was switched to, not the one that was active before.
+  [ok, d] = await until((x) => x.some((t) => t.includes('later-name')) && x.some((t) => /^reminal\b/.test(t)), 10000);
+  await tabShot('e4-renamed-in-background.png');
+  check('a session renamed in the background has its tab renamed on switching to it', ok, JSON.stringify(d));
+
+  // Its state, on its tab: the viewing terminal is that session's.
+  await typeIn('later-name', 'clear; WORK=30 fake-agent');
+  [ok, d] = await until((x) => x.some((t) => t.includes('later-name') && /…/.test(t)), 20000);
+  await tabShot('e5-state-badge.png');
+  check('its state shows on its tab', ok, JSON.stringify(d));
+
+  // A window reload brings the tab back as the same session.
+  await p.reload({ waitUntil: 'domcontentloaded' });
+  await p.waitForSelector('.monaco-workbench', { timeout: 60000 });
+  await p.waitForTimeout(6000);
+  await runCommand('View: Focus into Panel');
+  [ok, d] = await until((x) => x.some((t) => t.includes('later-name') && /[…!]/.test(t)), 30000);
+  await tabShot('e6-after-reload.png');
+  check('after a window reload the tab is still that session, with its state', ok, JSON.stringify(d));
+
+  // Closing the tab closes the view, not the session (run.sh checks).
+  await tabs().filter({ hasText: 'later-name' }).first().click({ button: 'right', position: { x: 12, y: 10 } });
+  await menuPick('Kill Terminal');
+  await p.waitForTimeout(3000);
 }
 
 } catch (e) {

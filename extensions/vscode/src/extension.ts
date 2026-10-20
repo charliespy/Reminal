@@ -11,15 +11,19 @@ import {
   STATUS_LABEL,
   SessionInfo,
   Status,
+  attachArgs,
+  attachedId,
   findReminal,
   isPort,
   isWebLink,
   listSessions,
+  otherSessions,
   plainText,
   queryAll,
   querySessions,
   statusOf,
   summary,
+  tabName,
   waitForSession,
 } from "./reminal";
 import { shareAgentText, shareHumanText } from "./share";
@@ -205,10 +209,10 @@ async function showLink(s: SessionInfo, intro?: string): Promise<void> {
 
 // ---- status: Working / Needs you / Done ----
 //
-// VS Code gives an extension no way to change a terminal tab's name, icon or
-// color after the terminal exists (Terminal.name is read-only, and
-// workbench.action.terminal.renameWithArg renames only the active terminal).
-// What it does allow is a file decoration: the tab list draws every terminal
+// VS Code gives an extension no way to change a terminal tab's icon or color
+// after the terminal exists, and its name only while it is the active one
+// (Terminal.name is read-only; workbench.action.terminal.renameWithArg
+// renames the active terminal). What it does allow is a file decoration: the tab list draws every terminal
 // from a vscode-terminal:/<workspace>/<id> URI and asks decoration providers
 // about it (terminalTabsList.ts), so a badge, a colour and a tooltip can sit
 // beside the name. Which terminal a URI is, TabOrder works out (tabs.ts). The
@@ -270,8 +274,10 @@ const shownStatus = new Map<vscode.Terminal, Status | undefined>();
 let timer: NodeJS.Timeout | undefined;
 let polling = false;
 
-// label is how a terminal is told apart in lists: its folder's name.
+// label is how a terminal is told apart in lists: its session's name, else
+// its folder's name.
 function label(t: vscode.Terminal, s: SessionInfo): string {
+  if (tabName(s.name)) return plain(tabName(s.name)!);
   const dir = s.cwd ?? cwdOf(t);
   return plain(dir ? path.basename(dir) || dir : t.name);
 }
@@ -280,6 +286,24 @@ function label(t: vscode.Terminal, s: SessionInfo): string {
 // reads [text](target) as a link: without the brackets it stays just text.
 function plain(s: string): string {
   return plainText(s, 500);
+}
+
+// The name each terminal's tab was last given from its session, so a tab
+// renamed by hand keeps that name until the session's own name changes.
+const named = new WeakMap<vscode.Terminal, string>();
+
+// syncName gives a terminal's tab its session's name. The editor renames only
+// the active terminal, so a terminal that isn't gets it when it next is.
+function syncName(t: vscode.Terminal): void {
+  const name = tabName(sessions.get(t)?.name);
+  if (!name || named.get(t) === name) return;
+  if (t.name === name) {
+    named.set(t, name);
+    return;
+  }
+  if (vscode.window.activeTerminal !== t) return;
+  named.set(t, name);
+  void vscode.commands.executeCommand("workbench.action.terminal.renameWithArg", { name });
 }
 
 function statusFor(t: vscode.Terminal): Status | undefined {
@@ -340,6 +364,7 @@ async function poll(bin: string): Promise<void> {
       }
       sessions.set(t, now);
       stopped.delete(t);
+      syncName(t);
       if (statusOf(now.attn) === "needs" && statusOf(prev.attn) !== "needs") void needsYou(t, now);
     }
     render();
@@ -422,6 +447,7 @@ async function track(t: vscode.Terminal, bin: string, announce: boolean): Promis
       return;
     }
     sessions.set(t, s);
+    syncName(t);
     schedule();
     if (announce) await announceSession(t, s);
   } finally {
@@ -463,6 +489,7 @@ async function adopt(bin: string): Promise<void> {
   }
 }
 
+
 // When this extension host started. A session that began around then or later
 // in a terminal it did not open is not one carried over from before a window
 // reload: the editor restarted and ran the terminal's command again, which
@@ -470,16 +497,31 @@ async function adopt(bin: string): Promise<void> {
 const hostStart = Date.now() - process.uptime() * 1000;
 
 async function adoptFrom(list: SessionInfo[], which: (t: vscode.Terminal) => boolean): Promise<void> {
+  forgetEndedViewers(list);
   for (const t of vscode.window.terminals) {
     if (sessions.has(t) || tracking.has(t) || !which(t)) continue;
     // A terminal whose process never started never reports a pid; waiting on
     // it would hold up every poll after this one.
     const pid = await Promise.race([t.processId, new Promise<undefined>((r) => setTimeout(() => r(undefined), PID_WAIT_MS))]);
+    // One that views a session started elsewhere is that session, by id: its
+    // process is the viewer, not the session.
+    const viewing = attachedId((t.creationOptions as vscode.TerminalOptions).shellArgs) ?? (pid ? viewers()[pid] : undefined);
+    if (viewing) {
+      const s = list.find((x) => x.id === viewing);
+      if (s && vscode.window.terminals.includes(t) && !sessions.has(t)) {
+        if (pid) viewerPid.set(t, pid);
+        ours.add(t);
+        sessions.set(t, s);
+        syncName(t);
+      }
+      continue;
+    }
     const s = pid ? list.find((x) => x.pid === pid) : undefined;
     // Closed while its pid was awaited: its close has been handled already.
     if (!s || !vscode.window.terminals.includes(t) || sessions.has(t)) continue;
     ours.add(t);
     sessions.set(t, s);
+    syncName(t);
     if (Date.parse(s.started_at) >= hostStart - 60000) void announceSession(t, s);
   }
 }
@@ -495,6 +537,60 @@ function openReminal(cwd: string | undefined): vscode.Terminal | undefined {
   t.show();
   void track(t, bin, true);
   return t;
+}
+
+// viewers is which session each viewing terminal's process views, by pid,
+// kept with the workspace: a window reload reconnects to the same process
+// but gives the extension none of the arguments it was started with.
+let workspaceState: vscode.Memento | undefined;
+const VIEWERS_KEY = "reminal.viewers";
+function viewers(): Record<string, string> {
+  return workspaceState?.get<Record<string, string>>(VIEWERS_KEY) ?? {};
+}
+function setViewer(pid: number, id: string | undefined): void {
+  const v = { ...viewers() };
+  if (id) v[pid] = id;
+  else delete v[pid];
+  void workspaceState?.update(VIEWERS_KEY, v);
+}
+const viewerPid = new WeakMap<vscode.Terminal, number>();
+// A viewing terminal that closes is forgotten a little later, not at once:
+// a window reload closes every terminal in the extension host it ends, and
+// that host is gone before then, so what it views is still known after.
+const FORGET_VIEWER_MS = 10000;
+
+// forgetEndedViewers drops the viewing terminals whose session has ended, so
+// a pid used again later, by some other terminal, is not taken for one.
+function forgetEndedViewers(list: SessionInfo[]): void {
+  const v = viewers();
+  const ids = new Set(list.map((s) => s.id));
+  const kept = Object.fromEntries(Object.entries(v).filter(([, id]) => ids.has(id)));
+  if (Object.keys(kept).length !== Object.keys(v).length) void workspaceState?.update(VIEWERS_KEY, kept);
+}
+
+// openExisting opens a session that is already running (started from
+// another terminal, a phone, or `reminal new`) in a terminal that views it.
+// Closing that terminal leaves the session running.
+function openExisting(bin: string, s: SessionInfo): void {
+  const args = attachArgs(s.id);
+  if (!args) return;
+  const t = vscode.window.createTerminal({
+    name: tabName(s.name) ?? TERMINAL_NAME,
+    shellPath: bin,
+    shellArgs: args,
+    env: CLEAN_ENV,
+    iconPath: new vscode.ThemeIcon("cloud"),
+  });
+  ours.add(t);
+  sessions.set(t, s);
+  if (tabName(s.name)) named.set(t, tabName(s.name)!);
+  t.show();
+  schedule();
+  void t.processId.then((pid) => {
+    if (!pid || !vscode.window.terminals.includes(t)) return;
+    viewerPid.set(t, pid);
+    setViewer(pid, s.id);
+  });
 }
 
 // The argument a terminal menu passes is the terminal it was opened on; from
@@ -597,11 +693,12 @@ async function share(arg: unknown, audience: Audience): Promise<void> {
 }
 
 // The title-bar cloud button lists this window's reminal terminals, in the
-// order they were opened, with each one's state, then the ports reminal is
-// sharing on this machine, and ends with rows that open a new terminal in the
-// active terminal's folder and share another port. Sharing a terminal stays
-// in its tab's right-click menu.
-type ListItem = PortItem & { t?: vscode.Terminal; open?: boolean };
+// order they were opened, with each one's state, then the other reminals
+// running on this machine, which open here, then the ports reminal is sharing
+// on this machine, and ends with rows that open a new terminal in the active
+// terminal's folder and share another port. Sharing a terminal stays in its
+// tab's right-click menu.
+type ListItem = PortItem & { t?: vscode.Terminal; open?: boolean; existing?: SessionInfo };
 
 async function cloudButton(): Promise<void> {
   const active = vscode.window.activeTerminal;
@@ -620,13 +717,33 @@ async function cloudButton(): Promise<void> {
   // asked for now rather than taken from the poll, which runs only while a
   // reminal terminal is open.
   const all = bin ? await queryAll(bin) : undefined;
+  const shown = new Set([...sessions.entries()].filter(([t]) => !stopped.has(t)).map(([, s]) => s.id));
+  const others = otherSessions(all ?? [], shown, process.env.REMINAL_SESSION);
+  if (others.length) items.push({ label: "Other reminals on this machine", kind: vscode.QuickPickItemKind.Separator });
+  for (const s of others) {
+    const st = statusOf(s.attn);
+    const where = s.cwd ? path.basename(s.cwd) || s.cwd : undefined;
+    items.push({
+      existing: s,
+      label: `$(terminal) ${plain(tabName(s.name) ?? where ?? s.id.toUpperCase())}`,
+      description: [st ? STATUS_LABEL[st] : "Shell", s.id.toUpperCase()].join(" · "),
+      detail: s.cwd ? plain(s.cwd) : undefined,
+    });
+  }
   items.push(...portItems((all ?? []).filter(isPort)));
   if (items.length) items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
   items.push({ label: "$(add) New reminal Terminal Here", open: true }, SHARE_PORT_ITEM);
   const pick = await vscode.window.showQuickPick(items, {
-    placeHolder: terminals ? "reminal terminals in this window" : "No reminal terminals open yet",
+    placeHolder: terminals
+      ? "reminal terminals in this window"
+      : others.length
+        ? "Open a reminal running on this machine, or start a new one"
+        : "No reminal terminals open yet",
   });
   if (pick?.open) openReminal(cwdOf(active));
+  else if (pick?.existing) {
+    if (bin) openExisting(bin, pick.existing);
+  }
   else if (pick?.sharePort) {
     if (bin) await sharePort(deps);
     else void notInstalled();
@@ -667,6 +784,7 @@ async function openFromProfile(bin: string): Promise<vscode.TerminalProfile> {
 }
 
 export function activate(ctx: vscode.ExtensionContext): void {
+  workspaceState = ctx.workspaceState;
   known = [...tabbed()];
   bar = vscode.window.createStatusBarItem("reminal.status", vscode.StatusBarAlignment.Left, 50);
   bar.name = "reminal";
@@ -690,7 +808,9 @@ export function activate(ctx: vscode.ExtensionContext): void {
       known = [...tabbed()];
       if ((t.creationOptions as vscode.TerminalOptions).hideFromUser) return;
       const bin = resolveBinary();
-      if (!ours.has(t) && bin && isReminalTerminal(t, bin)) {
+      if (!ours.has(t) && bin && attachedId((t.creationOptions as vscode.TerminalOptions).shellArgs)) {
+        void adopt(bin); // a terminal viewing a session, brought back by a reload
+      } else if (!ours.has(t) && bin && isReminalTerminal(t, bin)) {
         ours.add(t);
         void track(t, bin, true);
       } else if (!ours.has(t) && bin) {
@@ -698,6 +818,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
       }
     }),
     vscode.window.registerFileDecorationProvider(decorations),
+    vscode.window.onDidChangeActiveTerminal((t) => t && syncName(t)),
     decorationsChanged,
     vscode.window.onDidCloseTerminal((t) => {
       shownStatus.delete(t);
@@ -706,6 +827,8 @@ export function activate(ctx: vscode.ExtensionContext): void {
       known = [...tabbed()];
       decorationsChanged.fire(undefined);
       sessions.delete(t);
+      const vp = viewerPid.get(t);
+      if (vp) setTimeout(() => setViewer(vp, undefined), FORGET_VIEWER_MS);
       schedule();
     }),
     vscode.commands.registerCommand("reminal.terminals", cloudButton),
