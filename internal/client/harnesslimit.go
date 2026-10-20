@@ -154,6 +154,10 @@ const limitQuoteGlyphs = "\"'`“”‘’«"
 // own text, never a notice (review).
 const limitProseGlyphs = "-*#|"
 
+// limitAnswerGlyphs open what answers a message: Claude Code's reply ("●")
+// and its tool's or notice's output ("⎿"). Only they end an echo.
+const limitAnswerGlyphs = "●⎿"
+
 // harnessLimitIn reports whether the bottom of a screen has the CLI here
 // saying it is at its limit, and when that resets (zero when it does not
 // say, or the time cannot be read). prog is the program running here; ""
@@ -252,8 +256,8 @@ func limitLastAboveBox(rows []string) bool {
 				}
 			}
 			return false
-		case strings.HasPrefix(t, "✻"):
-			continue
+		case strings.HasPrefix(t, "✻"), strings.HasPrefix(t, "/"):
+			continue // a turn's time line; the notice's own hint ("/upgrade to increase your usage limit.")
 		default:
 			return false
 		}
@@ -283,10 +287,11 @@ func limitEchoRow(below []string) bool {
 		if attnIsRule(r) {
 			return false
 		}
-		if c := []rune(t)[0]; unicode.IsLetter(c) || unicode.IsDigit(c) {
-			continue // the message's own rows
+		if strings.ContainsAny(firstRune(t), limitAnswerGlyphs) {
+			return true
 		}
-		return true
+		// The message's own rows: its words, a list's "- ", a code line's
+		// backtick — a draft in the box has them too (review).
 	}
 	return false
 }
