@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"reminal/internal/session"
 )
 
 // An agent whose hooks reminal writes only for versions that have the event
@@ -85,7 +87,10 @@ func (a *Agent) noteAgentVersion(fg string, pgrp int) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), hookHealWait)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, cmd[0], append(cmd[1:], "--version")...).Output()
+		// Run apart from this session: an agent that does not know the
+		// question starts instead, and its hooks are no session's
+		// (session.ProbeCommand).
+		out, err := session.ProbeCommand(ctx, cmd[0], append(cmd[1:], "--version")...).Output()
 		v := strings.TrimSpace(string(out))
 		if err != nil || v == "" || strings.ContainsAny(v, "\n=") || !strings.Contains(v, agentVersionSays[fg]) {
 			return // not the agent's own answer (review)

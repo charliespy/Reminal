@@ -35,6 +35,7 @@ import (
 	"reminal/internal/atomicfile"
 	"reminal/internal/piext"
 	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 // mcpServerName is the key reminal registers itself under, in every agent.
@@ -170,7 +171,8 @@ const agentVersionWait = 15 * time.Second
 func agentVersion(bin string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), agentVersionWait)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "--version").Output()
+	// Apart from any session it is run in (session.ProbeCommand).
+	out, err := session.ProbeCommand(ctx, bin, "--version").Output()
 	if err != nil {
 		return ""
 	}

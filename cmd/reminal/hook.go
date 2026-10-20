@@ -30,6 +30,12 @@ import (
 )
 
 func runHook(args []string) error {
+	// Fired by a program reminal only asked something (an agent's --version,
+	// session.HookProbeEnv): no session's, and nothing of it is written.
+	if session.InProbe() {
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		return nil
+	}
 	if len(args) < 1 {
 		_, _ = io.Copy(io.Discard, os.Stdin) // don't leave the harness pipe blocked
 		return fmt.Errorf("usage: reminal hook <working|input|done|failed|notify|subagent|ready>")
