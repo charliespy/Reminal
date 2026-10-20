@@ -54,7 +54,7 @@ func processCwd(pid int) string {
 
 // restoreBanner marks, in the scrollback, where the old session ends and
 // the restored one begins.
-const restoreBanner = "\r\n\x1b[2m── reminal restored this session after its machine restarted ──\x1b[0m\r\n"
+const restoreBanner = "\x1b[2m── reminal restored this session after its machine restarted ──\x1b[0m"
 
 // saveRestore writes this session's restore record, and its scrollback when
 // there is new output. Called on a timer; a failure costs only freshness.
@@ -839,9 +839,12 @@ func (a *Agent) restoreStart() {
 	if a.restorePlan != nil {
 		a.restoreRun, a.restoreNote = a.restorePlan()
 	}
-	a.record([]byte(restoreBanner))
+	// Before the new shell's prompt or after it, as the session's first try
+	// at the relay took: either way the prompt stays the cursor's line
+	// (recordAtShell), never an empty one under the banner.
+	a.recordAtShell(restoreBanner)
 	if a.restoreNote != "" {
-		a.record([]byte("\x1b[2m" + a.restoreNote + "\x1b[0m\r\n"))
+		a.recordAtShell("\x1b[2m" + a.restoreNote + "\x1b[0m")
 	}
 	run := a.restoreRun
 	if run == "" {
