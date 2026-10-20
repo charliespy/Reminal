@@ -21,8 +21,14 @@ const enclosingMaxDepth = 24
 // The process tree still says so: the helper is a descendant of the agent that
 // owns the PTY, and the agent's pid is in its own active record.
 //
-// Returns "" when this process is genuinely not inside a session.
+// Returns "" when this process is genuinely not inside a session — and when
+// it runs under a probe's mark (HookProbeEnv), its own or any process's it
+// meets on the way up before an agent: a program reminal only asks
+// something is in no session, though a session's reminal started it.
 func Enclosing() string {
+	if InProbe() {
+		return ""
+	}
 	agents := map[int]string{}
 	all, err := ReadAllActive()
 	if err != nil {
@@ -37,6 +43,9 @@ func Enclosing() string {
 	for i := 0; i < enclosingMaxDepth && pid > 1; i++ {
 		if id, ok := agents[pid]; ok {
 			return id
+		}
+		if probeMarked(pid) {
+			return "" // started under a probe's mark, or by one
 		}
 		next := parentPID(pid)
 		if next == pid || next <= 0 {
