@@ -43,7 +43,14 @@ type Restore struct {
 	// picked up another session's) cannot both resume it; the one that had
 	// it first does. Zero in records from before it existed.
 	ConvSince time.Time `json:"conv_since,omitempty"`
-	SavedAt   time.Time `json:"saved_at"`
+	// NoTurn: Fg had been sent nothing in this conversation — it never ran
+	// a turn. An agent writes a conversation only on its first message
+	// (Claude Code's --resume of one never written is "No conversation
+	// found", and the session was left a bare shell), so it is started
+	// afresh, with its flags, not resumed. Only ever set when known: a
+	// record from before it existed resumes as it did.
+	NoTurn  bool      `json:"no_turn,omitempty"`
+	SavedAt time.Time `json:"saved_at"`
 }
 
 func restoreDir() (string, error) {
@@ -412,7 +419,7 @@ func ClearRestore(id string) error {
 			unlock()
 		}()
 	}
-	for _, suf := range []string{".sealed", ".json", ".scrollback.sealed", ".scrollback.json", ".conv"} {
+	for _, suf := range []string{".sealed", ".json", ".scrollback.sealed", ".scrollback.json", ".conv", ".written"} {
 		if p, err := restorePath(strings.ToUpper(id), suf); err == nil {
 			_ = os.Remove(p)
 			_ = os.Remove(p + ".tmp")
@@ -439,6 +446,64 @@ func WriteConv(id, conv string) error {
 		return err
 	}
 	return writeFileAtomic(p, []byte(conv))
+}
+
+// convWrittenKeep is how many conversations a session's written set keeps:
+// its latest, and a few it went back to.
+const convWrittenKeep = 16
+
+// MarkConvWritten records that conv, the conversation a session's agent is
+// in, is written: a turn ran in it (an agent writes one on its first
+// message), or the agent entered it by its own resume (Claude Code's
+// SessionStart, source resume). What says a restore can resume it (the
+// client's NoTurn): a conversation never written cannot be.
+func MarkConvWritten(id, conv string) error {
+	if !ValidConv(conv) {
+		return errors.New("not a conversation id")
+	}
+	p, err := restorePath(id, ".written")
+	if err != nil {
+		return err
+	}
+	have := convsWritten(p)
+	out := []string{conv}
+	for _, c := range have {
+		if c != conv && len(out) < convWrittenKeep {
+			out = append(out, c)
+		}
+	}
+	return writeFileAtomic(p, []byte(strings.Join(out, "\n")+"\n"))
+}
+
+// ConvWritten says whether conv is in the session's written set.
+func ConvWritten(id, conv string) bool {
+	if conv == "" {
+		return false
+	}
+	p, err := restorePath(id, ".written")
+	if err != nil {
+		return false
+	}
+	for _, c := range convsWritten(p) {
+		if c == conv {
+			return true
+		}
+	}
+	return false
+}
+
+func convsWritten(p string) []string {
+	b, err := os.ReadFile(p)
+	if err != nil || len(b) > 64<<10 {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if l = strings.TrimSpace(l); ValidConv(l) {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // ReadConv is the last conversation id reported for a session, or "".

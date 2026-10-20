@@ -645,6 +645,9 @@ func (a *Agent) setAttnState(state string) {
 	a.attnState = state
 	if changed {
 		a.attnSince = time.Now()
+		if state == "working" {
+			a.attnTurnAt = a.attnSince
+		}
 	}
 	a.metaMu.Unlock()
 	if !changed {
