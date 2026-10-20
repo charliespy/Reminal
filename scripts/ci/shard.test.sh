@@ -50,4 +50,38 @@ if [ "$got" = "TestBoth TestPlainOnly TestRaceOnly " ]; then
 else
   echo "FAIL race build constraints: the shards hold [$got], want each of TestBoth TestPlainOnly TestRaceOnly once"; fail=1
 fi
+# Tests of no known time (all new, say), and tests of no weight: spread
+# over the shards, never all in one (a weight of 0 never made a shard less
+# loaded than another, so all of them went to the first chosen).
+F="$T/spread"; mkdir -p "$F"
+printf 'module shardspread\n\ngo 1.21\n' > "$F/go.mod"
+{ printf 'package shardspread\n\nimport "testing"\n\n'; for i in $(seq 1 40); do printf 'func TestNew%02d(t *testing.T) {}\nfunc TestZero%02d(t *testing.T) {}\n' "$i" "$i"; done; } > "$F/s_test.go"
+{ echo '# zero-weight tests'; for i in $(seq 1 40); do printf 'TestZero%02d\t0.00\n' "$i"; done; } > "$T/ztimes"
+counts=""
+for K in 1 2 3 4; do
+  re=$(cd "$F" && GOWORK=off SHARD_PKG=. SHARD_TIMES="$T/ztimes" sh "$DIR/shard.sh" 4 "$K")
+  counts="$counts $( (for i in $(seq 1 40); do printf 'TestNew%02d\nTestZero%02d\n' "$i" "$i"; done) | grep -Ecx "$re" || true)"
+done
+if echo "$counts" | awk '{mn=$1; mx=$1; for(i=2;i<=NF;i++){if($i<mn)mn=$i; if($i>mx)mx=$i}; exit !(mx-mn <= 1)}'; then
+  echo "ok   tests of no known time or no weight spread over the shards:$counts"
+else
+  echo "FAIL tests of no known time or no weight piled up: shards hold$counts of 80"; fail=1
+fi
+# The same with weights mixed (the real file's shape): slow tests close
+# in time, as a balanced split leaves them, and many of 0.00 — the zeros
+# spread too, each shard's count within 2× of another's (a zero once added
+# nothing, so every one of them went to the shard least loaded when they
+# began, however little less).
+{ echo '# mixed'; printf 'TestSlow1\t2.03\nTestSlow2\t2.02\nTestSlow3\t2.01\nTestSlow4\t2.00\n'; for i in $(seq 1 40); do printf 'TestZero%02d\t0.00\n' "$i"; done; } > "$T/mtimes"
+printf 'func TestSlow1(t *testing.T) {}\nfunc TestSlow2(t *testing.T) {}\nfunc TestSlow3(t *testing.T) {}\nfunc TestSlow4(t *testing.T) {}\n' >> "$F/s_test.go"
+mcounts=""
+for K in 1 2 3 4; do
+  re=$(cd "$F" && GOWORK=off SHARD_PKG=. SHARD_TIMES="$T/mtimes" sh "$DIR/shard.sh" 4 "$K")
+  mcounts="$mcounts $( (for i in $(seq 1 40); do printf 'TestZero%02d\n' "$i"; done) | grep -Ecx "$re" || true)"
+done
+if echo "$mcounts" | awk '{mn=$1; mx=$1; for(i=2;i<=NF;i++){if($i<mn)mn=$i; if($i>mx)mx=$i}; exit !(mn > 0 && mx <= 2*mn)}'; then
+  echo "ok   with slow tests beside them, the tests of 0.00 spread too:$mcounts"
+else
+  echo "FAIL with slow tests beside them, the tests of 0.00 piled up: shards hold$mcounts of 40"; fail=1
+fi
 exit $fail

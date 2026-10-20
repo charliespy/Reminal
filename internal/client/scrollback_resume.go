@@ -295,6 +295,27 @@ func (a *Agent) restoreResumedScrollbackLocked() {
 		a.noteScrollbackLen()
 	}
 	replayDump(a.screen, d, a.noteScrollbackLen)
+	a.freshLineAfterRestoreLocked()
+}
+
+// freshLineAfterRestoreLocked starts what a new shell writes on a line of its
+// own, when the screen restored ends with its cursor mid-line (after the old
+// shell's prompt): its prompt was drawn on that same row before
+// ("…/work$ …/work$"), and the line a person's keys were typed at never
+// matched the one the session came back to. Only when a new shell starts
+// (restoring: no PTY handed over); a hot restart's shell runs on where its
+// cursor is. Into the screen and the ring alike, as record does. Caller
+// holds screenMu.
+func (a *Agent) freshLineAfterRestoreLocked() {
+	if !a.restoring || a.screen == nil || a.screen.IsAltScreen() || a.screen.CursorPosition().X == 0 {
+		return
+	}
+	nl := []byte("\r\n")
+	_, _ = a.screen.Write(nl)
+	a.noteScrollbackLen()
+	if enc, err := a.box.Encrypt(nl); err == nil {
+		a.buf.Append(enc)
+	}
 }
 
 // restoreHistory puts a predecessor's rendered scrollback (scrollbackDump.

@@ -383,6 +383,13 @@ func TestBusyFooterKeepsATurnWorking(t *testing.T) {
 // The shell count is read off real footers, including the ones that made this
 // worth reporting: a turn that has ended and still has work running. The strings
 // below were taken from live sessions, not invented.
+// claudeBox is the bottom of Claude Code's screen down to the footer: the
+// input box between its two rules.
+const claudeBox = "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
+
+// roundBox is an input box drawn with rounded corners and sides.
+const roundBox = "╭──────────────────────────────────────╮\n│ > \u00a0                                   │\n╰──────────────────────────────────────╯"
+
 func TestShellCountReadsTheFooterAndNotTheTranscript(t *testing.T) {
 	cases := []struct {
 		name string
@@ -397,8 +404,16 @@ func TestShellCountReadsTheFooterAndNotTheTranscript(t *testing.T) {
 			"⏵⏵ bypass permissions on · 4 shells · /tasks to see subagents · esc to interrupt", 4},
 		{"the case this is for: the turn ended, the work did not",
 			"⏵⏵ bypass permissions on · 1 shell · ← 2 agents · ↓ to manage", 1},
-		{"the turn's own summary says it too",
-			"✻ Baked for 15s · done 8:38 PM · 1 shell still running", 1},
+		// A turn's summary sits above the prompt, and stays there after its
+		// shell has ended: read as live, it kept a session that had stopped
+		// reading as working on its shells for half an hour. The footer says
+		// it while it is so.
+		{"a turn's summary above the prompt is not the footer",
+			"✻ Baked for 15s · done 8:38 PM · 1 shell still running\n" + claudeBox + "\n  ⏵⏵ bypass permissions on · ← 2 agents", 0},
+		{"…and the footer under it still counts",
+			"✻ Baked for 15s · done 8:38 PM · 1 shell still running\n" + claudeBox + "\n  ⏵⏵ bypass permissions on · 1 shell · ← 2 agents\n      ✔ Update installed · Restart to update", 1},
+		{"a status line the agent wrote above the prompt, no count in the footer",
+			"● Status · 3 shells · all green\n" + claudeBox + "\n  ⏵⏵ bypass permissions on · esc to interrupt", 0},
 		{"backgrounded from the tool row",
 			"⏺ in the background (↓ to manage)· 1 shell · esc to interrupt", 1},
 		{"nothing running",
@@ -418,8 +433,23 @@ func TestShellCountReadsTheFooterAndNotTheTranscript(t *testing.T) {
 		// tests the footer against the decoy and reports nothing at all.
 		{"a decoy of the same shape sits above the footer",
 			"⎿ · 1 shell command was run\n⏵⏵ bypass permissions on · 1 shell · ← 2 agents", 1},
-		{"…and below it",
-			"⏵⏵ bypass permissions on · 2 shells · ← 2 agents\n⎿ · 2 shell commands were run", 2},
+		// No box seen: the whole tail, as before the footer was read alone —
+		// a count on a footer row that is not the last is still read…
+		{"no box: a footer's count on a row above its last",
+			"⏵⏵ bypass permissions on · 3 shells · ← 2 agents\n      ✔ Update installed · Restart to update", 3},
+		// …and a rule the agent drew in its own output (a markdown "---") is
+		// not a box: what is under it is not taken for the footer alone.
+		{"a rule in the output, no box: not taken for the box's",
+			"⏵⏵ bypass permissions on · 2 shells\n────────────────────────────────────────\n✔ Update installed", 2},
+		{"a rule in the output above the box: the box's rules still found",
+			"● Status · 3 shells · all green\n────────────────────────────────────────\nsome text\n" + claudeBox + "\n  ⏵⏵ bypass permissions on · esc to interrupt", 0},
+		// A rounded box (╭──╮ │ > │ ╰──╯), as some versions draw theirs.
+		{"a rounded box: a turn's summary above it is not the footer",
+			"✻ Baked for 15s · 1 shell still running\n" + roundBox + "\n  ⏵⏵ bypass permissions on · ← 2 agents", 0},
+		{"…and the footer under a rounded box counts",
+			"✻ Baked for 15s · 1 shell still running\n" + roundBox + "\n  ⏵⏵ bypass permissions on · 2 shells", 2},
+		{"…and in the footer's own rows, below it",
+			claudeBox + "\n⏵⏵ bypass permissions on · 2 shells · ← 2 agents\n⎿ · 2 shell commands were run", 2},
 	}
 	for _, c := range cases {
 		if got := attnShellCount(true, c.tail); got != c.want {
@@ -435,7 +465,7 @@ func TestShellCountReadsTheFooterAndNotTheTranscript(t *testing.T) {
 func TestShellCountExpiresWithTheProgramThatDrewIt(t *testing.T) {
 	// The exact screen a harness leaves behind when it exits: its footer is
 	// still there, but the foreground is the user's shell again.
-	leftBehind := "⏵⏵ bypass permissions on · 4 shells · ← 2 agents · ↓ to manage\nharshal@mac ~/src %"
+	leftBehind := claudeBox + "\n⏵⏵ bypass permissions on · 4 shells · ← 2 agents · ↓ to manage"
 
 	if got := attnShellCount(true, leftBehind); got != 4 {
 		t.Errorf("with an agent in the foreground the count should be read: got %d, want 4", got)

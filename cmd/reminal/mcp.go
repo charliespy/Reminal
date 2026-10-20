@@ -552,7 +552,7 @@ func mcpToolList() []map[string]any {
 			"inputSchema": obj(map[string]any{
 				"session": str("Session id, or a join URL like https://live.reminal.app/?s=ID#p=PIN."),
 				"keys":    str("Characters to type, taken literally (\\u0003 types those six characters). Use \\n for Enter."),
-				"key":     str("Keys to press by name before keys, e.g. \"ctrl-c\", \"ctrl-d\", \"ctrl-u\", \"esc\", \"tab\", \"shift-tab\", \"up\", \"down\", \"enter\"; several: \"esc esc\". keys may then be empty."),
+				"key":     str("Keys to press by name before keys, e.g. \"ctrl-c\", \"ctrl-d\", \"ctrl-u\", \"esc\", \"tab\", \"shift-tab\", \"up\", \"down\", \"enter\"; several: \"esc esc\". keys may then be empty. key \"enter\" with enter:true presses Return twice."),
 				"pin":     str("Session PIN. Required unless this device owns the machine (list_sessions) or the URL already has #p=."),
 				"enter": map[string]any{
 					"type":        "boolean",
@@ -974,9 +974,6 @@ func runMCP(_ []string) error {
 				"error": map[string]any{"code": -32601, "message": "method not found: " + msg.Method},
 			})
 		}
-		// Between requests is the only safe moment to swap onto a newly installed
-		// binary: we have just answered, so the client has not sent the next
-		// message and there is nothing buffered to lose across exec. On success
 	})
 	return nil
 }

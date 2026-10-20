@@ -3152,6 +3152,7 @@
     let pinValue = '';
     let manualClose = false;  // user clicked Disconnect; do not auto-reconnect
     let fatal = false;        // unrecoverable (bad PIN, session expired); do not auto-reconnect
+    let fatalWords = '';      // what the relay said when it ended or refused the session: kept over the terminal
     let reconnectTimer = null;
     let backoffMs = 1000;
     // The first close after a session that was up redials at once: most are
@@ -7014,6 +7015,7 @@
 
       manualClose = false;
       fatal = false;
+      fatalWords = '';
       backoffMs = 1000;
       // Switching to a different session invalidates the replay cursor and
       // any previously rendered output; start the terminal clean.
@@ -7237,8 +7239,11 @@
           return;
         }
         if (fatal) {
-          // Status already set by error handler.
-          hideOverlay();
+          // Status already set by error handler. What the relay said, if it
+          // was its word that ended it, stays over the terminal: the socket
+          // closing after it is no news.
+          if (fatalWords) showOverlay(fatalWords);
+          else hideOverlay();
           setBtnConnect();
           return;
         }
@@ -7717,17 +7722,22 @@
           } catch (_) { /* decrypt failure: skip */ }
           break;
         }
+        // The relay's word is said over the terminal, never written into it:
+        // written, it landed on whatever row the cursor was on ("session not
+        // found or not ready" over an agent's footer).
         case 'closed':
           fatal = true;
+          fatalWords = msg.error || 'Session ended';
           clearCred();
-          setStatus(msg.error || 'Session ended', 'error');
-          term.write('\r\n\x1b[31m' + (msg.error || 'Session ended') + '\x1b[0m\r\n');
+          setStatus(fatalWords, 'error');
+          showOverlay(fatalWords);
           break;
         case 'error':
           fatal = true;
+          fatalWords = msg.error || 'Error';
           clearCred();
-          setStatus(msg.error || 'Error', 'error');
-          term.write('\r\n\x1b[31m' + (msg.error || 'Error') + '\x1b[0m\r\n');
+          setStatus(fatalWords, 'error');
+          showOverlay(fatalWords);
           break;
       }
     }
