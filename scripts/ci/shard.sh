@@ -6,8 +6,9 @@
 # run side by side (release.yml: test, plainly and under -race). Every top-level test the
 # package has now (go test -list, with the tags given) lands in exactly one
 # shard: assigned greedily, slowest first, each to the shard with the least
-# time so far, by its time in client-test-times.tsv; a test not in it (new)
-# counts as the median. Deterministic: the same tree splits the same way.
+# time so far (of two as loaded, the one with fewer tests), by its time in
+# client-test-times.tsv; a test not in it (new) counts as their mean.
+# Deterministic: the same tree splits the same way.
 #
 #   scripts/ci/shard.sh N K [TAGS]   the -run pattern for shard K (1..N)
 #   scripts/ci/shard.sh --plan N [TAGS]   every test's shard, and each
@@ -48,23 +49,31 @@ rlists=$(go test -race -tags "$TAGS" -list '.*' "$PKG") || { echo "shard.sh: go 
 list=$(printf '%s\n%s\n' "$lists" "$rlists" | grep -E '^(Test|Example|Fuzz)[A-Za-z0-9_]*$' | sort -u || true)
 [ -n "$list" ] || { echo "shard.sh: no tests listed in $PKG" >&2; exit 1; }
 
-# Each test with its weight (unknown: the median), slowest first.
+# Each test with its weight (unknown: the mean), slowest first. The mean,
+# not the median: most tests take no time to the hundredth, so the median
+# is 0, and a test of no weight never makes a shard less loaded than
+# another — every new test went to one shard, the slowest ones too (one
+# shard at 6 min, the others at 1).
 printf '%s\n' "$list" | awk -F'\t' '
-  NR == FNR { if ($0 !~ /^#/ && NF == 2) { w[$1] = $2 + 0; v[++m] = $2 + 0 } ; next }
+  # A time of 0.00 is under the hundredth the file keeps, not nothing: half
+  # of it (0.005 s), so no test weighs 0 — one that did never changed which
+  # shard was least loaded, and every one of them went to the same shard.
+  NR == FNR { if ($0 !~ /^#/ && NF == 2) { t = $2 + 0; if (t < 0.005) t = 0.005; w[$1] = t; sum += t; m++ } ; next }
   { name[++n] = $0 }
   END {
-    # median of the known times (insertion sort: a thousand numbers)
-    for (i = 2; i <= m; i++) { x = v[i]; j = i - 1; while (j > 0 && v[j] > x) { v[j+1] = v[j]; j-- } v[j+1] = x }
-    med = m ? v[int((m + 1) / 2)] : 0.5
-    for (i = 1; i <= n; i++) printf "%.2f\t%s\n", (name[i] in w) ? w[name[i]] : med, name[i]
+    mean = m ? sum / m : 0.5
+    for (i = 1; i <= n; i++) printf "%.3f\t%s\n", (name[i] in w) ? w[name[i]] : mean, name[i]
   }' "$TIMES" - |
   sort -t "$(printf '\t')" -k1,1nr -k2,2 |
   awk -F'\t' -v N="$N" -v K="$K" -v head="${SHARD1_HEAD:-0}" -v plan="$plan" '
-    BEGIN { for (s = 1; s <= N; s++) load[s] = 0; load[1] = head + 0 }
+    BEGIN { for (s = 1; s <= N; s++) { load[s] = 0; tests[s] = 0 }; load[1] = head + 0 }
     {
+      # The least loaded; of two as loaded, the one with fewer tests: tests
+      # of no weight are spread, not all given the first.
       best = 1
-      for (s = 2; s <= N; s++) if (load[s] < load[best]) best = s
+      for (s = 2; s <= N; s++) if (load[s] < load[best] || (load[s] == load[best] && tests[s] < tests[best])) best = s
       load[best] += $1
+      tests[best]++
       if (plan == "true") print best "\t" $1 "\t" $2
       else if (best == K) pick[++p] = $2
     }

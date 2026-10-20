@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"reminal/internal/session"
 )
@@ -789,7 +790,67 @@ var attnBusyCues = []string{"esc to interrupt", "ctrl+c to interrupt", "to run i
 // count of commands already finished and means the opposite.
 var attnShellPattern = regexp.MustCompile(`·\s*([0-9]+)\s*shells?\b`)
 
-// attnShellCount reads that count off the bottom of the screen, or 0.
+// attnFooter is the harness's footer at the bottom of the screen: the rows
+// under its input box. The count is read there and nowhere above: what the
+// agent wrote above its prompt — a turn's summary "· 1 shell still running"
+// long after that shell ended, a status line "● Status · 3 shells · all
+// green" — kept a session that had stopped reading as working on its shells
+// for half an hour. The box is only one whose rules are seen as one (a
+// prompt row just under its top rule, attnBoxBottom): a rule the agent drew
+// in its own output — a markdown "---" rendered as dashes — is not one.
+// With no box seen, the whole tail, as before.
+func attnFooter(tail string) string {
+	rows := strings.Split(strings.TrimRight(tail, "\n"), "\n")
+	if i := attnBoxBottom(rows); i >= 0 {
+		return strings.Join(rows[i+1:], "\n")
+	}
+	return tail
+}
+
+// attnBoxRows is the most rows an input box takes between its rules (a long
+// line typed in wraps).
+const attnBoxRows = 12
+
+// attnBoxBottom is the row of the lowest input box's bottom rule: a rule row
+// with another above it, within attnBoxRows, the row under that one a
+// prompt's ("❯", or ">" as older versions draw it); -1 when there is none.
+func attnBoxBottom(rows []string) int {
+	for i := len(rows) - 1; i > 0; i-- {
+		if !attnRuleRow(rows[i]) {
+			continue
+		}
+		for j := i - 1; j >= 0 && i-j <= attnBoxRows+1; j-- {
+			if attnRuleRow(rows[j]) {
+				if j+1 < i && attnPromptRow(rows[j+1]) {
+					return i
+				}
+				break
+			}
+		}
+	}
+	return -1
+}
+
+// attnRuleRow says whether a row is an input box's rule: box-drawing dashes
+// across it, or a rounded box's top or bottom (╭──╮, ╰──╯) with its corners.
+func attnRuleRow(row string) bool {
+	r := strings.TrimSpace(stripANSI(row))
+	if utf8.RuneCountInString(r) < 10 {
+		return false
+	}
+	r = strings.TrimRight(strings.TrimLeft(r, "╭╰"), "╮╯")
+	return r != "" && strings.Trim(r, "─━") == ""
+}
+
+// attnPromptRow says whether a row is an input box's first: its prompt,
+// inside a rounded box's side (│) where it has one.
+func attnPromptRow(row string) bool {
+	r := strings.TrimSpace(stripANSI(row))
+	r = strings.TrimSpace(strings.TrimPrefix(r, "│"))
+	return strings.HasPrefix(r, "❯") || strings.HasPrefix(r, ">")
+}
+
+// attnShellCount reads that count off the harness's footer, or 0.
 //
 // agentActive is what makes the reading trustworthy, and it is not a detail: a
 // count is only as live as the program that drew it. When a harness exits, its
@@ -801,7 +862,7 @@ func attnShellCount(agentActive bool, tail string) int {
 	if !agentActive {
 		return 0
 	}
-	t := strings.ToLower(stripANSI(tail))
+	t := strings.ToLower(stripANSI(attnFooter(tail)))
 	// By match position, not by searching for the matched text: two matches can
 	// render the identical string, and looking the text up again finds the first
 	// one every time. A footer under a decoy of the same shape was read against

@@ -147,7 +147,8 @@ func TestDeriveDirectoryID(t *testing.T) {
 func TestDirectoryTokenStableAndKeyed(t *testing.T) {
 	_, privA, _ := ed25519.GenerateKey(rand.Reader)
 	_, privB, _ := ed25519.GenerateKey(rand.Reader)
-	if DirectoryToken(privA) != DirectoryToken(privA) {
+	first, again := DirectoryToken(privA), DirectoryToken(privA)
+	if first != again {
 		t.Fatal("DirectoryToken is not stable for the same key")
 	}
 	if DirectoryToken(privA) == DirectoryToken(privB) {

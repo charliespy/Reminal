@@ -332,3 +332,45 @@ func TestTakeScrollbackDumpWrongKeyAndPlain(t *testing.T) {
 		t.Fatalf("plain dump from an older predecessor = %+v", d)
 	}
 }
+
+// A screen restored with its cursor mid-line (after the old shell's prompt):
+// the new shell's prompt starts a line of its own — never drawn on the old
+// prompt's row ("…/work$ …/work$"). A hot restart (its shell runs on, its
+// PTY handed over) is left where its cursor is.
+func TestARestoredScreenStartsTheNewShellOnAFreshLine(t *testing.T) {
+	isolateReminalHome(t)
+	dumpOf := func() *scrollbackDump {
+		k, _ := crypto.NewSessionKey()
+		box, _ := crypto.NewBox(k)
+		a := &Agent{sessionID: "FRSH2345", box: box, buf: newScrollback(1 << 20)}
+		a.initScreen()
+		t.Cleanup(a.stopAttention)
+		a.record([]byte("earlier output\r\nuser@box:/work$ "))
+		path, key, err := a.writeScrollbackDump()
+		if err != nil || path == "" {
+			t.Fatalf("dump: %q %v", path, err)
+		}
+		return takeScrollbackDump(path, key, a.sessionID)
+	}
+	restored := func(restoring bool) *Agent {
+		k, _ := crypto.NewSessionKey()
+		box, _ := crypto.NewBox(k)
+		b := &Agent{box: box, buf: newScrollback(1 << 20), resumeDump: dumpOf(), restoring: restoring}
+		b.initScreen()
+		t.Cleanup(b.stopAttention)
+		b.restoreResumedScrollback()
+		return b
+	}
+	b := restored(true)
+	b.record([]byte("user@box:/work$ ")) // the new shell's prompt
+	if strings.Contains(b.screen.Render(), "$ user@box:/work$") {
+		t.Fatalf("the new shell's prompt was drawn on the old prompt's row:\n%s", b.screen.Render())
+	}
+	if x := b.screen.CursorPosition().X; x != len("user@box:/work$ ") {
+		t.Fatalf("cursor at column %d after the new prompt, want %d", x, len("user@box:/work$ "))
+	}
+	h := restored(false)
+	if x := h.screen.CursorPosition().X; x != len("user@box:/work$ ") {
+		t.Fatalf("a hot restart's cursor moved: column %d", x)
+	}
+}

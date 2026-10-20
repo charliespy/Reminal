@@ -13,6 +13,8 @@
 #      session being joined, and only there
 #   5. two sessions on one machine are known to be on one machine
 #   6. with the session already filled in, the status asks only for the PIN
+#   9. the relay's word on a session it has not stays over the terminal, and
+#      is never written into it
 #
 # Needs docker; the browser runs in a Playwright container. Nothing here
 # touches the host's reminal.
