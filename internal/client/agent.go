@@ -291,6 +291,9 @@ type Agent struct {
 	// attnFGAt is when attnFG last changed: a harness that has only just
 	// started is drawing itself, and keys typed into it then are lost.
 	attnFGAt time.Time
+	// hookVersions: by agent, the version its binary in front said
+	// (hookheal.go); guarded by metaMu.
+	hookVersions hookHealVersion
 	// attnTurnAt is when attnState last turned "working": a turn seen, by
 	// the agent's hook or its screen. What says the conversation in front
 	// was written at all (restore's NoTurn).

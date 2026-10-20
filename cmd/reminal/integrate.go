@@ -296,7 +296,24 @@ func applyHooks(spec *hookSpec, home, exe string, remove bool) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.Write(path, append(buf, '\n'), 0o600)
+	return writeAgentConfig(path, append(buf, '\n'))
+}
+
+// writeAgentConfig writes an agent's config file, private to its owner. A
+// link to it (settings kept in a dotfiles repo) stays a link: what it names
+// is written — written to the link's own path, the link was replaced by a
+// file, and the repo's copy went stale.
+func writeAgentConfig(path string, b []byte) error {
+	mode := os.FileMode(0o600)
+	if real, err := filepath.EvalSymlinks(path); err == nil && real != path {
+		// A link's target keeps its own mode: it is the person's file, in
+		// their repo (review).
+		path = real
+		if st, err := os.Stat(real); err == nil {
+			mode = st.Mode().Perm()
+		}
+	}
+	return atomicfile.Write(path, b, mode)
 }
 
 // backupOnce keeps the file as it was BEFORE reminal first touched it. A
@@ -509,7 +526,8 @@ type planStep struct {
 }
 
 func runIntegrate(args []string) error {
-	remove, assumeYes, dryRun, check, asJSON := false, false, false, false, false
+	remove, assumeYes, dryRun, check, asJSON, heal := false, false, false, false, false, false
+	agentVersions := map[string]string{}
 	var only []string
 	for _, a := range args {
 		switch a {
@@ -519,6 +537,11 @@ func runIntegrate(args []string) error {
 			check = true
 		case "--json":
 			asJSON = true
+		case "--heal-hooks":
+			// Run by a session as its claude leaves for its shell
+			// (hooks_heal.go): an entry the agent is too old for taken
+			// out, and said.
+			heal = true
 		case "-y", "--yes":
 			assumeYes = true
 		case "--dry-run", "-n":
@@ -527,6 +550,14 @@ func runIntegrate(args []string) error {
 			printIntegrateHelp()
 			return nil
 		default:
+			if v, ok := strings.CutPrefix(a, "--agent-version="); ok {
+				// What the session's own agent binary said it is
+				// (--heal-hooks): bin=version.
+				if bin, ver, ok := strings.Cut(v, "="); ok && bin != "" {
+					agentVersions[bin] = ver
+				}
+				continue
+			}
 			if strings.HasPrefix(a, "-") {
 				return fmt.Errorf("unknown flag %q (try --help)", a)
 			}
@@ -549,6 +580,12 @@ func runIntegrate(args []string) error {
 
 	if check {
 		return printIntegrationReport(integrationReport(home, exe, only), asJSON)
+	}
+	if heal {
+		for _, line := range healHooks(home, sessionVersions(agentVersions)) {
+			fmt.Println(line)
+		}
+		return nil
 	}
 
 	var plan []planStep
@@ -753,7 +790,7 @@ func applyViaFile(t agentTarget, home, exe string, remove bool) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.Write(path, append(buf, '\n'), 0o600)
+	return writeAgentConfig(path, append(buf, '\n'))
 }
 
 func matchesAny(t agentTarget, names []string) bool {

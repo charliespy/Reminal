@@ -55,3 +55,6 @@ func processCommandLine(pid uint32) string {
 	// Length is in bytes, and the string need not end in a NUL.
 	return windows.UTF16ToString(unsafe.Slice(us.Buffer, us.Length/2))
 }
+
+// processExecPath: not read on Windows (no agent here is healed by it).
+func processExecPath(int) string { return "" }

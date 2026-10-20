@@ -100,6 +100,12 @@ func checkIntegration(t agentTarget, home, exe string) protocol.IntegrationStatu
 	}
 	if t.hooks != nil {
 		st.Hooks = hooksInstalled(t.hooks, home)
+		// Set up for another version of the agent than the one installed
+		// now (upgraded or taken back since): not set up as it is — the
+		// Machines view offers to set it up again (hooks_heal.go).
+		if st.Hooks && st.Installed && hookVersionMismatch(t.hooks, home, agentVersionIfGated(t)) {
+			st.Hooks = false
+		}
 	}
 	return st
 }
@@ -388,3 +394,17 @@ func loginPATH() string {
 	}
 	return strings.TrimSpace(s[:b])
 }
+
+// agentVersionIfGated is the agent's version when some hook event of its
+// needs one (hookEvent.MinVersion), else "": not asked for nothing.
+func agentVersionIfGated(t agentTarget) string {
+	for _, ev := range t.hooks.events {
+		if ev.MinVersion != "" {
+			return checkVersion(t.Bin)
+		}
+	}
+	return ""
+}
+
+// checkVersion is how --check asks an agent its version (a test sets it).
+var checkVersion = installedVersion

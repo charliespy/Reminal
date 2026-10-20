@@ -41,3 +41,17 @@ func processArgsNative(pid int) ([]string, bool) {
 	}
 	return args, len(args) > 0
 }
+
+// processExecPath is the file pid's process was started from, as the kernel
+// keeps it (KERN_PROCARGS2's path before its arguments); "" if not read.
+func processExecPath(pid int) string {
+	b, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil || len(b) < 4 {
+		return ""
+	}
+	rest := b[4:]
+	if i := bytes.IndexByte(rest, 0); i > 0 {
+		return string(rest[:i])
+	}
+	return ""
+}
