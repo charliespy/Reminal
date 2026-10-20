@@ -8,6 +8,12 @@ import (
 	"strings"
 )
 
+// hookProbeEnv is session.HookProbeEnv: the mark of a program reminal only
+// asks something, under which hooks write nothing. A session started from
+// such a program (or from anything that inherited the mark) is a real one,
+// and its shell must not carry it, or its agent's hooks would say nothing.
+const hookProbeEnv = "REMINAL_HOOK_PROBE"
+
 // shellEnv builds the inner shell's environment. It forces TERM and DISABLES
 // macOS Terminal's shell session save/restore: a reminal shell isn't a
 // Terminal.app window, but it inherits Terminal's SHELL_SESSION_FILE, so every
@@ -21,6 +27,9 @@ func shellEnv(extra []string) []string {
 	for _, kv := range base {
 		if strings.HasPrefix(kv, "SHELL_SESSION_FILE=") || strings.HasPrefix(kv, "SHELL_SESSIONS_DISABLE=") {
 			continue // drop the inherited pointer + any prior flag; set a clean one below
+		}
+		if strings.HasPrefix(kv, hookProbeEnv+"=") {
+			continue // a probe's mark (session.HookProbeEnv) never enters a session
 		}
 		out = append(out, kv)
 	}
