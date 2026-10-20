@@ -404,7 +404,10 @@ func TestPiTurningAMessageAwayLateIsTurnedAway(t *testing.T) {
 		want bool
 	}{{"pi", true}, {"claude", false}} {
 		a := &Agent{attnFG: tc.prog, attnState: "working"}
+		// Waited for before the next: it reads the clock a later test sets.
+		said := make(chan struct{})
 		go func() {
+			defer close(said)
 			time.Sleep(3 * time.Second)
 			for i := 0; i < harnessDownAfter; i++ {
 				a.noteHarnessHealth(" Error: No API key found for the selected model.\n/work\n0.0%/0 (auto)   unknown", tc.prog, false)
@@ -413,6 +416,7 @@ func TestPiTurningAMessageAwayLateIsTurnedAway(t *testing.T) {
 		if got := a.harnessTurnedAway(); got != tc.want {
 			t.Errorf("%s, working, then turned away after 3 s: %v, want %v", tc.prog, got, tc.want)
 		}
+		<-said
 	}
 }
 

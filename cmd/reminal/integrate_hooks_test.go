@@ -83,6 +83,7 @@ func TestPersonsGroupRunningOurCommandStays(t *testing.T) {
 func TestOurHookCommandMatch(t *testing.T) {
 	ours := []string{
 		"/usr/local/bin/reminal hook done",
+		"/usr/local/bin/reminal hook failed",
 		"reminal hook working",
 		"'/Applications/My Apps/reminal' hook notify",
 		`"C:/Program Files/reminal/reminal.exe" hook input`,
