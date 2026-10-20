@@ -559,6 +559,13 @@ type harnessLimitState struct {
 	turnFailure             string // what its hook said ended that turn ("" for a Stop)
 }
 
+// limitRefusals are the errors a harness's hook names for a turn its limit
+// (or its login) turned away: Claude Code's StopFailure "rate_limit", its
+// usage credits ("billing_error") and a login gone ("authentication_failed").
+// Its others ("overloaded", "server_error", "unknown") are not the limit's
+// word: a session whose limit has lifted is not held by them (review).
+var limitRefusals = map[string]bool{"rate_limit": true, "billing_error": true, "authentication_failed": true}
+
 // limitReadFrom is what a notice first seen now is read against: when the
 // turn it answered ended, as its hook said — kept on disk, so a reminal
 // started again after the reset reads the same time it did — else now (a
@@ -618,10 +625,12 @@ func (a *Agent) noteHarnessLimit(tail, prog string, atWork bool, turnAt, endAt t
 			}
 			ended := !l.turnEnd.IsZero()
 			switch {
-			case ended && l.turnFailure != "":
-				// Its harness said an error ended it (Claude Code's
-				// StopFailure: "rate_limit"): turned away, whatever the
-				// screen shows — the lapse holds.
+			case ended && limitRefusals[l.turnFailure]:
+				// Its harness said the limit, or the login, ended it (Claude
+				// Code's StopFailure: "rate_limit"): turned away, whatever
+				// the screen shows — the lapse holds. Another error (the
+				// service overloaded, the network) says nothing of the
+				// limit: the screen decides, as for a plain end.
 				l.turn, l.turnEnd, l.turnFailure = time.Time{}, time.Time{}, ""
 			case n > l.turnN:
 				l.turn, l.turnEnd = time.Time{}, time.Time{} // turned away: the lapse holds
