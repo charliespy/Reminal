@@ -2040,7 +2040,9 @@
     // PIN-free via the owner handshake; a history entry with its remembered
     // PIN (possibly '' — those dial PIN-free the same way).
     function sessdockConnect(e) {
-      if (sessionId && e.id === sessionId) return; // already here
+      // Already here and live: nothing to do. Here but not live (its link
+      // dropped, its agent gone, a relay that said no): opened again.
+      if (sessionId && e.id === sessionId && inputLive()) return;
       if (e.owned) connectOwned(e.id);
       else connectToSession(e.id, e.pin);
     }
