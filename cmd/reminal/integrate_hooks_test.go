@@ -223,3 +223,81 @@ func TestHookEntryMatcher(t *testing.T) {
 		t.Errorf("want one entry with its matcher, got %s", b)
 	}
 }
+
+// Claude Code's StopFailure is written only for a Claude Code that has it
+// (2.1.78 on): 2.1.77 ran none of its hooks with the event in them (tried in
+// Docker). Older, or its version not read, it is left out — and one an
+// earlier run wrote for a newer Claude Code is taken out — and every other
+// hook is written as before.
+func TestAHookEventIsWrittenOnlyForAnAgentThatHasIt(t *testing.T) {
+	exe := "/usr/local/bin/reminal"
+	events := func(home string) map[string]any {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var root struct {
+			Hooks map[string]any `json:"hooks"`
+		}
+		if err := json.Unmarshal(b, &root); err != nil {
+			t.Fatal(err)
+		}
+		return root.Hooks
+	}
+	apply := func(home, version string) {
+		t.Helper()
+		spec := *targetNamed(t, "claude").hooks
+		spec.version = version
+		if err := applyHooks(&spec, home, exe, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for version, want := range map[string]bool{
+		"2.1.304 (Claude Code)": true,
+		"2.1.78 (Claude Code)":  true,
+		"2.1.77 (Claude Code)":  false,
+		"1.9.99":                false,
+		"":                      false,
+	} {
+		home := t.TempDir()
+		apply(home, version)
+		hooks := events(home)
+		if _, got := hooks["StopFailure"]; got != want {
+			t.Errorf("%q: StopFailure written %v, want %v", version, got, want)
+		}
+		if _, ok := hooks["Stop"]; !ok {
+			t.Errorf("%q: Stop not written", version)
+		}
+	}
+	// Written for a newer one, then integrate run with an older: taken out.
+	home := t.TempDir()
+	apply(home, "2.1.78")
+	apply(home, "2.1.77")
+	if _, got := events(home)["StopFailure"]; got {
+		t.Error("a StopFailure written before stayed for a Claude Code without it")
+	}
+	if !hooksInstalled(targetNamed(t, "claude").hooks, home) {
+		t.Error("set up without StopFailure read as not set up")
+	}
+}
+
+func TestVersionAtLeast(t *testing.T) {
+	for _, c := range []struct {
+		have, min string
+		want      bool
+	}{
+		{"2.1.78 (Claude Code)", "2.1.78", true},
+		{"2.1.304 (Claude Code)", "2.1.78", true},
+		{"2.2.0", "2.1.78", true},
+		{"3.0.0", "2.1.78", true},
+		{"2.1.77 (Claude Code)", "2.1.78", false},
+		{"2.0.99", "2.1.78", false},
+		{"claude", "2.1.78", false},
+		{"", "2.1.78", false},
+	} {
+		if got := versionAtLeast(c.have, c.min); got != c.want {
+			t.Errorf("versionAtLeast(%q, %q) = %v", c.have, c.min, got)
+		}
+	}
+}
