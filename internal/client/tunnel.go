@@ -455,6 +455,7 @@ func (t *Tunnel) activeRecord() session.Active {
 	return session.Active{
 		ID:           t.sessionID,
 		PidStartedAt: session.SelfStartTime(),
+		PidIdent:     session.SelfIdentity(),
 		PIN:          t.pin,
 		OpenURL:      t.PublicURL(),
 		PID:          os.Getpid(),

@@ -291,6 +291,10 @@ type Agent struct {
 	// attnFGAt is when attnFG last changed: a harness that has only just
 	// started is drawing itself, and keys typed into it then are lost.
 	attnFGAt time.Time
+	// attnTurnAt is when attnState last turned "working": a turn seen, by
+	// the agent's hook or its screen. What says the conversation in front
+	// was written at all (restore's NoTurn).
+	attnTurnAt time.Time
 	// agentGoneAt is when the attention probe saw an agent reminal can
 	// resume leave the foreground (guarded by metaMu): what a restore
 	// record's save judges a person's quit keys against (typedToQuit).
@@ -1472,6 +1476,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		PID:          os.Getpid(),
 		StartedAt:    a.startedAt,
 		PidStartedAt: session.SelfStartTime(),
+		PidIdent:     session.SelfIdentity(),
 		Headless:     a.headless,
 		Viewers:      viewers,
 		Away:         a.sight.awayOf(viewers),

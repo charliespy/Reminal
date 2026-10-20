@@ -100,9 +100,12 @@ func (a *Agent) saveRestore() {
 	a.metaMu.Lock()
 	typed := typedToQuit(a.lastInput, a.agentLastSeen, a.agentGoneAt, a.startedAt)
 	a.metaMu.Unlock()
+	if r.Fg != "" {
+		r.NoTurn = !a.turnSeenIn(r)
+	}
 	if r.Fg == "" && holdPreviousAgent(a.restoring, a.restoreAgentSeen, atPrompt, typed, time.Since(a.startedAt), sinceAgent) {
 		if prev, err := session.ReadRestore(a.sessionID); err == nil {
-			r.Fg, r.FgArgs, r.Conv = prev.Fg, prev.FgArgs, prev.Conv
+			r.Fg, r.FgArgs, r.Conv, r.NoTurn = prev.Fg, prev.FgArgs, prev.Conv, prev.NoTurn
 		}
 	}
 	r.ConvSince = a.convSince(r.Conv, now)
@@ -124,6 +127,77 @@ func (a *Agent) saveRestore() {
 			}
 		}
 	}
+}
+
+// turnSeenIn says whether the agent in front (r.Fg, its conversation r.Conv)
+// is in a conversation that was written: it was started into one (its own
+// resume or continue words: claude --continue picks up the latest here,
+// someone's that ran turns), one of its turns began since it came to the
+// front — its hook said so (TurnAt), or its state turned working
+// (attnTurnAt) — or this session's record already said its conversation had
+// one (the same agent and conversation: a resumed one ran its turns in an
+// earlier run). Not known to be, it is started afresh on restore, never
+// resumed (NoTurn).
+func (a *Agent) turnSeenIn(r session.Restore) bool {
+	if startedIntoConversation(r.Fg, r.FgArgs) {
+		return true
+	}
+	// Its hook's word, by conversation: a turn ran in it, or the agent
+	// went back into it (/resume picks an old one with nothing sent yet:
+	// written all the same).
+	if r.Conv != "" && session.ConvWritten(a.sessionID, r.Conv) {
+		return true
+	}
+	if prev, err := session.ReadRestore(a.sessionID); err == nil && prev.Fg == r.Fg && prev.Conv == r.Conv && !prev.NoTurn {
+		return true
+	}
+	// A hook that says which conversation it is in says when one is
+	// written, too: a turn it ran in another (before a /clear) is not this
+	// one's. Only an agent with no such word is read by its state — a turn
+	// begun since it came to the front.
+	if hookConv, _ := session.ReadConvAt(a.sessionID); hookConv != "" {
+		return false
+	}
+	a.metaMu.Lock()
+	since, turn := a.attnFGAt, a.attnTurnAt
+	a.metaMu.Unlock()
+	if !turn.IsZero() && !turn.Before(since) {
+		return true
+	}
+	hs := session.ReadHookStateAnyAge(a.sessionID)
+	return hs != nil && !hs.TurnAt.IsZero() && !hs.TurnAt.Before(since)
+}
+
+// conversationWords are, by agent, what on its command line starts it into a
+// conversation it already has — one written, as only one with a turn is.
+var conversationWords = map[string][]string{
+	"claude":       {"--resume", "-r", "--continue", "-c", "--from-pr", "--teleport"},
+	"codex":        {"resume"},
+	"cursor-agent": {"--resume", "--continue", "resume"},
+	"gemini":       {"--resume", "-r"},
+	"qwen":         {"--resume", "-r", "--continue", "-c"},
+	"opencode":     {"--continue", "-c", "--session", "-s"},
+	"pi":           {"--continue", "-c", "--resume", "-r", "--session"},
+	"agy":          {"--continue"},
+	"amp":          {"continue"},
+}
+
+// startedIntoConversation says whether an agent's command line (args, its
+// program first, perhaps behind an interpreter) starts it into one of its
+// conversations rather than a new one.
+func startedIntoConversation(prog string, args []string) bool {
+	words := conversationWords[prog]
+	for _, a := range args {
+		if a == "--" {
+			return false // what follows is a prompt
+		}
+		for _, w := range words {
+			if a == w || strings.HasPrefix(a, w+"=") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // holdPreviousAgent reports whether a record with nothing recognised in the
@@ -412,6 +486,11 @@ func resumeArgvFor(r session.Restore, shell string) []string {
 	if !ok {
 		return nil
 	}
+	if r.NoTurn {
+		// Sent nothing yet: no conversation of its to resume (it is written
+		// on its first message). Started afresh, with its flags.
+		return plainFlags(r.Fg, flags)
+	}
 	if !session.ValidConv(r.Conv) {
 		r.Conv = "" // only an id is typed; anything else resumes "the latest"
 	}
@@ -467,6 +546,18 @@ func resumePlanBody(r session.Restore, peers []session.Restore, shell string) (a
 	}
 	if _, ok := resumeFlags(r); !ok {
 		return nil, r.Fg + " was running a one-off command here, not a conversation — nothing to resume"
+	}
+	if r.NoTurn {
+		// Never sent anything: started afresh (resumeArgvFor) — no
+		// conversation to pick, nor anyone else's to take. Said how to go
+		// back to the one it was in, should it have been written after all.
+		argv := resumeArgvFor(r, shell)
+		note := ""
+		if session.ValidConv(r.Conv) && rs.byID != nil && argv != nil {
+			flags, _, _ := resumeFlagsFor(r, shellUnsafe(shell))
+			note = r.Fg + " had not been sent anything: started afresh; its last conversation, if it has one: " + shellCommand(rs.byID(r.Fg, flags, r.Conv), shell)
+		}
+		return argv, note
 	}
 	taken := r.Conv != "" && !ownsConv(r, peers)
 	if taken {

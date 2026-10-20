@@ -60,6 +60,12 @@ func runHook(args []string) error {
 		payload := readCappedStdin()
 		if conv := convFromPayload(payload); conv != "" && id != "" && convOwnSession(id) {
 			_ = session.WriteConv(id, conv)
+			// A turn began in it, asked something in it, or ended in it:
+			// written (an agent writes a conversation on its first message),
+			// resumable. Each of these comes only within or after a turn
+			// (UserPromptSubmit, PermissionRequest, Stop): one whose
+			// turn-start payload names no conversation is still marked.
+			_ = session.MarkConvWritten(id, conv)
 		}
 		if arg == "done" {
 			// What it left running as its turn ended (Claude Code's Stop):
@@ -73,8 +79,14 @@ func runHook(args []string) error {
 		// fires instead of Stop): done, and what ended it — a usage limit's
 		// refusal ("rate_limit") is no turn taken (internal/client/
 		// harnesslimit.go).
-		failure = hookFailure(readCappedStdin())
+		payload := readCappedStdin()
+		failure = hookFailure(payload)
 		state = "done"
+		// A turn ended in it, refused or not: its conversation is written
+		// (Claude Code writes the message and the error alike).
+		if conv := convFromPayload(payload); conv != "" && id != "" && convOwnSession(id) {
+			_ = session.MarkConvWritten(id, conv)
+		}
 	case "ready":
 		// The harness is up and reading its input (Claude Code's
 		// SessionStart). Not a turn's state: kept apart from it.
@@ -84,6 +96,12 @@ func runHook(args []string) error {
 		}
 		if conv := convFromPayload(payload); conv != "" && convOwnSession(id) {
 			_ = session.WriteConv(id, conv)
+			if sessionStartResumed(payload) {
+				// Entered by its own resume (/resume, --resume, --continue)
+				// or after a compaction: a conversation that is written,
+				// though nothing is sent in it yet.
+				_ = session.MarkConvWritten(id, conv)
+			}
 		}
 		if err := session.MarkHookReady(id); err != nil {
 			return err
@@ -234,6 +252,19 @@ var convOwnSession = func(id string) bool { return convAllowed(session.Enclosing
 // convAllowed: a hook in session enclosing may write session id's conversation.
 func convAllowed(enclosing, id string) bool {
 	return enclosing == "" || strings.EqualFold(enclosing, id)
+}
+
+// sessionStartResumed says a SessionStart payload's conversation is one the
+// agent went back to (Claude Code's source: resume, or compact — the same
+// conversation, compacted), not one it begins (startup, clear).
+func sessionStartResumed(b []byte) bool {
+	var m struct {
+		Source string `json:"source"`
+	}
+	if json.Unmarshal(b, &m) != nil {
+		return false
+	}
+	return m.Source == "resume" || m.Source == "compact"
 }
 
 func convFromPayload(b []byte) string {

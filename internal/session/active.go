@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -42,6 +43,10 @@ type Active struct {
 	// keeps both). Zero in records written by older builds; the reuse check
 	// then falls back to StartedAt.
 	PidStartedAt time.Time `json:"pid_started_at,omitzero"`
+	// PidIdent is, on Linux, the writer's boot and its start in that boot's
+	// clock ticks (procIdentity): what reusedPID compares there, no clock
+	// involved. Empty elsewhere, and in records written by older builds.
+	PidIdent string `json:"pid_ident,omitempty"`
 	// Kind distinguishes shell sessions ("" or "shell") from port
 	// forwards ("port"). Empty means shell for back-compat with
 	// records written before port-forwarding existed.
@@ -267,7 +272,7 @@ func ClearActiveIfOwn(id string, pid int) error {
 		}
 		return err
 	}
-	if a.PID != pid && pidAlive(a.PID) && !pidReused(a.PID, a.pidAnchor()) {
+	if a.PID != pid && pidAlive(a.PID) && !a.reusedPID() {
 		return nil
 	}
 	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -313,7 +318,7 @@ func ActiveState(id string) Liveness {
 		}
 		return Unknown
 	}
-	if pidAlive(a.PID) && !pidReused(a.PID, a.pidAnchor()) {
+	if pidAlive(a.PID) && !a.reusedPID() {
 		return Running
 	}
 	return Gone
@@ -332,7 +337,7 @@ func ReadActiveByID(id string) (*Active, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !pidAlive(a.PID) || pidReused(a.PID, a.pidAnchor()) {
+	if !pidAlive(a.PID) || a.reusedPID() {
 		_ = os.Remove(p)
 		return nil, os.ErrNotExist
 	}
@@ -366,6 +371,18 @@ var (
 	selfStart     time.Time
 )
 
+// SelfIdentity returns this process's own procIdentity for stamping into
+// Active.PidIdent: "" where there is none. Cached, as SelfStartTime.
+func SelfIdentity() string {
+	selfIdentOnce.Do(func() { selfIdent, _ = procIdentity(os.Getpid()) })
+	return selfIdent
+}
+
+var (
+	selfIdentOnce sync.Once
+	selfIdent     string
+)
+
 // pidAnchor is the timestamp pidReused compares the process's kernel start
 // time against: the recorded process start when present, else the session
 // birth (legacy records, where the two coincide).
@@ -375,6 +392,45 @@ func (a Active) pidAnchor() time.Time {
 	}
 	return a.StartedAt
 }
+
+// pidKernelTolerance is how far two reads of one process's kernel start time
+// may differ: its rounding to the second, and a little.
+const pidKernelTolerance = 2 * time.Second
+
+// reusedPID reports whether a's PID now names another process than the one
+// that wrote a. A restart within pidReuseTolerance of a session's start (a
+// container, whose PIDs count from 1 again, a machine crashing in its first
+// minute) found a process of the new boot at the session's old PID, took the
+// session as still running, and never restored it. So a record says which
+// process wrote it, exactly:
+//   - on Linux, PidIdent: another boot, or another start in its ticks, is
+//     another process, and the same is the same, whatever the clock did;
+//   - elsewhere, PidStartedAt, the kernel's start time as it was taken, which
+//     no later clock step moves: a start later than it, past its rounding,
+//     is another process (one-sided: a PID taken again is always a later
+//     process's).
+//
+// A record without them (an older build's) keeps the wide pidReuseTolerance,
+// as does a Linux one without PidIdent: its start time is boot time plus
+// ticks, and boot time moves with every clock step either way.
+func (a Active) reusedPID() bool {
+	if a.PidIdent != "" {
+		id, ok := procIdentity(a.PID)
+		return ok && id != a.PidIdent
+	}
+	if a.PidStartedAt.IsZero() || !startTimeSteady {
+		return pidReused(a.PID, a.pidAnchor())
+	}
+	start, ok := procStartTime(a.PID)
+	if !ok {
+		return false
+	}
+	return start.After(a.PidStartedAt.Add(pidKernelTolerance))
+}
+
+// startTimeSteady says procStartTime gives a process's start time as it was
+// taken (macOS, Windows), not one made anew of the clock on each read (Linux).
+var startTimeSteady = runtime.GOOS != "linux"
 
 // pidReused reports whether the process currently at pid started meaningfully
 // AFTER the session recorded startedAt — i.e. the OS reused the PID for an
@@ -419,7 +475,7 @@ func ReadAllActive() ([]Active, error) {
 		if err != nil {
 			continue // skip corrupt entries silently — best-effort enumeration
 		}
-		if !pidAlive(a.PID) || pidReused(a.PID, a.pidAnchor()) {
+		if !pidAlive(a.PID) || a.reusedPID() {
 			_ = os.Remove(full)
 			continue
 		}
