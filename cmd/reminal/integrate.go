@@ -18,6 +18,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,7 +28,9 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"reminal/internal/atomicfile"
 	"reminal/internal/piext"
@@ -110,6 +113,12 @@ type hookEvent struct {
 	// Matcher narrows a tool event to the tools named (shapeMatcher only);
 	// empty, the entry carries no matcher at all.
 	Matcher string
+	// MinVersion is the agent's own version the event first exists in. An
+	// older agent may reject its whole hooks block for an event it does not
+	// know — Claude Code 2.1.77 ran none of its hooks with "StopFailure" in
+	// them (tried in Docker) — so below it, or with no version read, the
+	// event is not written, and one written before is taken out.
+	MinVersion string
 }
 
 // hookSpec is how to install reminal's attention hooks into one agent's config.
@@ -123,6 +132,49 @@ type hookSpec struct {
 	// file, where an earlier reminal put them (Antigravity's hooks live under
 	// a name; left at the top, they make agy reject the whole file).
 	cleanTop bool
+	// version is the agent's own, as it says (agentVersion), for the events
+	// that need one (hookEvent.MinVersion); "" when not read.
+	version string
+}
+
+// hookEventFits says whether ev can be written for an agent of version
+// have: it needs none, or have is at least what it needs.
+func hookEventFits(ev hookEvent, have string) bool {
+	return ev.MinVersion == "" || versionAtLeast(have, ev.MinVersion)
+}
+
+var versionRe = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
+
+// versionAtLeast compares the first x.y.z in have with min's; false when
+// have holds none.
+func versionAtLeast(have, min string) bool {
+	h, m := versionRe.FindStringSubmatch(have), versionRe.FindStringSubmatch(min)
+	if h == nil || m == nil {
+		return false
+	}
+	for i := 1; i <= 3; i++ {
+		a, _ := strconv.Atoi(h[i])
+		b, _ := strconv.Atoi(m[i])
+		if a != b {
+			return a > b
+		}
+	}
+	return true
+}
+
+// agentVersionWait caps asking an agent its version: an abort cap, for a
+// CLI that hangs; it answers at once.
+const agentVersionWait = 15 * time.Second
+
+// agentVersion is what `<bin> --version` says; "" when it cannot be run.
+func agentVersion(bin string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), agentVersionWait)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "--version").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // hookCommand is the shell command an agent runs on an event. The reminal path
@@ -219,7 +271,7 @@ func applyHooks(spec *hookSpec, home, exe string, remove bool) error {
 			}
 			kept = append(kept, item)
 		}
-		if !remove {
+		if !remove && hookEventFits(ev, spec.version) {
 			kept = append(kept, hookEntry(spec.shape, exe, ev))
 		}
 		if len(kept) == 0 {
@@ -354,7 +406,7 @@ func agentTargets() []agentTarget {
 					{Event: "Stop", State: "done"},                // turn finished, with what it left running
 					// Its turn ended on an API error instead — a usage limit's
 					// refusal, a login gone: fires in Stop's place.
-					{Event: "StopFailure", State: "failed"},
+					{Event: "StopFailure", State: "failed", MinVersion: "2.1.78"},
 					// One of its own subagents finished: what is still running.
 					{Event: "SubagentStop", State: "subagent"},
 					// Up and reading its input: started, or resumed (a long
@@ -587,7 +639,11 @@ func runIntegrate(args []string) error {
 		// MCP server was registered by an earlier version.
 		var hookErr error
 		if p.target.hooks != nil {
-			hookErr = applyHooks(p.target.hooks, home, exe, remove)
+			spec := *p.target.hooks
+			if !remove {
+				spec.version = agentVersion(p.target.Bin)
+			}
+			hookErr = applyHooks(&spec, home, exe, remove)
 		}
 		if err := errors.Join(mcpErr, hookErr); err != nil {
 			failures++

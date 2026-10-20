@@ -428,11 +428,12 @@ func TestHarnessLimitHoldsPastALongMessageAndADraft(t *testing.T) {
 	}
 }
 
-// Claude Code says how its turn ended: StopFailure ("rate_limit") in Stop's
-// place for one its limit turned away, Stop for one answered. That record is
-// read, not the screen (review): a refusal holds however the
-// screen looks — a long message, a screen full of notices, a draft — and a
-// Stop ends the lapse at once.
+// Claude Code 2.1.78 on says how its turn ended: StopFailure ("rate_limit")
+// in Stop's place for one its limit turned away. That record is read, not
+// the screen (review): a refusal holds however the screen looks — a long
+// message, a screen full of notices, a draft. A plain Stop is no proof (an
+// older Claude Code ends a refusal with it): the screen says, as for any
+// harness.
 func TestHarnessLimitTurnsAreReadFromClaudesHook(t *testing.T) {
 	if limitTestNow.IsZero() {
 		t.Skip("no zone data")
@@ -463,17 +464,31 @@ func TestHarnessLimitTurnsAreReadFromClaudesHook(t *testing.T) {
 			t.Fatalf("refusal %d, its hook saying so: read as no longer limited", i)
 		}
 	}
-	// Answered: Stop, its notice still the last thing above its box. Over
-	// at once.
+	// A plain Stop, a new notice under the message it answered (an older
+	// Claude Code's refusal): the screen says turned away — holds.
 	now = now.Add(time.Minute)
 	turn = now
+	screen = notice + "\n❯ continue\n" + notice + "\n❯ "
 	a.noteHarnessLimit(screen, "claude", false, turn, time.Time{}, "")
 	now = now.Add(time.Second)
-	if !a.noteHarnessLimit(screen, "claude", false, turn, now, "") {
-		t.Fatal("a turn its hook says ended with Stop: still limited")
+	end := now
+	a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+	now = now.Add(harnessUpFor)
+	a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("a plain Stop with a new notice under its message: read as answered")
 	}
-	if l, _ := a.harnessLimitedNow(); l {
-		t.Fatal("still limited")
+	// A plain Stop, the agent's answer under the message: over.
+	now = now.Add(time.Minute)
+	turn = now
+	screen += "\n❯ continue\n● Picking up where I left off.\n❯ "
+	a.noteHarnessLimit(screen, "claude", false, turn, time.Time{}, "")
+	now = now.Add(time.Second)
+	end = now
+	a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+	now = now.Add(harnessUpFor)
+	if !a.noteHarnessLimit(screen, "claude", false, turn, end, "") {
+		t.Fatal("answered, by its Stop and its screen: still limited")
 	}
 }
 

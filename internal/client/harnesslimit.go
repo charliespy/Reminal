@@ -559,14 +559,6 @@ type harnessLimitState struct {
 	turnFailure             string // what its hook said ended that turn ("" for a Stop)
 }
 
-// harnessSaysTurnFailed are the harnesses whose hook says when an error
-// ended a turn, in place of the turn's plain end: Claude Code's StopFailure
-// fires instead of Stop when an API error ("rate_limit", a login gone)
-// ended it (2.1.304's own hook docs; `reminal integrate` registers it as
-// "failed"). Their plain end is a turn answered — a limit's refusal is never
-// one. Every other harness, and one with no hook, is read from its screen.
-var harnessSaysTurnFailed = map[string]bool{"claude": true}
-
 // limitReadFrom is what a notice first seen now is read against: when the
 // turn it answered ended, as its hook said — kept on disk, so a reminal
 // started again after the reset reads the same time it did — else now (a
@@ -631,17 +623,16 @@ func (a *Agent) noteHarnessLimit(tail, prog string, atWork bool, turnAt, endAt t
 				// StopFailure: "rate_limit"): turned away, whatever the
 				// screen shows — the lapse holds.
 				l.turn, l.turnEnd, l.turnFailure = time.Time{}, time.Time{}, ""
-			case ended && harnessSaysTurnFailed[prog]:
-				// Its harness ends a turn an error ended with its own word,
-				// not Stop: this Stop is a turn answered (the turn's own
-				// record, not the screen: review).
-				return over()
 			case n > l.turnN:
 				l.turn, l.turnEnd = time.Time{}, time.Time{} // turned away: the lapse holds
 			case ended && now.Sub(l.turnEnd) >= harnessUpFor:
-				// Ended: turned away if a notice answers the last message
-				// still — a screen full of notices has one more no longer
-				// counted — else answered with none of its own: over.
+				// Ended with no error said: turned away if a notice answers
+				// the last message still — a screen full of notices has one
+				// more no longer counted — else answered with none of its
+				// own: over. A plain end is no proof by itself: Claude Code
+				// before 2.1.78 (no StopFailure) ends a turn its limit
+				// turned away with Stop, as does a harness with no error
+				// hook (tried in Docker).
 				if !answered {
 					return over()
 				}

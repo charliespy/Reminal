@@ -218,6 +218,9 @@ func hooksInstalled(spec *hookSpec, home string) bool {
 		node = next
 	}
 	for _, ev := range spec.events {
+		if ev.MinVersion != "" {
+			continue // written only for an agent new enough: not needed to be set up
+		}
 		list, _ := node[ev.Event].([]any)
 		found := false
 		for _, item := range list {
