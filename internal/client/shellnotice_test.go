@@ -60,3 +60,24 @@ func TestANoticeAtTheShellRedrawsItsLineUnderIt(t *testing.T) {
 		t.Fatalf("the notice is not just above the line:\n%s", strings.Join(rows, "\n"))
 	}
 }
+
+// A notice written over rows that hold something already (a screen drawn
+// before, its cursor moved up): the notice's row and the row drawn again
+// under it hold only what they are given, nothing of what was there.
+func TestANoticeClearsTheRowsItWritesOn(t *testing.T) {
+	k, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(k)
+	a := &Agent{sessionID: "CLRS3456", box: box, buf: newScrollback(1 << 20)}
+	a.initScreen()
+	t.Cleanup(a.stopAttention)
+	a.record([]byte("AAAA\r\nOLD-OLD-OLD-OLD-OLD-OLD\r\nOLD-OLD-OLD-OLD-OLD-OLD\x1b[2A\r$ ls"))
+	a.recordAtShell("note")
+	rows := strings.Split(stripANSI(a.screen.Render()), "\n")
+	p := a.screen.CursorPosition()
+	if got := strings.TrimRight(rows[p.Y-1], " "); got != "note" {
+		t.Fatalf("the notice's row is %q, want only the notice:\n%s", got, strings.Join(rows, "\n"))
+	}
+	if got := strings.TrimRight(rows[p.Y], " "); got != "$ ls" || p.X != len("$ ls") {
+		t.Fatalf("the row drawn again is %q (cursor column %d), want %q at %d:\n%s", got, p.X, "$ ls", len("$ ls"), strings.Join(rows, "\n"))
+	}
+}

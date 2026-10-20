@@ -276,7 +276,8 @@ const sealedNow = p => p.evaluate(() => ({ key: !!cryptoKey, sealed: !!sealState
   const p = await ctx.newPage();
   await p.goto(`${BASE}/?s=QQQQ2345#p=12345678`, { waitUntil: 'domcontentloaded' });
   await p.waitForFunction(() => /not found|not ready/i.test(document.getElementById('status')?.textContent || ''), null, { timeout: 30000 }).catch(() => {});
-  await p.waitForTimeout(3000); // the socket's close, after the words
+  // The socket's close, after the words: waited on, not guessed.
+  await p.waitForFunction(() => !ws || ws.readyState === WebSocket.CLOSED, null, { timeout: 30000 }).catch(() => {});
   const r = await p.evaluate(() => {
     const o = document.getElementById('overlay');
     const rows = document.querySelector('.xterm-rows');
@@ -285,6 +286,27 @@ const sealedNow = p => p.evaluate(() => ({ key: !!cryptoKey, sealed: !!sealState
   const ok = r.shown && /not found|not ready/i.test(r.said) && !r.inTerminal;
   if (!ok) process.exitCode = 1;
   out.push(`TEST 9  a session the relay has not: overlay shown=${r.shown} saying "${r.said}", written into the terminal=${r.inTerminal}   ${ok ? 'PASS' : 'FAIL'}`);
+  await ctx.close();
+}
+// ---- TEST 10: a tap in the dock on the session being opened dials nothing ----
+// Its socket open, its handshake in flight (not yet authed): what a tap on it
+// would do is asked of the page as it stands then, a second dial never made.
+{
+  const ctx = await b.newContext({ ...devices['Pixel 7'] });
+  const p = await ctx.newPage();
+  await p.goto(`${BASE}/?s=${A}#p=${APIN}`, { waitUntil: 'domcontentloaded' });
+  await p.waitForFunction(() => inputLive(), null, { timeout: 30000 }).catch(() => {});
+  const r = await p.evaluate(() => {
+    const live = sessdockDialing();
+    const was = authed;
+    authed = false; // as between its socket opening and its handshake's answer
+    const midHandshake = sessdockDialing();
+    authed = was;
+    return { live, midHandshake };
+  });
+  const ok = r.live && r.midHandshake;
+  if (!ok) process.exitCode = 1;
+  out.push(`TEST 10  dock tap on the session being opened: live → no dial ${r.live}, open mid-handshake → no dial ${r.midHandshake}   ${ok ? 'PASS' : 'FAIL'}`);
   await ctx.close();
 }
 console.log(out.join('\n'));

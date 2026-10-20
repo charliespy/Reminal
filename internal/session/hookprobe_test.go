@@ -155,3 +155,39 @@ func TestEnclosingRefusesOnlyALiveProbesSession(t *testing.T) {
 		t.Fatalf("a walk in a running probe's session named %q", got)
 	}
 }
+
+// A probe's record is written, then what probes that died left is let go:
+// a record whose leader is gone, and a half-written one whose pid no process
+// has — never a half-written one whose process runs (a probe being
+// recorded at that moment).
+func TestAProbeLetsGoOfWhatDeadProbesLeft(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("sessions read on Linux and macOS only")
+	}
+	t.Setenv("HOME", t.TempDir())
+	dir, err := probesDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const gone = 2147483000 // no process has it
+	live := strconv.Itoa(os.Getpid()) + ".tmp"
+	for name, body := range map[string]string{strconv.Itoa(gone): "1", strconv.Itoa(gone) + ".tmp": "1", live: "1"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := RunProbe(ProbeCommand(context.Background(), "/bin/sh", "-c", "true"), false); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		left = append(left, e.Name())
+	}
+	if strings.Join(left, " ") != live {
+		t.Fatalf("left %q, want only %q (a running process's half-written record)", left, live)
+	}
+}
