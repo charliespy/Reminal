@@ -1439,7 +1439,7 @@
     .machine-session.is-port { opacity: 0.85; }
     .machine-session.is-port .ms-label { color: #7ee787; }
     /* Two-line layout so the title / cwd isn't crushed onto one line alongside
-       the id and action buttons: the label wraps (up to 2 lines) with its
+       the id and action buttons: the label wraps (up to 3 lines) with its
        metadata beneath it, the same shape as the Recents rows. */
     .machine-session .ms-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
     /* A shell row's label block is a real <a href="?s=…">, so ⌘/Ctrl-click,
@@ -1452,7 +1452,7 @@
     }
     .machine-session .ms-label {
       font-size: 13px; color: #e6edf3; line-height: 1.35; word-break: break-word;
-      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
     }
     .machine-session .ms-meta { font-size: 11px; color: #7d8590; font-family: monospace; line-height: 1.35; word-break: break-word; }
     .machine-session .ms-actions { display: flex; gap: 2px; flex: none; align-self: center; }
