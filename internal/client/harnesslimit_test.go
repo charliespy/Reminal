@@ -4,6 +4,7 @@
 package client
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -532,6 +533,75 @@ func TestHarnessLimitHeldOnlyByTheLimitsErrors(t *testing.T) {
 	}
 }
 
+// The screen's own reading, with no hook to say: a plan's notice goes on
+// with its hint ("/upgrade to increase your usage limit."), and is still the
+// last thing above the box; a draft in the box with a list's "- " or a code
+// line's backtick is still no echo (review).
+func TestHarnessLimitFallbackKnowsAHintAndADraftsRows(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	now := limitLA(2026, 10, 19, 13, 0)
+	defer func() { harnessNow = time.Now }()
+	harnessNow = func() time.Time { return now }
+	notice := "  ⎿  You've hit your usage limit · resets 9pm (America/Los_Angeles)\n     /upgrade to increase your usage limit."
+	rule := strings.Repeat("─", 40)
+	box := func(draft ...string) string {
+		b := "\n" + rule + "\n❯ "
+		if len(draft) > 0 {
+			b += draft[0]
+			for _, d := range draft[1:] {
+				b += "\n  " + d
+			}
+		}
+		return b + "\n" + rule + "\n  ⏵⏵ auto mode on"
+	}
+	conv := "❯ do the work\n" + notice
+	a := &Agent{}
+	read := func(tail string, turn, end time.Time) {
+		a.noteHarnessLimit(harnessTail(conv+tail, harnessRows), "", false, turn, end, "")
+	}
+	turn := now.Add(-2 * time.Second)
+	read(box(), turn, turn.Add(time.Second))
+	read(box(), turn, turn.Add(time.Second))
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("not limited")
+	}
+	// A message of twenty rows, turned away: its echo scrolled out, the
+	// notice and its hint the last things above the box.
+	now = now.Add(time.Minute)
+	turn = now
+	conv += "\n❯ here is the whole plan:"
+	for i := 1; i <= 19; i++ {
+		conv += "\n  step " + strconv.Itoa(i) + " of the plan"
+	}
+	conv += "\n" + notice
+	read(box(), turn, time.Time{})
+	now = now.Add(time.Second)
+	end := now
+	read(box(), turn, end)
+	now = now.Add(harnessUpFor)
+	read(box(), turn, end)
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("a long message turned away read as taken: the notice's hint under it")
+	}
+	// Turned away again, a person's draft with a list and a code line in the
+	// box.
+	now = now.Add(time.Minute)
+	turn = now
+	conv += "\n❯ continue\n" + notice
+	draft := box("first, the plan:", "- the login", "`make test` after")
+	read(draft, turn, time.Time{})
+	now = now.Add(time.Second)
+	end = now
+	read(draft, turn, end)
+	now = now.Add(harnessUpFor)
+	read(draft, turn, end)
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("a draft's list or code line in the box read as a message answered")
+	}
+}
+
 // "resets 3pm" read again after 3pm — a resize, any output, the read before
 // the press — is the same 3pm, not tomorrow's (review).
 // And a reminal started again after it, the notice still on the screen,
@@ -624,5 +694,26 @@ func TestHarnessLoggedOutScreens(t *testing.T) {
 	}
 	if harnessProblemIn(strings.Repeat("x", 3), "crush") {
 		t.Error("nothing read as crush logged out")
+	}
+}
+
+// Only an answer's glyph ends an echo: a draft's list item or code line in
+// the box goes on to its rule (review).
+func TestLimitEchoRowEndsOnlyAtAnAnswer(t *testing.T) {
+	rule := strings.Repeat("─", 40)
+	for _, c := range []struct {
+		below []string
+		echo  bool
+	}{
+		{[]string{"  ⎿  You've hit your session limit · resets 3pm"}, true},
+		{[]string{"  second line", "● On it."}, true},
+		{[]string{"  - the login", "  `make test` after", rule}, false},
+		{[]string{"  * one", "  # two", rule}, false},
+		{[]string{rule}, false},
+		{nil, false},
+	} {
+		if got := limitEchoRow(c.below); got != c.echo {
+			t.Errorf("%q: echo %v, want %v", c.below, got, c.echo)
+		}
 	}
 }
