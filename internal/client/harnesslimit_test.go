@@ -492,6 +492,46 @@ func TestHarnessLimitTurnsAreReadFromClaudesHook(t *testing.T) {
 	}
 }
 
+// Only the limit's errors hold the lapse: a turn ended by another error (the
+// service overloaded) with the agent's answer under its message is over, as a
+// plain end is (review).
+func TestHarnessLimitHeldOnlyByTheLimitsErrors(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	defer func() { harnessNow = time.Now }()
+	notice := "  ⎿  You've hit your session limit · resets 3pm (America/Los_Angeles)"
+	for failure, held := range map[string]bool{
+		"rate_limit": true, "billing_error": true, "authentication_failed": true,
+		"overloaded": false, "server_error": false, "unknown": false,
+	} {
+		now := limitLA(2026, 10, 19, 13, 0)
+		harnessNow = func() time.Time { return now }
+		a := &Agent{}
+		turn := now.Add(-2 * time.Second)
+		screen := notice + "\n❯ "
+		a.noteHarnessLimit(screen, "claude", false, turn, turn.Add(time.Second), "rate_limit")
+		a.noteHarnessLimit(screen, "claude", false, turn, turn.Add(time.Second), "rate_limit")
+		if l, _ := a.harnessLimitedNow(); !l {
+			t.Fatalf("%s: not limited", failure)
+		}
+		// A turn after the reset: the agent answered, and its harness says
+		// the turn ended on this error.
+		now = now.Add(time.Hour)
+		turn = now
+		screen += "\n❯ continue\n● Picking up where I left off.\n❯ "
+		a.noteHarnessLimit(screen, "claude", false, turn, time.Time{}, "")
+		now = now.Add(time.Second)
+		end := now
+		a.noteHarnessLimit(screen, "claude", false, turn, end, failure)
+		now = now.Add(harnessUpFor)
+		a.noteHarnessLimit(screen, "claude", false, turn, end, failure)
+		if l, _ := a.harnessLimitedNow(); l != held {
+			t.Errorf("%s: limited %v, want %v", failure, l, held)
+		}
+	}
+}
+
 // "resets 3pm" read again after 3pm — a resize, any output, the read before
 // the press — is the same 3pm, not tomorrow's (review).
 // And a reminal started again after it, the notice still on the screen,
