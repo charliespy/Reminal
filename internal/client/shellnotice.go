@@ -45,16 +45,18 @@ func redrawRow(row string, col int) string {
 // own below what is there, and that row drawn again under it, the cursor
 // back at its column (redrawRow). Never a notice the shell's prompt waits
 // under on an empty row, where the keys typed at it never match the line
-// they show on.
+// they show on. Each row it writes is cleared to its end (EL, \x1b[K): what
+// was on it before is never left showing past the notice or the row drawn
+// again.
 func (a *Agent) recordAtShell(text string) {
 	row, col, ok := a.cursorRow()
 	if ok && col == 0 && row == "" {
-		a.record([]byte(text + "\r\n"))
+		a.record([]byte(text + "\x1b[K\r\n"))
 		return
 	}
-	out := "\r\n" + text + "\r\n"
+	out := "\r\n" + text + "\x1b[K\r\n"
 	if ok {
-		out += redrawRow(row, col)
+		out += "\x1b[K" + redrawRow(row, col)
 	}
 	a.record([]byte(out))
 }

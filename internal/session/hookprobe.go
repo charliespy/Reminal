@@ -85,20 +85,16 @@ func probesDir() (string, error) {
 }
 
 // recordProbe records the session led by pid (a probe's: ProbeCommand starts
-// it in its own) and is what lets it go. Records left by a reminal that died
-// mid-probe are let go here when their leader is gone or another process.
+// it in its own) and is what lets it go. Written first, then the records a
+// reminal left dying mid-probe are let go — their leader gone or another
+// process — so the sweep never widens the moment before it is recorded;
+// and a "<pid>.tmp" left by one that died between writing and renaming,
+// once no process has that pid.
 func recordProbe(pid int) (forget func()) {
 	ident, ok := probeIdent(pid)
 	dir, err := probesDir()
 	if !ok || err != nil || os.MkdirAll(dir, 0o700) != nil {
 		return func() {}
-	}
-	if entries, err := os.ReadDir(dir); err == nil {
-		for _, e := range entries {
-			if n, err := strconv.Atoi(e.Name()); err == nil && !probeRecordLive(dir, n) {
-				_ = os.Remove(filepath.Join(dir, e.Name()))
-			}
-		}
 	}
 	path := filepath.Join(dir, strconv.Itoa(pid))
 	tmp := path + ".tmp"
@@ -106,7 +102,31 @@ func recordProbe(pid int) (forget func()) {
 		_ = os.Remove(tmp)
 		return func() {}
 	}
+	sweepProbeRecords(dir)
 	return func() { _ = os.Remove(path) }
+}
+
+// sweepProbeRecords lets go of dir's records that are no running probe's,
+// and of the half-written ones ("<pid>.tmp") whose pid no process has.
+func sweepProbeRecords(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if base, ok := strings.CutSuffix(name, ".tmp"); ok {
+			if n, err := strconv.Atoi(base); err == nil {
+				if _, alive := probeIdent(n); !alive {
+					_ = os.Remove(filepath.Join(dir, name))
+				}
+			}
+			continue
+		}
+		if n, err := strconv.Atoi(name); err == nil && !probeRecordLive(dir, n) {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
 }
 
 // probeRecordLive says whether dir's record for session sid is a running

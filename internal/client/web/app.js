@@ -2039,10 +2039,20 @@
     // Same dials the panel rows use: an owned machine's session connects
     // PIN-free via the owner handshake; a history entry with its remembered
     // PIN (possibly '' — those dial PIN-free the same way).
+    // sessdockDialing says whether the session open here is live, or on its
+    // way to it: its socket still connecting, or open with its handshake in
+    // flight (not yet authed, not refused). A tap on it in the dock then
+    // dials nothing: a second dial would only cut the first short.
+    function sessdockDialing() {
+      if (inputLive()) return true;
+      if (!ws) return false;
+      return ws.readyState === WebSocket.CONNECTING || (ws.readyState === WebSocket.OPEN && !authed && !fatal);
+    }
     function sessdockConnect(e) {
-      // Already here and live: nothing to do. Here but not live (its link
-      // dropped, its agent gone, a relay that said no): opened again.
-      if (sessionId && e.id === sessionId && inputLive()) return;
+      // Here and live, or on its way (sessdockDialing): nothing to do. Here
+      // but not live (its link dropped, its agent gone, a relay that said
+      // no): opened again.
+      if (sessionId && e.id === sessionId && sessdockDialing()) return;
       if (e.owned) connectOwned(e.id);
       else connectToSession(e.id, e.pin);
     }
