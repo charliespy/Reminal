@@ -5,7 +5,6 @@ package client
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"reminal/internal/config"
+	"reminal/internal/session"
 )
 
 // What a coding agent was started with is kept when it is resumed — a
@@ -119,7 +119,9 @@ func parseHelpFlags(help string) flagSpec {
 
 // agentHelp is an agent's --help, asked for through the person's own login
 // shell so the agent is found where they would find it. Empty when it
-// cannot be had in time.
+// cannot be had in time. Asked apart from the session it restores, as a
+// probe (session.ProbeCommand): an agent that does not know --help starts
+// up instead, and its hooks are no session's.
 func agentHelp(bin string) string {
 	args := helpArgs[bin]
 	if args == nil {
@@ -130,11 +132,11 @@ func agentHelp(bin string) string {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		// No login shell to ask; PATH (with PATHEXT's .cmd shims) finds it.
-		cmd = exec.CommandContext(ctx, bin, args...)
+		cmd = session.ProbeCommand(ctx, bin, args...)
 	} else {
-		cmd = exec.CommandContext(ctx, config.Shell(), "-lc", shellJoin(append([]string{bin}, args...)))
+		cmd = session.ProbeCommand(ctx, config.Shell(), "-lc", shellJoin(append([]string{bin}, args...)))
 	}
-	cmd.Env = append(os.Environ(), "NO_COLOR=1", "TERM=dumb", "CI=1")
+	cmd.Env = append(cmd.Env, "NO_COLOR=1", "TERM=dumb", "CI=1")
 	out, _ := cmd.CombinedOutput()
 	return string(out)
 }

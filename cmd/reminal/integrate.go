@@ -723,7 +723,10 @@ func applyViaCLI(p planStep, exe string, remove bool) error {
 	for _, a := range tmpl {
 		args = append(args, strings.ReplaceAll(a, "%CMD%", exe))
 	}
-	cmd := exec.Command(p.binPath, args...)
+	// The agent's own CLI, asked apart from any session integrate is run in
+	// (session.ProbeCommand): one that does not know the subcommand starts
+	// up instead, and its hooks are no session's.
+	cmd := session.ProbeCommand(context.Background(), p.binPath, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
