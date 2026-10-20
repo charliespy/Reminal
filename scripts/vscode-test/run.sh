@@ -34,7 +34,7 @@ GOOS=linux GOARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
   && npx vsce package --no-dependencies -o "$OLDPWD/reminal.vsix" >/dev/null)
 cleanup() {
   docker exec "$NAME-ports" /home/coder/.local/bin/reminal stop 3000 >/dev/null 2>&1 || true
-  docker rm -f "$NAME-peer" "$NAME-ports" "$NAME-cancel" >/dev/null 2>&1 || true
+  docker rm -f "$NAME-peer" "$NAME-ports" "$NAME-cancel" "$NAME-open" >/dev/null 2>&1 || true
   [ "${KEEP:-}" = 1 ] || docker rm -f "$NAME" >/dev/null 2>&1 || true
   rm -f "$PWD/reminal" "$PWD/reminal.vsix"
 }
@@ -53,7 +53,7 @@ docker exec -d "$NAME" sh -c '~/.local/bin/reminal relay 18080 >/tmp/relay.log 2
 for _ in $(seq 30); do docker exec "$NAME" curl -fs http://127.0.0.1:8443/healthz >/dev/null 2>&1 && break; sleep 1; done
 
 browser() {
-  docker run --rm --network "container:${NET:-$NAME}" -e PASTE_CODE="${PASTE_CODE:-}" -e PASTE_CODE2="${PASTE_CODE2:-}" -e PORT_MARKER="${PORT_MARKER:-}" \
+  docker run --rm --network "container:${NET:-$NAME}" -e PASTE_CODE="${PASTE_CODE:-}" -e PASTE_CODE2="${PASTE_CODE2:-}" -e PORT_MARKER="${PORT_MARKER:-}" -e OPEN_ID="${OPEN_ID:-}" \
     -v "$PWD:/t" -w /tmp "$PW" sh -c \
     'npm i -s playwright@1.56.0 >/dev/null 2>&1 && cp /t/checks.mjs . && node checks.mjs "$@"' _ "$@"
 }
@@ -147,6 +147,32 @@ if docker exec "$NAME-cancel" pgrep -f "reminal paste" >/dev/null 2>&1; then
   echo "FAIL  a cancelled paste is still running"; fail=1
 else echo "PASS  a cancelled paste leaves nothing running"; fi
 docker rm -f "$NAME-cancel" >/dev/null 2>&1 || true
+
+# A reminal started outside the editor, in a container of its own so the
+# lists above stay as they are: the cloud list opens it, and its tab follows
+# its name.
+docker run -d --name "$NAME-open" "$NAME" >/dev/null
+for _ in $(seq 30); do docker exec "$NAME-open" curl -fs http://127.0.0.1:8443/healthz >/dev/null 2>&1 && break; sleep 1; done
+docker exec -d "$NAME-open" sh -c '~/.local/bin/reminal relay 18080 >/tmp/relay.log 2>&1'
+sleep 2
+docker exec -d "$NAME-open" sh -c 'cd /home/coder/demo-project/src && sleep infinity | script -qfc ~/.local/bin/reminal /dev/null'
+OPEN_ID=
+for _ in $(seq 30); do
+  OPEN_ID=$(docker exec "$NAME-open" sh -c '~/.local/bin/reminal info --all --json' 2>/dev/null | grep -o '"id":"[A-Z0-9]*"' | head -1 | cut -d'"' -f4)
+  [ -n "$OPEN_ID" ] && break; sleep 1
+done
+docker exec "$NAME-open" sh -c "~/.local/bin/reminal rename $OPEN_ID build-server" >/dev/null
+NET="$NAME-open" OPEN_ID=$OPEN_ID browser existing | tee out/existing.log || true
+grep -q '^FAIL' out/existing.log && fail=1
+grep -q '^DONE' out/existing.log || { echo "FAIL  the existing-session checks did not finish"; fail=1; }
+if [ "$(docker exec "$NAME-open" cat /tmp/open-pwd 2>/dev/null)" = /home/coder/demo-project/src ]; then
+  echo "PASS  what was typed in the opened tab ran in that session, in its own folder"
+else echo "FAIL  what was typed in the opened tab did not run in that session"; fail=1; fi
+if grep -q '^PASS  opening it gives a tab' out/existing.log \
+  && docker exec "$NAME-open" sh -c '~/.local/bin/reminal info --all --json' | grep -q "\"id\":\"$OPEN_ID\""; then
+  echo "PASS  closing its tab left the session running"
+else echo "FAIL  closing its tab ended the session"; fail=1; fi
+docker rm -f "$NAME-open" >/dev/null 2>&1 || true
 
 # A window reload, in a browser of its own (it closes the terminals above).
 browser revive | tee out/revive.log || true

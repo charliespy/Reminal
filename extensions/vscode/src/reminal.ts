@@ -326,3 +326,37 @@ export function validPort(v: string): number | undefined {
   const n = Number(t);
   return n >= 1 && n <= 65535 ? n : undefined;
 }
+
+// ---- sessions started elsewhere ----
+
+// attachArgs opens a session that is already running, by its exact id: the
+// arguments for a terminal that views it. undefined for an id that isn't one.
+export function attachArgs(id: string): string[] | undefined {
+  return /^[A-Za-z0-9]+$/.test(id) ? ["attach", id] : undefined;
+}
+
+// attachedId is the session a terminal opened with attachArgs views, read
+// back from its arguments (a window reload brings such a terminal back with
+// them), or undefined for any other terminal.
+export function attachedId(shellArgs: string[] | string | undefined): string | undefined {
+  if (!Array.isArray(shellArgs) || shellArgs.length !== 2 || shellArgs[0] !== "attach") return undefined;
+  return attachArgs(shellArgs[1]) ? shellArgs[1] : undefined;
+}
+
+// otherSessions are the shell sessions on this machine that no terminal in
+// this window shows, newest first, leaving out the one the editor itself was
+// started from.
+export function otherSessions(all: SessionInfo[], shown: Set<string>, self?: string): SessionInfo[] {
+  return all
+    .filter((s) => !isPort(s) && !shown.has(s.id) && s.id !== self)
+    .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+}
+
+// tabName is a session's name as a terminal tab shows it: one line, no
+// control or direction-changing characters, not too long. undefined for a
+// session with no name.
+export function tabName(name: string | undefined): string | undefined {
+  const t = (name ?? "").replace(/[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g, " ").replace(/\s+/g, " ").trim();
+  if (!t) return undefined;
+  return t.length > 60 ? `${t.slice(0, 60)}…` : t;
+}

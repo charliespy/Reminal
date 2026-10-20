@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- The cloud button's list shows the other reminals running on this machine,
+  and opens one in a terminal here. Closing that terminal leaves the session
+  running.
+- A reminal terminal's tab takes the session's name, and follows it when the
+  session is renamed.
+
 ## 0.2.0
 
 - reminal Copy and reminal Paste in the Explorer's right-click menu: copy a

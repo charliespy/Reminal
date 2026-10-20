@@ -7,6 +7,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  attachArgs,
+  attachedId,
+  otherSessions,
+  tabName,
   copyCodeOf,
   exposedOf,
   findReminal,
@@ -207,4 +211,36 @@ test("an already shared port and the links handed to the browser", () => {
   for (const bad of ["command:workbench.action.terminal.sendSequence", "file:///etc/passwd", "vscode://x", "", undefined]) {
     assert.ok(!isWebLink(bad), String(bad));
   }
+});
+
+test("attachArgs opens a session by its exact id, and nothing that isn't an id", () => {
+  assert.deepEqual(attachArgs("QFFN9H95"), ["attach", "QFFN9H95"]);
+  assert.equal(attachArgs("--all"), undefined);
+  assert.equal(attachArgs("QFF N9"), undefined);
+  assert.equal(attachArgs(""), undefined);
+});
+
+test("attachedId reads back the session a viewing terminal was opened on", () => {
+  assert.equal(attachedId(["attach", "ABC123"]), "ABC123");
+  assert.equal(attachedId(["version"]), undefined);
+  assert.equal(attachedId(["attach"]), undefined);
+  assert.equal(attachedId(["attach", "-x"]), undefined);
+  assert.equal(attachedId("attach ABC123"), undefined);
+  assert.equal(attachedId(undefined), undefined);
+});
+
+test("otherSessions: shells not shown here, newest first, without ports or the editor's own", () => {
+  const port = { ...s("PORT1", 9, "/p", 5000), kind: "port", port: 3000 };
+  const list = [s("OLD", 1, "/a", 1000), s("SHOWN", 2, "/b", 2000), s("NEW", 3, "/c", 3000), s("SELF", 4, "/d", 4000), port];
+  assert.deepEqual(otherSessions(list, new Set(["SHOWN"]), "SELF").map((x) => x.id), ["NEW", "OLD"]);
+  assert.deepEqual(otherSessions(list, new Set(), undefined).map((x) => x.id), ["SELF", "NEW", "SHOWN", "OLD"]);
+});
+
+test("tabName: one plain line, cut short, and nothing for no name", () => {
+  assert.equal(tabName("build server"), "build server");
+  assert.equal(tabName("  two\nlines\u202e  "), "two lines");
+  assert.equal(tabName("x".repeat(80)), "x".repeat(60) + "\u2026");
+  assert.equal(tabName(""), undefined);
+  assert.equal(tabName("   "), undefined);
+  assert.equal(tabName(undefined), undefined);
 });
