@@ -7,7 +7,9 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,5 +67,65 @@ func TestEnclosingNamesNoSessionInAProbe(t *testing.T) {
 	t.Setenv(HookProbeEnv, "1")
 	if got := Enclosing(); got != "" {
 		t.Fatalf("Enclosing inside a probe = %q, want none", got)
+	}
+}
+
+// A probe's session is recorded while it runs, and only then.
+func TestARunningProbesSessionIsRecorded(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("sessions read on Linux and macOS only")
+	}
+	t.Setenv("HOME", t.TempDir())
+	dir, err := probesDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Itself the leader of its own session: it says its pid, and what is
+	// recorded once it has had a moment to be.
+	out, err := RunProbe(ProbeCommand(context.Background(), "/bin/sh", "-c", `echo $$; sleep 0.3; ls "`+dir+`"`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Fields(string(out))
+	if len(lines) < 2 || lines[0] != lines[1] {
+		t.Fatalf("its session not recorded while it ran: %q", out)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("its record left behind: %v", entries)
+	}
+}
+
+// A record whose leader is another process now (its pid used again) refuses
+// nothing; one that is its leader's refuses a walk through its session.
+func TestEnclosingRefusesOnlyALiveProbesSession(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("sessions read on Linux and macOS only")
+	}
+	t.Setenv("HOME", t.TempDir())
+	if err := WriteActive(Active{ID: "ANCESTOR", PID: os.Getppid()}); err != nil {
+		t.Fatal(err)
+	}
+	sid := processSession(os.Getpid())
+	ident, ok := probeIdent(sid)
+	if sid <= 0 || !ok {
+		t.Skip("this test's session cannot be read")
+	}
+	dir, _ := probesDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rec := filepath.Join(dir, strconv.Itoa(sid))
+	if err := os.WriteFile(rec, []byte("1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := Enclosing(); got != "ANCESTOR" {
+		t.Fatalf("a record for a pid used again refused the walk: %q", got)
+	}
+	if err := os.WriteFile(rec, []byte(ident), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// This test's own session recorded as a probe's: the walk starts in it.
+	if got := Enclosing(); got != "" {
+		t.Fatalf("a walk in a running probe's session named %q", got)
 	}
 }

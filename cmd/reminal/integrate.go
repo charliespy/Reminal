@@ -172,7 +172,7 @@ func agentVersion(bin string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), agentVersionWait)
 	defer cancel()
 	// Apart from any session it is run in (session.ProbeCommand).
-	out, err := session.ProbeCommand(ctx, bin, "--version").Output()
+	out, err := session.RunProbe(session.ProbeCommand(ctx, bin, "--version"), false)
 	if err != nil {
 		return ""
 	}
@@ -726,8 +726,7 @@ func applyViaCLI(p planStep, exe string, remove bool) error {
 	// The agent's own CLI, asked apart from any session integrate is run in
 	// (session.ProbeCommand): one that does not know the subcommand starts
 	// up instead, and its hooks are no session's.
-	cmd := session.ProbeCommand(context.Background(), p.binPath, args...)
-	out, err := cmd.CombinedOutput()
+	out, err := session.RunProbe(session.ProbeCommand(context.Background(), p.binPath, args...), true)
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		low := strings.ToLower(msg)

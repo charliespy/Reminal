@@ -26,10 +26,12 @@ func init() {
 // its hooks fire (verbs, in order) with a conversation of its own — inside
 // the session by the process tree, since the session's reminal started it.
 // Nothing of it may be the session's: not its conversation, not one marked
-// written, not its hook state, not its agent's ready. scrub: the agent
-// starts its hooks with the probe's mark scrubbed from their environment, as
-// a harness may.
-func probeLeavesSessionAlone(t *testing.T, scrub bool, verbs ...string) {
+// written, not its hook state, not its agent's ready. scrub: how the agent
+// starts its hooks — with the probe's mark (markKept), with it scrubbed from
+// their environment as a harness may (markUnset), or its whole self started
+// again with an environment of nothing (`exec env -i`: markCleared), the
+// mark gone from every process from the probe's own down.
+func probeLeavesSessionAlone(t *testing.T, scrub markScrub, verbs ...string) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -46,15 +48,27 @@ func probeLeavesSessionAlone(t *testing.T, scrub bool, verbs ...string) {
 		t.Fatal(err)
 	}
 	env := ""
-	if scrub {
+	if scrub == markUnset {
 		env = "env -u " + session.HookProbeEnv + " "
 	}
-	agent := filepath.Join(t.TempDir(), "claude")
-	script := "#!/bin/sh\n[ \"$1\" = --version ] || exit 0\n"
+	dir := t.TempDir()
+	agent := filepath.Join(dir, "claude")
+	hooks := ""
 	for _, verb := range verbs {
-		script += "printf '{\"session_id\":\"" + phantom + "\",\"source\":\"resume\",\"hook_event_name\":\"Notification\",\"error\":\"rate_limit\"}' | HOOK_PROBE_TEST_ACT=hook " + env + "'" + bin + "' hook " + verb + "\n"
+		hooks += "printf '{\"session_id\":\"" + phantom + "\",\"source\":\"resume\",\"hook_event_name\":\"Notification\",\"error\":\"rate_limit\"}' | HOOK_PROBE_TEST_ACT=hook " + env + "'" + bin + "' hook " + verb + "\n"
 	}
-	script += "echo '2.1.77 (Claude Code)'\n"
+	hooks += "echo '2.1.77 (Claude Code)'\n"
+	script := "#!/bin/sh\n[ \"$1\" = --version ] || exit 0\n"
+	if scrub == markCleared {
+		// The same process, started again with nothing in its environment.
+		inner := filepath.Join(dir, "inner.sh")
+		if err := os.WriteFile(inner, []byte(hooks), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		script += "exec env -i HOME='" + home + "' PATH=\"$PATH\" /bin/sh '" + inner + "'\n"
+	} else {
+		script += hooks
+	}
 	if err := os.WriteFile(agent, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -75,26 +89,42 @@ func probeLeavesSessionAlone(t *testing.T, scrub bool, verbs ...string) {
 	}
 }
 
+// How a probe's agent starts its hooks (probeLeavesSessionAlone).
+type markScrub int
+
+const (
+	markKept markScrub = iota
+	markUnset
+	markCleared
+)
+
 func TestAnAgentsVersionProbeWritesNothingOfTheSessions(t *testing.T) {
-	probeLeavesSessionAlone(t, false, "ready")
+	probeLeavesSessionAlone(t, markKept, "ready")
 }
 
 func TestAnAgentsVersionProbeWritesNothingThoughItsHooksScrubTheMark(t *testing.T) {
-	probeLeavesSessionAlone(t, true, "ready")
+	probeLeavesSessionAlone(t, markUnset, "ready")
+}
+
+// Started again with an environment of nothing, the mark is in none of its
+// processes: its session, recorded while it runs, still says it is a probe.
+func TestAnAgentsVersionProbeWritesNothingThoughItClearsItsWholeEnvironment(t *testing.T) {
+	probeLeavesSessionAlone(t, markCleared, "done", "ready")
 }
 
 // The stand-in's own order: its turn's end, then its SessionStart. A session
 // still loading its resume, marked ready by that, was typed into while it
 // loaded: its ready state is left as it was (none yet).
 func TestAnAgentsVersionProbeLeavesTheSessionsReadyStateAlone(t *testing.T) {
-	probeLeavesSessionAlone(t, false, "done", "ready")
-	probeLeavesSessionAlone(t, true, "done", "ready")
+	probeLeavesSessionAlone(t, markKept, "done", "ready")
+	probeLeavesSessionAlone(t, markUnset, "done", "ready")
 }
 
 // Every verb a hook may be fired with, under the mark: none writes anything
 // of the session's.
 func TestAnAgentsVersionProbeFiresNoHookVerbForTheSession(t *testing.T) {
 	verbs := []string{"working", "input", "done", "failed", "notify", "subagent", "schedule", "ready"}
-	probeLeavesSessionAlone(t, false, verbs...)
-	probeLeavesSessionAlone(t, true, verbs...)
+	probeLeavesSessionAlone(t, markKept, verbs...)
+	probeLeavesSessionAlone(t, markUnset, verbs...)
+	probeLeavesSessionAlone(t, markCleared, verbs...)
 }

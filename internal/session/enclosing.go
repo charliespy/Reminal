@@ -23,8 +23,9 @@ const enclosingMaxDepth = 24
 //
 // Returns "" when this process is genuinely not inside a session — and when
 // it runs under a probe's mark (HookProbeEnv), its own or any process's it
-// meets on the way up before an agent: a program reminal only asks
-// something is in no session, though a session's reminal started it.
+// meets on the way up before an agent, or one it meets is in a running
+// probe's session (RunProbe): a program reminal only asks something is in no
+// session, though a session's reminal started it.
 func Enclosing() string {
 	if InProbe() {
 		return ""
@@ -39,6 +40,7 @@ func Enclosing() string {
 			agents[a.PID] = a.ID
 		}
 	}
+	probes, probing := probeSessions()
 	pid := os.Getpid()
 	for i := 0; i < enclosingMaxDepth && pid > 1; i++ {
 		if id, ok := agents[pid]; ok {
@@ -46,6 +48,9 @@ func Enclosing() string {
 		}
 		if probeMarked(pid) {
 			return "" // started under a probe's mark, or by one
+		}
+		if sid := processSession(pid); probing[sid] && probeRecordLive(probes, sid) {
+			return "" // in a running probe's session, its mark scrubbed or not
 		}
 		next := parentPID(pid)
 		if next == pid || next <= 0 {
