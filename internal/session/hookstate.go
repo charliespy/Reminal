@@ -32,6 +32,11 @@ type HookState struct {
 	// (internal/client/harnesslimit.go). Zero from a reminal too old to
 	// keep it.
 	TurnAt time.Time `json:"turn_at,omitzero"`
+	// Failure is the error its harness said ended its last turn — Claude
+	// Code's StopFailure, which fires instead of Stop when an API error
+	// ended the turn: "rate_limit", "authentication_failed", … With State
+	// "done" (the turn did end); "" for a turn that ended as it should.
+	Failure string `json:"failure,omitempty"`
 }
 
 // Background is how many shells and subagents a harness still has running in
@@ -65,10 +70,20 @@ func WriteHookState(id, state string) error {
 	return WriteHookStateWith(id, state, nil)
 }
 
+// WriteHookStateFailed records that the session's turn ended on an error
+// its harness named (failure): "done", the turn's start kept.
+func WriteHookStateFailed(id, failure string) error {
+	return writeHookStateAs(id, "done", nil, failure)
+}
+
 // WriteHookStateWith records the agent-reported attention state for a
 // session, with the background work it said it still has (nil: it said
 // nothing about that).
 func WriteHookStateWith(id, state string, bg *Background) error {
+	return writeHookStateAs(id, state, bg, "")
+}
+
+func writeHookStateAs(id, state string, bg *Background, failure string) error {
 	// Under the record's lock, so it never lands between another hook's
 	// reading the record and writing it back (UpdateHookBackground) to be
 	// overwritten by the older state. A turn's state must land: if the lock
@@ -76,7 +91,7 @@ func WriteHookStateWith(id, state string, bg *Background) error {
 	if unlock, err := lockHookState(id); err == nil {
 		defer unlock()
 	}
-	hs := HookState{State: state, TS: time.Now(), Background: bg}
+	hs := HookState{State: state, TS: time.Now(), Background: bg, Failure: failure}
 	if state == "working" {
 		hs.TurnAt = hs.TS
 	} else if prev := ReadHookStateAnyAge(id); prev != nil {

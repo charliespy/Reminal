@@ -36,6 +36,7 @@ var limitScreens = []struct {
 	{"claude", "  ⎿  You're out of usage credits · resets 5pm (America/Los_Angeles)\n❯ ", limitLA(2026, 10, 19, 17, 0)},
 	{"claude", "  ⎿  Usage limit reached · limit resets 4pm\n❯ ", limitLA(2026, 10, 19, 16, 0)},
 	{"claude", "  ⎿  You've hit your org's monthly spend limit\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You've hit your session limit · resets 3pm\n     (America/Los_Angeles)\n❯ ", limitLA(2026, 10, 19, 15, 0)},
 	{"codex", "■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit\nhttps://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.\n\n› ", limitLA(2026, 10, 19, 15, 5)},
 	{"codex", "■ You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 21st, 2026 3:05 PM.\n› ", limitLA(2026, 10, 21, 15, 5)},
 	{"codex", "■ You’ve hit your usage limit. To get more access now, send a request to your admin or try again later.\n› ", time.Time{}},
@@ -88,9 +89,19 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		{"claude", "> You've hit your session limit · resets 3pm", "a person's message, echoed"},
 		{"claude", "│ > You've hit your usage limit · resets 3pm │", "in the input box"},
 		{"claude", "● The report said \"You've hit your session limit · resets 3pm\", so I waited.", "quoted in an answer"},
-		{"claude", "● When a seat shows Usage limit reached, reminal reports it as limited.", "discussed mid-sentence"},
+		{"claude", "● When a session shows Usage limit reached, reminal reports it as limited.", "discussed mid-sentence"},
 		{"claude", "  ⎿  You've used 90% of your session limit · resets 3pm (America/Los_Angeles)", "a warning, not the limit"},
 		{"claude", "  ⎿  Approaching session limit · resets 3pm", "a warning, not the limit"},
+		// Rows that start with a notice's words and go on, or quote it
+		// (review).
+		{"claude", "● \"You've hit your session limit · resets 3pm\" is what Claude shows when it stops.", "quoted at a row's start"},
+		{"claude", "  You've hit your session limit · resets 3pm — the agent now waits.", "a changelog's line"},
+		{"claude", "  you've hit your limit · resets 4pm is all it answers.", "wrapped prose"},
+		{"claude", "  ⎿  \"Usage limit reached · resets 4pm\",", "a test's string, in a tool's output"},
+		{"claude", "● You've hit your session limit · resets 3pm, and the next window\n  opens then.", "a sentence that wraps on"},
+		{"claude", "  - You've hit your session limit · resets 3pm", "a list item"},
+		{"claude", "  ## You've hit your session limit", "a heading"},
+		{"claude", "  | You've hit your session limit · resets 3pm |", "a table cell"},
 		{"codex", "› You’ve hit your usage limit. Try again at 3:05 PM.", "typed at Codex's prompt"},
 		{"codex", "• Codex prints “You’ve hit your usage limit” when the plan runs out.", "an answer about it"},
 		{"gemini", "│ > Usage limit reached for gemini-2.5-pro. │", "typed at Gemini's prompt"},
@@ -121,10 +132,10 @@ func TestHarnessLimitState(t *testing.T) {
 	harnessNow = func() time.Time { return now }
 	screen := limitScreens[0].screen
 	a := &Agent{}
-	if a.noteHarnessLimit(screen, "claude", false, time.Time{}) {
+	if a.noteHarnessLimit(screen, "claude", false, time.Time{}, time.Time{}, "") {
 		t.Fatal("one glimpse counted")
 	}
-	if !a.noteHarnessLimit(screen, "claude", false, time.Time{}) {
+	if !a.noteHarnessLimit(screen, "claude", false, time.Time{}, time.Time{}, "") {
 		t.Fatal("seen twice, not limited")
 	}
 	if l, at := a.harnessLimitedNow(); !l || !at.Equal(limitLA(2026, 10, 19, 15, 0)) {
@@ -138,35 +149,36 @@ func TestHarnessLimitState(t *testing.T) {
 		t.Fatalf("record resets_at %v", r.ResetsAt)
 	}
 	// At work: over at once.
-	if !a.noteHarnessLimit(screen, "claude", true, time.Time{}) {
+	if !a.noteHarnessLimit(screen, "claude", true, time.Time{}, time.Time{}, "") {
 		t.Fatal("at work and still limited")
 	}
 	if l, at := a.harnessLimitedNow(); l || !at.IsZero() {
 		t.Fatalf("after work: limited=%v resets %v", l, at)
 	}
 	// The notice it had is from before it worked: not news.
-	a.noteHarnessLimit(screen, "claude", false, time.Time{})
-	a.noteHarnessLimit(screen, "claude", false, time.Time{})
+	a.noteHarnessLimit(screen, "claude", false, time.Time{}, time.Time{}, "")
+	a.noteHarnessLimit(screen, "claude", false, time.Time{}, time.Time{}, "")
 	if l, _ := a.harnessLimitedNow(); l {
 		t.Fatal("the notice from before it worked read as the limit again")
 	}
 	// A new one under it: limited again. Then both scroll away: over after
 	// harnessUpFor.
-	a.noteHarnessLimit(screen+"\n"+screen, "claude", false, time.Time{})
-	a.noteHarnessLimit(screen+"\n"+screen, "claude", false, time.Time{})
-	a.noteHarnessLimit("❯ ", "claude", false, time.Time{})
+	a.noteHarnessLimit(screen+"\n"+screen, "claude", false, time.Time{}, time.Time{}, "")
+	a.noteHarnessLimit(screen+"\n"+screen, "claude", false, time.Time{}, time.Time{}, "")
+	a.noteHarnessLimit("❯ ", "claude", false, time.Time{}, time.Time{}, "")
 	if l, _ := a.harnessLimitedNow(); !l {
 		t.Fatal("one read without it cleared it")
 	}
 	now = now.Add(harnessUpFor)
-	if !a.noteHarnessLimit("❯ ", "claude", false, time.Time{}) {
+	if !a.noteHarnessLimit("❯ ", "claude", false, time.Time{}, time.Time{}, "") {
 		t.Fatal("gone for harnessUpFor, still limited")
 	}
 }
 
-// A turn begun after the limit was found ends it, though its notice is still
-// in the conversation above; the harness turning that turn away too adds a
-// notice of its own, and that is the limit again.
+// A turn begun after the limit was found ends it once answered with no
+// notice of its own, though its notice is still in the conversation above;
+// the harness turning that turn away adds a notice of its own, and the lapse
+// holds.
 func TestHarnessLimitEndsWithATurn(t *testing.T) {
 	if limitTestNow.IsZero() {
 		t.Skip("no zone data")
@@ -177,8 +189,8 @@ func TestHarnessLimitEndsWithATurn(t *testing.T) {
 	notice := "  ⎿  You've hit your session limit · resets 3pm (America/Los_Angeles)"
 	a := &Agent{}
 	turn := now.Add(-time.Minute) // the turn the harness turned away
-	a.noteHarnessLimit(notice+"\n❯ ", "claude", false, turn)
-	a.noteHarnessLimit(notice+"\n❯ ", "claude", false, turn)
+	a.noteHarnessLimit(notice+"\n❯ ", "", false, turn, turn, "")
+	a.noteHarnessLimit(notice+"\n❯ ", "", false, turn, turn, "")
 	if l, _ := a.harnessLimitedNow(); !l {
 		t.Fatal("not limited")
 	}
@@ -186,12 +198,25 @@ func TestHarnessLimitEndsWithATurn(t *testing.T) {
 	now = now.Add(5 * time.Hour)
 	turn = now
 	answered := notice + "\n❯ continue\n● Picking up where I left off.\n❯ "
-	if !a.noteHarnessLimit(answered, "claude", false, turn) {
-		t.Fatal("a turn began and it is still limited")
+	if a.noteHarnessLimit(answered, "", false, turn, time.Time{}, "") {
+		t.Fatal("a turn begun, not answered yet, ended the limit")
+	}
+	now = now.Add(time.Second)
+	end := now
+	a.noteHarnessLimit(answered, "", false, turn, end, "")
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("over the moment its turn ended: its notice may be a read behind")
+	}
+	if got := a.harnessLimitReadAt(); !got.Equal(end.Add(harnessUpFor)) {
+		t.Fatalf("read again at %v, want %v", got, end.Add(harnessUpFor))
+	}
+	now = end.Add(harnessUpFor)
+	if !a.noteHarnessLimit(answered, "", false, turn, end, "") {
+		t.Fatal("answered with no notice of its own, still limited")
 	}
 	for i := 0; i < 3; i++ {
 		now = now.Add(time.Second)
-		a.noteHarnessLimit(answered, "claude", false, turn)
+		a.noteHarnessLimit(answered, "", false, turn, end, "")
 	}
 	if l, _ := a.harnessLimitedNow(); l {
 		t.Fatal("the old notice, still on screen, read as the limit again")
@@ -200,11 +225,316 @@ func TestHarnessLimitEndsWithATurn(t *testing.T) {
 	turn = now
 	again := answered + "\n❯ go on\n" + notice + "\n❯ "
 	now = now.Add(time.Second)
-	a.noteHarnessLimit(again, "claude", false, turn)
+	a.noteHarnessLimit(again, "", false, turn, now, "")
 	now = now.Add(time.Second)
-	a.noteHarnessLimit(again, "claude", false, turn)
+	a.noteHarnessLimit(again, "", false, turn, now.Add(-time.Second), "")
 	if l, _ := a.harnessLimitedNow(); !l {
 		t.Fatal("a new notice under the old one not read as the limit")
+	}
+}
+
+// A "continue" its harness turns away is the same lapse: limited throughout,
+// its reset time the same (or the new one it says), never a change (review:
+// a refused turn read as the lapse's end).
+func TestHarnessLimitRefusedTurnHoldsTheLapse(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	now := limitLA(2026, 10, 19, 13, 0)
+	defer func() { harnessNow = time.Now }()
+	harnessNow = func() time.Time { return now }
+	notice := "  ⎿  You've hit your session limit · resets 3pm (America/Los_Angeles)"
+	a := &Agent{}
+	turn := now.Add(-5 * time.Second)
+	a.noteHarnessLimit(notice+"\n❯ ", "claude", false, turn, now, "")
+	a.noteHarnessLimit(notice+"\n❯ ", "claude", false, turn, now, "")
+	want := limitLA(2026, 10, 19, 15, 0)
+	if l, at := a.harnessLimitedNow(); !l || !at.Equal(want) {
+		t.Fatalf("limited=%v resets %v", l, at)
+	}
+	// 15:01, "continue", turned away with the same words.
+	now = limitLA(2026, 10, 19, 15, 1)
+	turn = now
+	screen := notice + "\n❯ continue\n" + notice + "\n❯ "
+	for i := 0; i < 6; i++ {
+		if a.noteHarnessLimit(screen, "claude", false, turn, turn.Add(time.Second), "rate_limit") {
+			t.Fatalf("read %d: a refused turn changed the state", i)
+		}
+		now = now.Add(time.Second)
+	}
+	if l, at := a.harnessLimitedNow(); !l || !at.Equal(want) {
+		t.Fatalf("after a refused turn: limited=%v resets %v, want %v", l, at, want)
+	}
+	// Turned away again, now with a new time: that is the reset now.
+	turn = now
+	screen += "\n❯ continue\n  ⎿  You've hit your session limit · resets 8pm (America/Los_Angeles)\n❯ "
+	a.noteHarnessLimit(screen, "claude", false, turn, turn.Add(time.Second), "rate_limit")
+	if l, at := a.harnessLimitedNow(); !l || !at.Equal(limitLA(2026, 10, 19, 20, 0)) {
+		t.Fatalf("a new time: limited=%v resets %v", l, at)
+	}
+}
+
+// Refused again and again: the rows read hold a few notices at most, and
+// once full, one more pushes the oldest out — the count stays the same. The
+// newest still answers the last message: the lapse holds. And once over, a
+// new lapse on that full screen is seen (review).
+func TestHarnessLimitHoldsOnAScreenFullOfNotices(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	now := limitLA(2026, 10, 19, 13, 0)
+	defer func() { harnessNow = time.Now }()
+	harnessNow = func() time.Time { return now }
+	notice := "  ⎿  You've hit your session limit · resets 3pm (America/Los_Angeles)"
+	box := "\n────\n❯ \n────\n  ⏵⏵ auto mode on"
+	conv := "❯ do the work\n" + notice
+	a := &Agent{}
+	read := func(turn, end time.Time) bool {
+		return a.noteHarnessLimit(harnessTail(conv+box, harnessRows), "", false, turn, end, "")
+	}
+	turn := now.Add(-2 * time.Second)
+	read(turn, turn.Add(time.Second))
+	read(turn, turn.Add(time.Second))
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("not limited")
+	}
+	for i := 1; i <= 8; i++ {
+		now = now.Add(time.Minute)
+		turn = now
+		conv += "\n❯ continue\n" + notice
+		read(turn, time.Time{})
+		now = now.Add(time.Second)
+		end := now
+		read(turn, end)
+		now = now.Add(harnessUpFor)
+		read(turn, end)
+		if l, _ := a.harnessLimitedNow(); !l {
+			t.Fatalf("refusal %d: read as no longer limited", i)
+		}
+	}
+	// Taken at last: answered with no notice — over.
+	now = now.Add(time.Minute)
+	turn = now
+	conv += "\n❯ continue\n● Picking up where I left off."
+	read(turn, time.Time{})
+	now = now.Add(time.Second)
+	end := now
+	read(turn, end)
+	now = now.Add(harnessUpFor)
+	read(turn, end)
+	if l, _ := a.harnessLimitedNow(); l {
+		t.Fatal("answered with no notice, still limited")
+	}
+	// At its limit again, on a screen whose count cannot grow.
+	now = now.Add(time.Minute)
+	turn = now
+	conv += "\n❯ and the next part\n" + notice
+	read(turn, turn.Add(time.Second))
+	now = now.Add(time.Second)
+	read(turn, turn.Add(time.Second))
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("a new lapse on a screen full of notices not seen")
+	}
+}
+
+// A refused message longer than the rows read: its echo (its one row at the
+// prompt's mark) scrolled above them. Its notice, the last thing above the
+// input box, still answers it: the lapse holds. A person's draft of many rows
+// in the box is no echo either (review).
+func TestHarnessLimitHoldsPastALongMessageAndADraft(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	now := limitLA(2026, 10, 19, 13, 0)
+	defer func() { harnessNow = time.Now }()
+	harnessNow = func() time.Time { return now }
+	notice := "  ⎿  You've hit your session limit · resets 3pm (America/Los_Angeles)"
+	box := func(draft ...string) string {
+		rule := strings.Repeat("─", 40)
+		b := "\n✻ Churned for 0s\n" + rule + "\n❯ "
+		if len(draft) > 0 {
+			b += draft[0]
+			for _, d := range draft[1:] {
+				b += "\n  " + d
+			}
+		}
+		return b + "\n" + rule + "\n  ⏵⏵ auto mode on"
+	}
+	conv := "❯ do the work\n" + notice
+	a := &Agent{}
+	read := func(tail string, turn, end time.Time) {
+		a.noteHarnessLimit(harnessTail(conv+tail, harnessRows), "", false, turn, end, "")
+	}
+	turn := now.Add(-2 * time.Second)
+	read(box(), turn, turn.Add(time.Second))
+	read(box(), turn, turn.Add(time.Second))
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("not limited")
+	}
+	// A message of nine rows, turned away.
+	now = now.Add(time.Minute)
+	turn = now
+	conv += "\n❯ here is the whole plan:"
+	for i := 1; i <= 8; i++ {
+		conv += "\n  step " + string(rune('0'+i)) + " of the plan"
+	}
+	conv += "\n" + notice
+	read(box(), turn, time.Time{})
+	now = now.Add(time.Second)
+	end := now
+	read(box(), turn, end)
+	now = now.Add(harnessUpFor)
+	read(box(), turn, end)
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("a long message turned away read as taken: its echo scrolled out of the rows read")
+	}
+	// Turned away again, and a person's draft of two rows left in the box.
+	now = now.Add(time.Minute)
+	turn = now
+	conv += "\n❯ continue\n" + notice
+	draft := box("first line of mine", "second line of mine")
+	read(draft, turn, time.Time{})
+	now = now.Add(time.Second)
+	end = now
+	read(draft, turn, end)
+	now = now.Add(harnessUpFor)
+	read(draft, turn, end)
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("a person's draft in the box read as a message answered")
+	}
+	for i := 0; i < 12; i++ {
+		now = now.Add(time.Second)
+		read(draft, time.Time{}, end)
+	}
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("a person's draft in the box, read on, ended the lapse")
+	}
+	// A long message taken: the agent's work under it, no notice in view.
+	now = now.Add(time.Minute)
+	turn = now
+	conv += "\n❯ here is the whole plan again:"
+	for i := 1; i <= 8; i++ {
+		conv += "\n  step " + string(rune('0'+i)) + " of the plan"
+	}
+	conv += "\n● On it.\n  ⎿  Read 3 files"
+	read(box(), turn, time.Time{})
+	now = now.Add(time.Second)
+	end = now
+	read(box(), turn, end)
+	now = now.Add(harnessUpFor)
+	read(box(), turn, end)
+	if l, _ := a.harnessLimitedNow(); l {
+		t.Fatal("a long message taken, still limited")
+	}
+}
+
+// Claude Code says how its turn ended: StopFailure ("rate_limit") in Stop's
+// place for one its limit turned away, Stop for one answered. That record is
+// read, not the screen (review): a refusal holds however the
+// screen looks — a long message, a screen full of notices, a draft — and a
+// Stop ends the lapse at once.
+func TestHarnessLimitTurnsAreReadFromClaudesHook(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	now := limitLA(2026, 10, 19, 13, 0)
+	defer func() { harnessNow = time.Now }()
+	harnessNow = func() time.Time { return now }
+	notice := "  ⎿  You've hit your session limit · resets 3pm (America/Los_Angeles)"
+	a := &Agent{}
+	turn := now.Add(-2 * time.Second)
+	screen := notice + "\n❯ "
+	a.noteHarnessLimit(screen, "claude", false, turn, turn.Add(time.Second), "rate_limit")
+	a.noteHarnessLimit(screen, "claude", false, turn, turn.Add(time.Second), "rate_limit")
+	if l, _ := a.harnessLimitedNow(); !l {
+		t.Fatal("not limited")
+	}
+	// Turned away, and the screen shows nothing new it can count or place
+	// (the same rows: its long message and its notice scrolled alike).
+	for i := 1; i <= 4; i++ {
+		now = now.Add(time.Minute)
+		turn = now
+		a.noteHarnessLimit(screen, "claude", false, turn, time.Time{}, "")
+		now = now.Add(time.Second)
+		a.noteHarnessLimit(screen, "claude", false, turn, now, "rate_limit")
+		now = now.Add(harnessUpFor)
+		a.noteHarnessLimit(screen, "claude", false, turn, now.Add(-harnessUpFor), "rate_limit")
+		if l, _ := a.harnessLimitedNow(); !l {
+			t.Fatalf("refusal %d, its hook saying so: read as no longer limited", i)
+		}
+	}
+	// Answered: Stop, its notice still the last thing above its box. Over
+	// at once.
+	now = now.Add(time.Minute)
+	turn = now
+	a.noteHarnessLimit(screen, "claude", false, turn, time.Time{}, "")
+	now = now.Add(time.Second)
+	if !a.noteHarnessLimit(screen, "claude", false, turn, now, "") {
+		t.Fatal("a turn its hook says ended with Stop: still limited")
+	}
+	if l, _ := a.harnessLimitedNow(); l {
+		t.Fatal("still limited")
+	}
+}
+
+// "resets 3pm" read again after 3pm — a resize, any output, the read before
+// the press — is the same 3pm, not tomorrow's (review).
+// And a reminal started again after it, the notice still on the screen,
+// reads it as its hook says the turn it answered ended, not now.
+func TestHarnessLimitTimeReadOnceALapse(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	now := limitLA(2026, 10, 19, 13, 0)
+	defer func() { harnessNow = time.Now }()
+	harnessNow = func() time.Time { return now }
+	screen := "  ⎿  You've hit your session limit · resets 3pm (America/Los_Angeles)\n❯ "
+	want := limitLA(2026, 10, 19, 15, 0)
+	a := &Agent{}
+	a.noteHarnessLimit(screen, "claude", false, time.Time{}, time.Time{}, "")
+	a.noteHarnessLimit(screen, "claude", false, time.Time{}, time.Time{}, "")
+	now = limitLA(2026, 10, 19, 15, 0).Add(20 * time.Second)
+	if a.noteHarnessLimit(screen, "claude", false, time.Time{}, time.Time{}, "") {
+		t.Fatal("read again after its time: changed")
+	}
+	if _, at := a.harnessLimitedNow(); !at.Equal(want) {
+		t.Fatalf("read again after its time: resets %v, want %v", at, want)
+	}
+	// Started again at 15:30; the turn the notice answered ended at 12:59.
+	b := &Agent{}
+	now = limitLA(2026, 10, 19, 15, 30)
+	ended := limitLA(2026, 10, 19, 12, 59)
+	b.noteHarnessLimit(screen, "claude", false, ended.Add(-3*time.Second), ended, "")
+	b.noteHarnessLimit(screen, "claude", false, ended.Add(-3*time.Second), ended, "")
+	if l, at := b.harnessLimitedNow(); !l || !at.Equal(want) {
+		t.Fatalf("after a restart: limited=%v resets %v, want %v", l, at, want)
+	}
+	// No hook to say: read against now, as before.
+	c := &Agent{}
+	c.noteHarnessLimit(screen, "claude", false, time.Time{}, time.Time{}, "")
+	c.noteHarnessLimit(screen, "claude", false, time.Time{}, time.Time{}, "")
+	if _, at := c.harnessLimitedNow(); !at.Equal(want.AddDate(0, 0, 1)) {
+		t.Fatalf("no hook: resets %v", at)
+	}
+}
+
+// Times no notice means.
+func TestHarnessLimitTimesNotTaken(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	for _, row := range []string{
+		"resetsoct32,3pm",
+		"resetsfeb30,1pm",
+		"resets3pm(mars/olympus)",
+		"tryagainin99999days",
+	} {
+		if at := parseLimitReset(row, limitTestNow); !at.IsZero() {
+			t.Errorf("%q read as %v", row, at)
+		}
+	}
+	if at := parseLimitReset("tryagainin30days", limitTestNow); !at.Equal(limitTestNow.Add(30 * 24 * time.Hour)) {
+		t.Errorf("a month's wait read as %v", at)
 	}
 }
 

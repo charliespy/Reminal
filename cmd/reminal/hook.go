@@ -32,7 +32,7 @@ import (
 func runHook(args []string) error {
 	if len(args) < 1 {
 		_, _ = io.Copy(io.Discard, os.Stdin) // don't leave the harness pipe blocked
-		return fmt.Errorf("usage: reminal hook <working|input|done|notify|subagent|ready>")
+		return fmt.Errorf("usage: reminal hook <working|input|done|failed|notify|subagent|ready>")
 	}
 	arg := strings.ToLower(strings.TrimSpace(args[0]))
 
@@ -50,7 +50,7 @@ func runHook(args []string) error {
 		id = strings.ToUpper(session.Enclosing())
 	}
 
-	var state string
+	var state, failure string
 	var bg *session.Background // what it still has running in the background, if it said
 	switch arg {
 	case "working", "input", "done":
@@ -68,6 +68,13 @@ func runHook(args []string) error {
 			hookDebugBackground(id, arg, bg)
 		}
 		state = arg
+	case "failed":
+		// Its turn ended on an API error (Claude Code's StopFailure, which
+		// fires instead of Stop): done, and what ended it — a usage limit's
+		// refusal ("rate_limit") is no turn taken (internal/client/
+		// harnesslimit.go).
+		failure = hookFailure(readCappedStdin())
+		state = "done"
 	case "ready":
 		// The harness is up and reading its input (Claude Code's
 		// SessionStart). Not a turn's state: kept apart from it.
@@ -101,16 +108,19 @@ func runHook(args []string) error {
 		state = classifyNotify(readCappedStdin(), id)
 	default:
 		go func() { _, _ = io.Copy(io.Discard, os.Stdin) }()
-		return fmt.Errorf("unknown state %q (want working|input|done|notify|subagent|ready)", arg)
+		return fmt.Errorf("unknown state %q (want working|input|done|failed|notify|subagent|ready)", arg)
 	}
 
 	if id == "" {
 		return nil
 	}
 	var err error
-	if arg == "subagent" {
+	switch {
+	case arg == "subagent":
 		err = session.UpdateHookBackground(id, bg)
-	} else {
+	case arg == "failed":
+		err = session.WriteHookStateFailed(id, failure)
+	default:
 		err = session.WriteHookStateWith(id, state, bg)
 	}
 	if err != nil {
@@ -123,6 +133,20 @@ func runHook(args []string) error {
 		_, _ = sendControl(rec.PID, "attn", hookNudgeWait)
 	}
 	return nil
+}
+
+// hookFailure is the error a StopFailure payload names, as a short word
+// ("rate_limit"); "unknown" when it names none or one not read as a word.
+func hookFailure(payload []byte) string {
+	var p struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(payload, &p)
+	e := strings.ToLower(strings.TrimSpace(p.Error))
+	if e == "" || len(e) > 40 || strings.TrimLeft(e, "abcdefghijklmnopqrstuvwxyz_") != "" {
+		return "unknown"
+	}
+	return e
 }
 
 // hookNudgeWait caps telling the agent: a local socket answers at once, and a

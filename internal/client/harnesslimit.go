@@ -34,15 +34,37 @@ const harnessLimited = "limited"
 // notices are read: Claude Code draws its spaces as cursor movements).
 type limitNotice struct {
 	re *regexp.Regexp
+	// whole: the notice is its row's to its end — what follows its words is
+	// only when it resets, nothing more — read with the rows it wraps onto.
+	// A sentence that starts with its words and goes on is an agent's own
+	// (review): "You've hit your session limit · resets 3pm — the agent
+	// now waits."
+	whole bool
 }
 
 func notices(res ...string) []limitNotice {
 	out := make([]limitNotice, len(res))
 	for i, r := range res {
-		out[i] = limitNotice{regexp.MustCompile("^(?:" + r + ")")}
+		out[i] = limitNotice{re: regexp.MustCompile("^(?:" + r + ")")}
 	}
 	return out
 }
+
+// wholeNotices are notices read as whole rows: each's words, then perhaps
+// when it resets ("· resets 3pm (America/Los_Angeles)", "resets at 1:30pm")
+// and "· progress saved", then the row's end.
+func wholeNotices(res ...string) []limitNotice {
+	end := `(?:·?(?:limit)?resets?(?:at)?` + limitWhen + `)?(?:·progresssaved)?\.?$`
+	out := make([]limitNotice, len(res))
+	for i, r := range res {
+		out[i] = limitNotice{re: regexp.MustCompile("^(?:" + r + ")" + end), whole: true}
+	}
+	return out
+}
+
+// limitWhen is a reset time as a notice writes it, flattened: perhaps a date
+// ("oct21,"), a clock time, perhaps a zone.
+const limitWhen = `(?:on)?(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\d{1,2}(?:st|nd|rd|th)?,?(?:\d{4})?(?:at)?)?\d{1,2}(?::\d{2})?(?:am|pm)?(?:\([a-z0-9_+\-/]+\)|utc|gmt|[pmce][sd]t|bst|cet|cest)?`
 
 // harnessLimitNotices are, by CLI, the rows that say it is at its limit —
 // its own words, matched from the row's start (after the glyphs it draws
@@ -56,14 +78,16 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// Claude Code 2.1.303: "You've hit your session limit · resets 3pm
 	// (America/Los_Angeles)" — session, weekly, Opus, Sonnet, usage credit,
 	// monthly spend, fast; "· progress saved" after it. Its team's or org's
-	// budget, credits run out, and the plain headings.
-	"claude": notices(
-		`you.?vehityour(session|weekly|opus|sonnet|fable|usagecredit|usage|monthlyspend|fast)?limit`,
-		`you.?vehityour(team|org).?s(shared|monthly)`,
+	// budget, credits run out, and the plain headings. Whole rows: what is
+	// read here may be acted on, so a sentence that only starts with them is
+	// never one.
+	"claude": wholeNotices(
+		`you.?vehityour(?:session|weekly|opus|sonnet|fable|usagecredit|usage|monthlyspend|fast)?limit`,
+		`you.?vehityour(?:team|org).?s(?:shared|monthly)[a-z]{0,16}(?:limit|budget)`,
 		`you.?reoutofusagecredits`,
-		`yourorgisoutofusage`,
-		`usagelimitreached($|·)`,
-		`paused·usagelimitresetsat`,
+		`yourorgisoutofusage(?:credits)?`,
+		`usagelimitreached`,
+		`paused·usagelimit`,
 		`fastlimitreachedandtemporarilydisabled`,
 		`goalpaused·usagelimitreached`,
 	),
@@ -122,23 +146,38 @@ var harnessLimitNotices = map[string][]limitNotice{
 // text, never the harness's notice.
 const limitPromptGlyphs = ">›❯"
 
+// limitQuoteGlyphs open a quote: a row that starts with one quotes a notice
+// (an agent's answer, a test's string), never is one.
+const limitQuoteGlyphs = "\"'`“”‘’«"
+
+// limitProseGlyphs open a list item, a heading or a table cell: an agent's
+// own text, never a notice (review).
+const limitProseGlyphs = "-*#|"
+
 // harnessLimitIn reports whether the bottom of a screen has the CLI here
 // saying it is at its limit, and when that resets (zero when it does not
 // say, or the time cannot be read). prog is the program running here; ""
 // when not known, and then every CLI's notices count.
 func harnessLimitIn(tail, prog string, now time.Time) (bool, time.Time) {
-	n, at := harnessLimitNoticesIn(tail, prog, now)
+	n, at, _ := harnessLimitNoticesIn(tail, prog, now)
 	return n > 0, at
 }
 
 // harnessLimitNoticesIn is harnessLimitIn with how many notices the screen
-// shows: a notice from before the agent worked again stays in its
-// conversation, and only one more than those is news.
-func harnessLimitNoticesIn(tail, prog string, now time.Time) (int, time.Time) {
+// shows — a notice from before the agent worked again stays in its
+// conversation, and only one more than those is news — and whether the
+// lowest of them answers the last message the screen shows: it is below
+// that message's echo. Counted, a screen full of notices reads the same
+// after one more (the rows read are few: the oldest goes as the newest
+// comes); placed, the newest answers the last message (review). False with
+// no echo on the screen: a harness that echoes
+// none, or one scrolled away.
+func harnessLimitNoticesIn(tail, prog string, now time.Time) (int, time.Time, bool) {
 	if !isAgentProgram(prog) {
 		prog = ""
 	}
 	count, at := 0, time.Time{}
+	lowestNotice, lowestEcho, noticeRows := -1, -1, 0
 	rows := strings.Split(tail, "\n")
 	for i, row := range rows {
 		flat := strings.ToLower(strings.Join(strings.Fields(row), ""))
@@ -150,47 +189,141 @@ func harnessLimitNoticesIn(tail, prog string, now time.Time) (int, time.Time) {
 			continue
 		}
 		if strings.ContainsAny(flat[:lead], limitPromptGlyphs) {
-			continue // a person's text, at the prompt or echoed
+			// A person's text, at the prompt or echoed. An echo is a message
+			// the agent was sent; its input box (the rule right under it, or
+			// nothing: the cursor's row) is not one.
+			if limitEchoRow(rows[i+1:]) {
+				lowestEcho = i
+			}
+			continue
+		}
+		if strings.ContainsAny(flat[:lead], limitQuoteGlyphs) {
+			continue // quoted
+		}
+		if strings.ContainsAny(flat[:lead], limitProseGlyphs) {
+			continue // a list, a heading, a table
 		}
 		core := flat[lead:]
-		if !limitRowIn(core, prog) {
+		// A long notice wraps, and Gemini CLI says the time on a row of its
+		// own: the two rows below it are read with it.
+		var more []string
+		for _, next := range rows[i+1 : min(i+3, len(rows))] {
+			more = append(more, strings.ToLower(strings.Join(strings.Fields(next), "")))
+		}
+		ok, used := limitRowIn(core, more, prog)
+		if !ok {
 			continue
 		}
 		// The lowest notice is the latest: its reset time is the one that
-		// stands. A long one wraps, and Gemini CLI says the time on a row
-		// of its own: the two rows below it are read with it.
+		// stands.
 		count++
-		said := core
-		for _, next := range rows[i+1 : min(i+3, len(rows))] {
-			said += strings.ToLower(strings.Join(strings.Fields(next), ""))
-		}
+		lowestNotice, noticeRows = i, used
+		said := core + strings.Join(more, "")
 		if t := parseLimitReset(said, now); !t.IsZero() {
 			at = t
 		}
 	}
-	return count, at
+	if lowestNotice < 0 {
+		return count, at, false
+	}
+	if lowestEcho >= 0 {
+		return count, at, lowestNotice > lowestEcho
+	}
+	// No echo in view: a long message's first row (its only one at the
+	// prompt's mark) scrolled above the rows read (review). Then the notice
+	// answers it if it is the last thing above the
+	// input box — not if the agent's work followed it.
+	return count, at, limitLastAboveBox(rows[lowestNotice+1+noticeRows:])
+}
+
+// limitLastAboveBox says whether rows, those under a notice, are its input
+// box and what is drawn with it: a rule, then its prompt row — with only a
+// turn's time ("✻ Churned for 0s") between.
+func limitLastAboveBox(rows []string) bool {
+	for i, r := range rows {
+		t := strings.TrimSpace(r)
+		switch {
+		case t == "":
+			continue
+		case attnIsRule(r):
+			for _, b := range rows[i+1:] {
+				if b := strings.TrimSpace(b); b != "" {
+					return strings.ContainsAny(firstRune(b), limitPromptGlyphs)
+				}
+			}
+			return false
+		case strings.HasPrefix(t, "✻"):
+			continue
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func firstRune(s string) string {
+	for _, r := range s {
+		return string(r)
+	}
+	return ""
+}
+
+// limitEchoRow says whether a row at a prompt's mark, with below rows,
+// echoes a message sent — not the input box. A message's rows go on as
+// plain text either way; under an echo comes what answered it, a row
+// opening with its glyph ("⎿", "●"), and under the box its rule, or
+// nothing (the cursor's row). A person's draft of many rows in the box is
+// not an echo (review).
+func limitEchoRow(below []string) bool {
+	for _, r := range below {
+		t := strings.TrimSpace(r)
+		if t == "" {
+			continue
+		}
+		if attnIsRule(r) {
+			return false
+		}
+		if c := []rune(t)[0]; unicode.IsLetter(c) || unicode.IsDigit(c) {
+			continue // the message's own rows
+		}
+		return true
+	}
+	return false
 }
 
 // limitRowIn reports whether a row (from its first letter or digit) is a
-// limit notice of prog; of any CLI when prog is "".
-func limitRowIn(core, prog string) bool {
-	match := func(ns []limitNotice) bool {
+// limit notice of prog; of any CLI when prog is "". more are the rows below
+// it, flattened, that a whole notice may wrap onto; used, how many it did.
+func limitRowIn(core string, more []string, prog string) (bool, int) {
+	match := func(ns []limitNotice) (bool, int) {
 		for _, n := range ns {
-			if n.re.MatchString(core) {
-				return true
+			if !n.whole {
+				if n.re.MatchString(core) {
+					return true, 0
+				}
+				continue
+			}
+			row := core
+			if n.re.MatchString(row) {
+				return true, 0
+			}
+			for i, m := range more {
+				if row += m; n.re.MatchString(row) {
+					return true, i + 1
+				}
 			}
 		}
-		return false
+		return false, 0
 	}
 	if prog != "" {
 		return match(harnessLimitNotices[prog])
 	}
 	for _, ns := range harnessLimitNotices {
-		if match(ns) {
-			return true
+		if ok, used := match(ns); ok {
+			return true, used
 		}
 	}
-	return false
+	return false, 0
 }
 
 // ---- when it resets ---------------------------------------------------------
@@ -208,6 +341,10 @@ var (
 	limitWaitPt  = regexp.MustCompile(`(\d+)(days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)`)
 	limitClockRe = regexp.MustCompile(`(?:resets?|resetsat|resetat|tryagainat|availableat|at)(?:on)?(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(\d{1,2})(?:st|nd|rd|th)?,?(\d{4})?(?:at)?)?(\d{1,2})(?::(\d{2}))?(am|pm)?(?:\(([a-z0-9_+\-/]+)\)|(utc|gmt|[pmce][sd]t|bst|cet|cest))?`)
 )
+
+// limitWaitMax is the longest wait a notice is taken to give: a plan's
+// longest window is a month; "in 99999 days" is no reset time.
+const limitWaitMax = 31 * 24 * time.Hour
 
 // parseLimitReset reads when a limit resets from a flattened notice row; zero
 // when it does not say, or says it in a way not read here.
@@ -232,7 +369,7 @@ func parseLimitReset(flat string, now time.Time) time.Time {
 				d += time.Duration(n) * time.Second
 			}
 		}
-		if d > 0 {
+		if d > 0 && d <= limitWaitMax {
 			return now.Add(d).Truncate(time.Second)
 		}
 	}
@@ -275,7 +412,8 @@ var limitMonths = map[string]time.Month{
 
 // limitClock reads "1:30pm", "13:30", "oct20,1pm(europe/london)", "oct21st,
 // 20263:05pm", "3:05pmpdt": a clock time with no date is its next one from
-// now, in the zone named, else the machine's own.
+// now (for a notice, what noteHarnessLimit reads it against), in the zone
+// named, else the machine's own.
 //
 // m: month, day, year, hour, minute, am/pm, zone (named), zone (short).
 func limitClock(m []string, now time.Time) (time.Time, bool) {
@@ -308,9 +446,11 @@ func limitClock(m []string, now time.Time) (time.Time, bool) {
 	}
 	loc := now.Location()
 	if m[7] != "" {
-		if l := limitZone(m[7]); l != nil {
-			loc = l
+		l := limitZone(m[7])
+		if l == nil {
+			return time.Time{}, false // a zone not known here: no time, not the machine's
 		}
+		loc = l
 	} else if m[8] != "" {
 		loc = limitShortZone(m[8], now)
 	}
@@ -325,6 +465,9 @@ func limitClock(m []string, now time.Time) (time.Time, bool) {
 		}
 	}
 	t := time.Date(y, mo, d, h, mins, 0, 0, loc)
+	if t.Day() != d {
+		return time.Time{}, false // "oct32", "feb30": no such day
+	}
 	if dated {
 		if m[3] == "" && t.Before(local.Add(-24*time.Hour)) {
 			t = t.AddDate(1, 0, 0) // "Jan 2" read on Dec 31
@@ -385,8 +528,9 @@ func limitZone(name string) *time.Location {
 
 // harnessLimitState is the debounced limit state; guarded by Agent.metaMu.
 // Like the login state: seen in harnessDownAfter reads to count, and cleared
-// once the agent is seen at work, or the notice has been gone harnessUpAfter
-// reads or harnessUpFor.
+// once the agent is seen at work, a turn begun since is answered with no
+// notice of its own, or the notice has been gone harnessUpAfter reads or
+// harnessUpFor.
 type harnessLimitState struct {
 	limited        bool
 	resetsAt       time.Time
@@ -396,40 +540,128 @@ type harnessLimitState struct {
 	// stale is how many notices on the screen are from before the agent
 	// worked again: they stay in its conversation, and are not news.
 	stale int
+	// readFrom is what a notice's reset time is read against (a time with
+	// no date is its next one after it): when the turn it answered ended,
+	// kept for the lapse. Read against each read's now, "resets 3pm" still
+	// on the screen at 15:00:20 was tomorrow's 3pm, and the clock set for
+	// it moved a day (review).
+	readFrom time.Time
+	// last is how many notices the last read showed.
+	last int
+	// staleAnswered: the lowest notice answered the last message when the
+	// limit was last over, and has since — no message after it: not news.
+	staleAnswered bool
+	// turnSeen is the last turn begun the lapse has heard of; turn, one
+	// begun while limited and not yet answered, with turnN the notices the
+	// screen had before it, and turnEnd when its hook said it ended.
+	turnSeen, turn, turnEnd time.Time
+	turnN                   int
+	turnFailure             string // what its hook said ended that turn ("" for a Stop)
+}
+
+// harnessSaysTurnFailed are the harnesses whose hook says when an error
+// ended a turn, in place of the turn's plain end: Claude Code's StopFailure
+// fires instead of Stop when an API error ("rate_limit", a login gone)
+// ended it (2.1.304's own hook docs; `reminal integrate` registers it as
+// "failed"). Their plain end is a turn answered — a limit's refusal is never
+// one. Every other harness, and one with no hook, is read from its screen.
+var harnessSaysTurnFailed = map[string]bool{"claude": true}
+
+// limitReadFrom is what a notice first seen now is read against: when the
+// turn it answered ended, as its hook said — kept on disk, so a reminal
+// started again after the reset reads the same time it did — else now (a
+// notice drawn while a turn runs, a CLI with no hook). An end over a day old
+// is no notice's on the screen now: a time with no date is within a day.
+func limitReadFrom(turnAt, endAt, now time.Time) time.Time {
+	if endAt.IsZero() || endAt.Before(turnAt) || endAt.After(now) || now.Sub(endAt) > 24*time.Hour {
+		return now
+	}
+	return endAt
 }
 
 // noteHarnessLimit is called with each attention tick's screen tail (the
 // rows harnessTail kept), the program here, whether its hook shows it at
-// work (harnessAtWork), and when its hook last said a turn began (zero if it
-// has not). It reports whether the limit state changed.
+// work (harnessAtWork), when its hook last said a turn began (zero if it
+// has not) and when it said that turn ended (zero while it runs, or not
+// said). It reports whether the limit state changed.
 //
-// The limit is over the moment a turn begins after it was found: the agent
-// took a message and is working. If the limit still holds, the harness
-// answers that turn with a notice of its own — one more than the screen
-// had, which is what counts as the limit again; the old ones stay in the
-// conversation above and are not.
-func (a *Agent) noteHarnessLimit(tail, prog string, atWork bool, turnAt time.Time) bool {
+// A turn begun after the limit was found is its test: if the limit still
+// holds, the harness answers it with a notice of its own — one more than
+// the screen had, the old ones staying in the conversation above — and the
+// lapse holds: a refused "continue" is the same lapse, never a new one
+// (review). Answered with none, by its end and harnessUpFor after, or seen
+// at work: over.
+func (a *Agent) noteHarnessLimit(tail, prog string, atWork bool, turnAt, endAt time.Time, failure string) bool {
 	now := harnessNow()
-	n, at := harnessLimitNoticesIn(tail, prog, now)
 	a.metaMu.Lock()
 	defer a.metaMu.Unlock()
 	l := &a.limit
+	from := l.readFrom
+	if from.IsZero() {
+		from = limitReadFrom(turnAt, endAt, now)
+	}
+	n, at, answered := harnessLimitNoticesIn(tail, prog, from)
+	before := l.last
+	l.last = n
 	if n < l.stale {
 		l.stale = n // scrolled away
 	}
-	hit := !atWork && n > l.stale
+	if !answered {
+		l.staleAnswered = false // a message since: the next notice under it is news
+	}
+	over := func() bool {
+		*l = harnessLimitState{stale: n, last: n, staleAnswered: answered}
+		return true
+	}
+	if l.limited {
+		if atWork {
+			return over() // at work again: the limit is over, whatever its notice said
+		}
+		if turnAt.After(l.turnSeen) {
+			l.turnSeen, l.turn, l.turnN, l.turnEnd, l.turnFailure = turnAt, turnAt, before, time.Time{}, ""
+		}
+		if !l.turn.IsZero() {
+			if endAt.After(l.turn) {
+				l.turnEnd, l.turnFailure = endAt, failure
+			}
+			ended := !l.turnEnd.IsZero()
+			switch {
+			case ended && l.turnFailure != "":
+				// Its harness said an error ended it (Claude Code's
+				// StopFailure: "rate_limit"): turned away, whatever the
+				// screen shows — the lapse holds.
+				l.turn, l.turnEnd, l.turnFailure = time.Time{}, time.Time{}, ""
+			case ended && harnessSaysTurnFailed[prog]:
+				// Its harness ends a turn an error ended with its own word,
+				// not Stop: this Stop is a turn answered (the turn's own
+				// record, not the screen: review).
+				return over()
+			case n > l.turnN:
+				l.turn, l.turnEnd = time.Time{}, time.Time{} // turned away: the lapse holds
+			case ended && now.Sub(l.turnEnd) >= harnessUpFor:
+				// Ended: turned away if a notice answers the last message
+				// still — a screen full of notices has one more no longer
+				// counted — else answered with none of its own: over.
+				if !answered {
+					return over()
+				}
+				l.turn, l.turnEnd = time.Time{}, time.Time{}
+			}
+		}
+	}
+	hit := !atWork && (n > l.stale || answered && !l.staleAnswered)
 	changed := false
 	switch {
-	case l.limited && (atWork || turnAt.After(l.since)):
-		// At work again: the limit is over, whatever its notice said.
-		*l, changed = harnessLimitState{stale: n}, true
 	case hit:
 		if l.seen == 0 {
 			l.seenAt = now
 		}
+		if l.readFrom.IsZero() {
+			l.readFrom = from
+		}
 		l.gone = 0
 		if l.seen++; !l.limited && l.seen >= harnessDownAfter {
-			l.limited, l.since, changed = true, now, true
+			l.limited, l.since, l.turnSeen, changed = true, now, turnAt, true
 		}
 		if l.limited && !at.IsZero() && !at.Equal(l.resetsAt) {
 			l.resetsAt, changed = at, true
@@ -439,8 +671,11 @@ func (a *Agent) noteHarnessLimit(tail, prog string, atWork bool, turnAt time.Tim
 			l.goneAt = now
 		}
 		l.seen = 0
+		if !l.limited {
+			l.readFrom = time.Time{} // a glimpse: the next is read afresh
+		}
 		if l.gone++; l.limited && (l.gone >= harnessUpAfter || now.Sub(l.goneAt) >= harnessUpFor) {
-			*l, changed = harnessLimitState{stale: n}, true
+			changed = over()
 		}
 	}
 	return changed
@@ -465,6 +700,8 @@ func (a *Agent) harnessLimitReadAt() time.Time {
 		return l.seenAt.Add(attnInterval)
 	case l.limited && l.gone > 0:
 		return l.goneAt.Add(harnessUpFor)
+	case l.limited && !l.turnEnd.IsZero():
+		return l.turnEnd.Add(harnessUpFor) // a turn answered: over unless its notice comes
 	}
 	return time.Time{}
 }

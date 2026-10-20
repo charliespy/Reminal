@@ -332,14 +332,21 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// is news for the record even when the state stays "limited".
 		// When its hook last said a turn began: kept beside the state, as a
 		// short turn's "done" overwrites its "working" before a read.
-		var turnAt time.Time
+		// And when it said that turn ended: what a notice's reset time is
+		// read against, and what says a turn begun at the limit was answered.
+		// And what its hook said ended it: an error, in Stop's place.
+		var turnAt, endAt time.Time
+		var failure string
 		if hs != nil {
 			turnAt = hs.TurnAt
 			if hs.State == "working" && hs.TS.After(turnAt) {
 				turnAt = hs.TS // a hook too old to keep it
 			}
+			if hs.State != "working" {
+				endAt, failure = hs.TS, hs.Failure
+			}
 		}
-		if a.noteHarnessLimit(harnessTail(stripANSI(render), harnessRowsFor(prog)), prog, atWork, turnAt) {
+		if a.noteHarnessLimit(harnessTail(stripANSI(render), harnessRowsFor(prog)), prog, atWork, turnAt, endAt, failure) {
 			a.metaDirty.Store(true)
 		}
 		if hs != nil && prog != "" && (fgAt.IsZero() || !hs.TS.Before(fgAt)) {
