@@ -69,3 +69,22 @@ func TestUptimeWithNoPID1ToReadIsItsKernels(t *testing.T) {
 		}
 	}
 }
+
+// No /proc/uptime to read: no uptime said (0), whatever PID 1 says.
+func TestUptimeWithNoProcUptimeIsNone(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "1", "stat"), []byte(pid1Stat("150")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := hostProc
+	hostProc = root
+	t.Cleanup(func() { hostProc = old })
+	h := HostInfo{}
+	linuxUptime(&h)
+	if h.Uptime != 0 {
+		t.Fatalf("uptime %d with no /proc/uptime, want 0", h.Uptime)
+	}
+}

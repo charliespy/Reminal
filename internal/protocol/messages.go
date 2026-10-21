@@ -589,7 +589,7 @@ type MachineStats struct {
 	CPUs     int     `json:"cpus"`
 	MemTotal uint64  `json:"mem_total,omitempty"` // bytes
 	MemUsed  uint64  `json:"mem_used,omitempty"`  // bytes
-	Uptime   int64   `json:"uptime,omitempty"`    // seconds since boot
+	Uptime   int64   `json:"uptime,omitempty"`    // seconds up: since boot (on Linux, since PID 1 started: a container's start)
 	Load1    float64 `json:"load1,omitempty"`
 	Load5    float64 `json:"load5,omitempty"`
 	Load15   float64 `json:"load15,omitempty"`
