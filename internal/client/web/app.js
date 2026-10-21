@@ -2041,12 +2041,13 @@
     // PIN (possibly '' — those dial PIN-free the same way).
     // sessdockDialing says whether the session open here is live, or on its
     // way to it: its socket still connecting, or open with its handshake in
-    // flight (not yet authed, not refused). A tap on it in the dock then
-    // dials nothing: a second dial would only cut the first short.
+    // flight (not refused) — not yet authed, or authed and its session key
+    // still being exchanged. A tap on it in the dock then dials nothing: a
+    // second dial would only cut the first short.
     function sessdockDialing() {
       if (inputLive()) return true;
       if (!ws) return false;
-      return ws.readyState === WebSocket.CONNECTING || (ws.readyState === WebSocket.OPEN && !authed && !fatal);
+      return ws.readyState === WebSocket.CONNECTING || (ws.readyState === WebSocket.OPEN && !fatal && (!authed || !cryptoKey));
     }
     function sessdockConnect(e) {
       // Here and live, or on its way (sessdockDialing): nothing to do. Here

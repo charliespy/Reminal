@@ -289,8 +289,9 @@ const sealedNow = p => p.evaluate(() => ({ key: !!cryptoKey, sealed: !!sealState
   await ctx.close();
 }
 // ---- TEST 10: a tap in the dock on the session being opened dials nothing ----
-// Its socket open, its handshake in flight (not yet authed): what a tap on it
-// would do is asked of the page as it stands then, a second dial never made.
+// Its socket open, its handshake in flight — not yet authed, or authed with
+// its session key still being exchanged: what a tap on it would do is asked
+// of the page as it stands then, a second dial never made.
 {
   const ctx = await b.newContext({ ...devices['Pixel 7'] });
   const p = await ctx.newPage();
@@ -298,15 +299,17 @@ const sealedNow = p => p.evaluate(() => ({ key: !!cryptoKey, sealed: !!sealState
   await p.waitForFunction(() => inputLive(), null, { timeout: 30000 }).catch(() => {});
   const r = await p.evaluate(() => {
     const live = sessdockDialing();
-    const was = authed;
+    const was = authed, key = cryptoKey;
     authed = false; // as between its socket opening and its handshake's answer
     const midHandshake = sessdockDialing();
-    authed = was;
-    return { live, midHandshake };
+    authed = true; cryptoKey = null; // authed, its session key not yet in
+    const midKeys = sessdockDialing();
+    authed = was; cryptoKey = key;
+    return { live, midHandshake, midKeys };
   });
-  const ok = r.live && r.midHandshake;
+  const ok = r.live && r.midHandshake && r.midKeys;
   if (!ok) process.exitCode = 1;
-  out.push(`TEST 10  dock tap on the session being opened: live → no dial ${r.live}, open mid-handshake → no dial ${r.midHandshake}   ${ok ? 'PASS' : 'FAIL'}`);
+  out.push(`TEST 10  dock tap on the session being opened: live → no dial ${r.live}, open mid-handshake → no dial ${r.midHandshake}, authed with its key not in → no dial ${r.midKeys}   ${ok ? 'PASS' : 'FAIL'}`);
   await ctx.close();
 }
 console.log(out.join('\n'));
