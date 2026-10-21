@@ -10,6 +10,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"reminal/internal/session"
 )
 
 // fillHostInfo reads Linux stats from /proc. Best-effort throughout.
@@ -65,17 +67,35 @@ func linuxMem(h *HostInfo) {
 	}
 }
 
+// hostProc is where /proc is read from (a test sets its own).
+var hostProc = "/proc"
+
+// linuxUptime is how long this machine has been up: since its PID 1
+// started. /proc/uptime is the kernel's, and in a container the kernel is
+// the host's: a container started a minute ago said it was up as long as
+// the host. On a machine of its own, PID 1 starts at boot, so that is the
+// same. Where /proc/1/stat cannot be read, /proc/uptime as it is.
 func linuxUptime(h *HostInfo) {
-	data, err := os.ReadFile("/proc/uptime")
+	data, err := os.ReadFile(hostProc + "/uptime")
 	if err != nil {
 		return
 	}
 	fields := strings.Fields(string(data))
-	if len(fields) >= 1 {
-		if secs, err := strconv.ParseFloat(fields[0], 64); err == nil {
-			h.Uptime = int64(secs)
+	if len(fields) < 1 {
+		return
+	}
+	secs, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return
+	}
+	if b, err := os.ReadFile(hostProc + "/1/stat"); err == nil {
+		if ticks, ok := session.StatStartTicks(b); ok {
+			if since := secs - float64(ticks)/session.UserHZ; since >= 0 {
+				secs = since
+			}
 		}
 	}
+	h.Uptime = int64(secs)
 }
 
 func linuxLoad(h *HostInfo) {
