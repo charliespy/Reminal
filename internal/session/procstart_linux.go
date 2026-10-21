@@ -30,9 +30,11 @@ func procStartTime(pid int) (time.Time, bool) {
 	if !ok {
 		return time.Time{}, false
 	}
-	const userHZ = 100
-	return time.Unix(btime+ticks/userHZ, 0), true
+	return time.Unix(btime+ticks/UserHZ, 0), true
 }
+
+// UserHZ is the clock tick /proc counts in (USER_HZ): 100 on Linux.
+const UserHZ = 100
 
 // procRoot is where /proc is read from (a test sets its own).
 var procRoot = "/proc"
@@ -44,6 +46,12 @@ func procStartTicks(pid int) (int64, bool) {
 	if err != nil {
 		return 0, false
 	}
+	return StatStartTicks(b)
+}
+
+// StatStartTicks is field 22 of a /proc/<pid>/stat's contents (starttime):
+// when that process started, in clock ticks (UserHZ) since boot.
+func StatStartTicks(b []byte) (int64, bool) {
 	s := string(b)
 	// comm (field 2) is parenthesized and may contain spaces or ')', so scan
 	// past the LAST ')': the fields after it begin at state (field 3).
