@@ -315,7 +315,7 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// going is honestly "done", and "done · 1 shell" is the thing worth
 		// knowing before deciding it needs nothing from you.
 		hs := session.ReadHookStateAnyAge(a.sessionID)
-		shells, agents := attnShellCount(agentActive, bottom), 0
+		shells, agents := attnShellsOnScreen(agentActive, render), 0
 		if bg := attnHookBackground(agentActive, hs, fgAt); bg != nil {
 			// What the harness's own hook said it left running: the footer
 			// counts shells only, and only what it shows.
@@ -798,13 +798,17 @@ var attnShellPattern = regexp.MustCompile(`·\s*([0-9]+)\s*shells?\b`)
 // for half an hour. The box is only one whose rules are seen as one (a
 // prompt row just under its top rule, attnBoxBottom): a rule the agent drew
 // in its own output — a markdown "---" rendered as dashes — is not one.
-// With no box seen, the whole tail, as before.
+// tail may be taller than the footer and the box together (attnTailRows);
+// with no box seen in it, its last attnPromptRows rows, as before.
 func attnFooter(tail string) string {
 	rows := strings.Split(strings.TrimRight(tail, "\n"), "\n")
 	if i := attnBoxBottom(rows); i >= 0 {
 		return strings.Join(rows[i+1:], "\n")
 	}
-	return tail
+	if len(rows) > attnPromptRows {
+		rows = rows[len(rows)-attnPromptRows:]
+	}
+	return strings.Join(rows, "\n")
 }
 
 // attnBoxRows is the most rows an input box takes between its rules (a long
@@ -848,6 +852,15 @@ func attnPromptRow(row string) bool {
 	r := strings.TrimSpace(stripANSI(row))
 	r = strings.TrimSpace(strings.TrimPrefix(r, "│"))
 	return strings.HasPrefix(r, "❯") || strings.HasPrefix(r, ">")
+}
+
+// attnShellsOnScreen is the count of shells still running a screen's footer
+// shows (attnShellCount), its input box looked for in the taller tail: a box
+// of a few rows (a long line typed in wraps) over a footer of a few does not
+// fit in the prompt rows, and what was typed in the box was read as the
+// footer's count.
+func attnShellsOnScreen(agentActive bool, render string) int {
+	return attnShellCount(agentActive, attentionProbeTail(render, attnTailRows))
 }
 
 // attnShellCount reads that count off the harness's footer, or 0.

@@ -448,6 +448,12 @@ func TestShellCountReadsTheFooterAndNotTheTranscript(t *testing.T) {
 			"✻ Baked for 15s · 1 shell still running\n" + roundBox + "\n  ⏵⏵ bypass permissions on · ← 2 agents", 0},
 		{"…and the footer under a rounded box counts",
 			"✻ Baked for 15s · 1 shell still running\n" + roundBox + "\n  ⏵⏵ bypass permissions on · 2 shells", 2},
+		// A box of a few rows (a long line typed in wraps) over a footer of a
+		// few: more than the prompt rows together, its top rule still found
+		// in the taller tail, so what is typed in the box is never read as
+		// the footer's count.
+		{"a tall box over a tall footer: the count is the footer's, not the box's",
+			"✻ Baked for 15s · done 8:38 PM\n────────────────────────────────────────\n❯ run the build and say how it went\n  then compare · 3 shells of it\n────────────────────────────────────────\n  ⏵⏵ bypass permissions on · 1 shell · ← 2 agents\n  ✔ Update installed\n  ctrl+t to show todos", 1},
 		{"…and in the footer's own rows, below it",
 			claudeBox + "\n⏵⏵ bypass permissions on · 2 shells · ← 2 agents\n⎿ · 2 shell commands were run", 2},
 	}
@@ -716,5 +722,25 @@ func TestOpenCodeStartingIsNotDone(t *testing.T) {
 	// Drawn already, its prompt now covered (a dialog): at work, however long.
 	if got := classifyAttnFor("opencode", true, starting, settled, time.Hour, true); got != "working" {
 		t.Errorf("a dialog over its prompt: %q, want working", got)
+	}
+}
+
+// The count is read off the screen as the probe reads it: a box of a few rows
+// over a footer of a few, more than the prompt rows together, under some of
+// the conversation — what was typed in the box is never the footer's count.
+func TestShellsOnScreenUnderATallBoxAndFooter(t *testing.T) {
+	render := strings.Join([]string{
+		"earlier output", "more earlier output",
+		"✻ Baked for 15s · done 8:38 PM",
+		"────────────────────────────────────────",
+		"❯ run the build and say how it went",
+		"  then compare · 3 shells of it",
+		"────────────────────────────────────────",
+		"  ⏵⏵ bypass permissions on · 1 shell · ← 2 agents",
+		"  ✔ Update installed",
+		"  ctrl+t to show todos",
+	}, "\n")
+	if got := attnShellsOnScreen(true, render); got != 1 {
+		t.Fatalf("shells on screen = %d, want the footer's 1", got)
 	}
 }

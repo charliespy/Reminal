@@ -57,7 +57,10 @@ func ProbeCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 // -i`, a harness that starts its hooks with none), but the session it was
 // started in stays its descendants', and Enclosing refuses an ancestor in a
 // recorded one. Recorded once it has started: a hook fired in the moment
-// before is held by the mark alone.
+// before is held by the mark alone. A descendant that starts a session of
+// its own (setsid) leaves the record and outlives the timeout's kill, but
+// once the probe is gone its walk up never reaches the session's reminal:
+// it can write nothing of the session's, and is left running, no more.
 func RunProbe(cmd *exec.Cmd, combined bool) ([]byte, error) {
 	var out bytes.Buffer
 	cmd.Stdout = &out
