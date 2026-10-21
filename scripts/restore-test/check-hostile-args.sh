@@ -16,6 +16,9 @@ box()  { docker exec $BOX sh -c "$1"; }
 send() { box "mcp.sh send $1 '$2' >/dev/null"; }
 screen() { box "mcp.sh read $1"; }
 idof()  { echo "$1" | sed -n 's/^ *Session: *\([A-Z0-9]*\).*/\1/p' | head -1; }
+# The last start of claude in argv.log. reminal also runs it to ask its
+# --version or --help, or to add its MCP server; those start no session.
+laststart() { box "grep -v -x -e 'argv: --version' -e 'argv: -v' -e 'argv: --help' -e 'argv: mcp .*' /root/.fake-claude/argv.log 2>/dev/null | tail -1"; }
 
 # Started from a script, so the agent's own command line holds the bytes.
 box 'mkdir -p /root/w && cat > /root/w/start.sh <<"E"
@@ -33,12 +36,12 @@ box 'pgrep -x claude >/dev/null' && ok "claude runs, its argument holding contro
 
 docker restart $BOX >/dev/null
 ok "rebooted"
-for i in $(seq 1 40); do box "tail -1 /root/.fake-claude/argv.log 2>/dev/null | grep -q -- --resume" && break; sleep 1; done
+for i in $(seq 1 40); do laststart | grep -q -- --resume && break; sleep 1; done
 sleep 4
 
 box 'test -e /root/typed-from-an-argument' && fail "the restore typed a command out of the agent's argument" || ok "nothing in the agent's argument was run"
-box "tail -1 /root/.fake-claude/argv.log" | grep -q -- "--resume" && ok "claude resumed: $(box 'tail -1 /root/.fake-claude/argv.log' | cat -v)" || fail "claude not resumed: $(box 'tail -2 /root/.fake-claude/argv.log' | cat -v)"
-box "tail -1 /root/.fake-claude/argv.log" | grep -q "$(printf '\033')" && fail "the resume still carries the control characters" || ok "the resume carries none of them"
+laststart | grep -q -- "--resume" && ok "claude resumed: $(laststart | cat -v)" || fail "claude not resumed: $(box 'tail -2 /root/.fake-claude/argv.log' | cat -v)"
+laststart | grep -q "$(printf '\033')" && fail "the resume still carries the control characters" || ok "the resume carries none of them"
 screen $ID | grep -q "left out --append-system-prompt" && ok "a line says the flag was left out" || fail "no line saying what was left out"
 
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

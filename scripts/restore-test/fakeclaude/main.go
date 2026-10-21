@@ -25,12 +25,85 @@ import (
 	"strings"
 )
 
+// claudeHelp is the head of Claude Code's own --help: its usage and the
+// options a restore reads off it (which take a value, which do not).
+const claudeHelp = `Usage: claude [options] [command] [prompt]
+
+Claude Code - starts an interactive session by default, use -p/--print for
+non-interactive output
+
+Arguments:
+  prompt                                  Your prompt
+
+Options:
+  -d, --debug [filter]                    Enable debug mode
+  --verbose                               Override verbose mode setting from config
+  -p, --print                             Print response and exit (useful for pipes)
+  --dangerously-skip-permissions          Bypass all permission checks
+  --model <model>                         Model for the current session
+  --append-system-prompt <prompt>         Append a system prompt to the default system prompt
+  -c, --continue                          Continue the most recent conversation
+  -r, --resume [value]                    Resume a conversation by session ID
+  --session-id <uuid>                     Use a specific session ID for the conversation
+  -v, --version                           Output the version number
+  -h, --help                              Display help for command
+`
+
+// answerAsk answers what reminal asks claude without a session of it — its
+// version (the hook heal asks), its help (a restore reads which flags take a
+// value), its MCP servers (integrate adds reminal's: "claude mcp add …") —
+// as Claude Code does, each written to asks.log with its pid before it is
+// answered, and says whether args were such an ask: then it exits, no
+// session started (check.sh holds starts.log to it).
+func answerAsk(dir string, args []string) bool {
+	answer, ask := "", false
+	if len(args) > 0 && args[0] == "mcp" {
+		ask = true
+		if len(args) > 1 && args[1] == "add" {
+			answer = "Added MCP server to local config\n"
+		} else if len(args) > 1 && args[1] == "remove" {
+			answer = "Removed MCP server from local config\n"
+		}
+	}
+	for _, a := range args {
+		if ask {
+			break
+		}
+		switch a {
+		case "--version", "-v":
+			answer, ask = "2.1.296 (Claude Code)\n", true
+		case "--help", "-h":
+			answer, ask = claudeHelp, true
+		}
+	}
+	if !ask {
+		return false
+	}
+	if f, err := os.OpenFile(filepath.Join(dir, "asks.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		fmt.Fprintf(f, "ask: pid %d %s\n", os.Getpid(), strings.Join(args, " "))
+		f.Close()
+	}
+	fmt.Print(answer)
+	return true
+}
+
 func main() {
+	home0, _ := os.UserHomeDir()
+	dir0 := filepath.Join(home0, ".fake-claude")
+	_ = os.MkdirAll(dir0, 0o700)
+	if answerAsk(dir0, os.Args[1:]) {
+		return
+	}
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".fake-claude")
 	_ = os.MkdirAll(dir, 0o700)
 	if f, err := os.OpenFile(filepath.Join(dir, "argv.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 		fmt.Fprintln(f, "argv: "+strings.Join(os.Args[1:], " "))
+		f.Close()
+	}
+	// Each session started, with its pid: no ask's (answerAsk) is ever one.
+	if f, err := os.OpenFile(filepath.Join(dir, "starts.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		fmt.Fprintf(f, "start: pid %d %s\n", os.Getpid(), strings.Join(os.Args[1:], " "))
 		f.Close()
 	}
 	conv, resume, cont := "", false, false

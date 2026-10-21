@@ -16,6 +16,9 @@ screen() { box "mcp.sh read $1"; }
 newsession() { box "mkdir -p $2 && cd $2 && reminal new $1 2>&1"; }
 idof()  { echo "$1" | sed -n 's/^ *Session: *\([A-Z0-9]*\).*/\1/p' | head -1; }
 pinof() { echo "$1" | sed -n 's/.*PIN: *\([0-9]*\).*/\1/p'; }
+# The last start of claude in argv.log. reminal also runs it to ask its
+# --version or --help, or to add its MCP server; those start no session.
+laststart() { box "grep -v -x -e 'argv: --version' -e 'argv: -v' -e 'argv: --help' -e 'argv: mcp .*' /root/.fake-claude/argv.log | tail -1"; }
 
 out=$(newsession work /root/project); ID=$(idof "$out"); PIN=$(pinof "$out")
 [ -n "$ID" ] && ok "session $ID (PIN $PIN) in /root/project" || { fail "no session: $out"; exit 1; }
@@ -49,8 +52,15 @@ echo "$s" | grep -q "before-the-reboot-marker" && ok "scrollback from before the
 echo "$s" | grep -q "restored this session after its machine restarted" && ok "a line marks where the restore happened" || fail "no restore banner"
 echo "$s" | grep -q "fake-claude: resumed conversation $CONV" && ok "claude resumed the same conversation ($CONV)" || fail "claude not resumed: $(echo "$s" | tail -5)"
 echo "$s" | grep -q "(earlier) you said: remember the number 4242" && ok "…with what was said in it" || fail "conversation content missing"
-argv=$(box "tail -1 /root/.fake-claude/argv.log")
+argv=$(laststart)
 [ "$argv" = "argv: --model opus-test --resume $CONV" ] && ok "started as: claude $(echo "$argv" | cut -c7-) — flags kept, the opening prompt not sent again" || fail "resumed with: $argv"
+# reminal asks claude things without a session of it — its version (hook
+# heal), its help (the restore's flags), its MCP servers (integrate): each
+# answered and exited, as Claude Code does. At least one was asked, and no
+# pid that was asked anything started a session.
+asks=$(box 'cat /root/.fake-claude/asks.log 2>/dev/null | wc -l | tr -d " "')
+crossed=$(box 'for p in $(sed -n "s/^ask: pid \([0-9]*\) .*/\1/p" /root/.fake-claude/asks.log 2>/dev/null); do grep -q "^start: pid $p " /root/.fake-claude/starts.log 2>/dev/null && echo $p; done | wc -l | tr -d " "')
+[ "$asks" -ge 1 ] && [ "$crossed" = 0 ] && ok "asked $asks thing(s) without a session (version, help, MCP), claude answered each and started none" || fail "$asks ask(s), $crossed of them started a session"
 send $ID "what number"
 sleep 1
 screen $ID | grep -q "you said: what number" && ok "the resumed claude takes new input" || fail "resumed claude not answering"
