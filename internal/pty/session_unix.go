@@ -72,18 +72,26 @@ func (s *Session) Write(p []byte) (int, error) {
 }
 
 func (s *Session) Resize(cols, rows uint16) error {
-	return pty.Setsize(s.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+	// Through withFd, not pty.Setsize (its ioctl is on f.Fd()): a viewer's
+	// resize can land as the session is closed.
+	return s.withFd(func(fd int) error {
+		return unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, &unix.Winsize{Col: cols, Row: rows})
+	})
 }
 
 // Getsize reports the PTY master's current window size. The hot-restart path
 // inherits an already-sized PTY, so this recovers the dimensions the shell is
 // actually rendering at before any viewer has reported a size.
 func (s *Session) Getsize() (cols, rows uint16, err error) {
-	ws, err := pty.GetsizeFull(s.ptmx)
+	var ws *unix.Winsize
+	err = s.withFd(func(fd int) (err error) {
+		ws, err = unix.IoctlGetWinsize(fd, unix.TIOCGWINSZ)
+		return err
+	})
 	if err != nil {
 		return 0, 0, err
 	}
-	return ws.Cols, ws.Rows, nil
+	return ws.Col, ws.Row, nil
 }
 
 func (s *Session) Wait() error {
@@ -92,6 +100,41 @@ func (s *Session) Wait() error {
 
 func (s *Session) Close() error {
 	return s.ptmx.Close()
+}
+
+// withFd runs f on the master's fd while the file holds it (SyscallConn's
+// Control): a Close meanwhile waits for f, and f never runs on an fd that
+// was destroyed, or reused, underneath it. A session can be closed from a
+// signal handler while another goroutine is still asking it about itself
+// (the attention probe's ForegroundPgrp); an ioctl on os.File.Fd() raced
+// that close. An error once it is closed.
+func (s *Session) withFd(f func(fd int) error) error {
+	if s == nil || s.ptmx == nil {
+		return os.ErrClosed
+	}
+	rc, err := s.ptmx.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ferr error
+	if err := rc.Control(func(fd uintptr) { ferr = f(int(fd)) }); err != nil {
+		return err
+	}
+	return ferr
+}
+
+// pgrp is the terminal's foreground process group (TIOCGPGRP on the
+// master), or 0.
+func (s *Session) pgrp() int {
+	var pgrp int
+	err := s.withFd(func(fd int) (err error) {
+		pgrp, err = unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+		return err
+	})
+	if err != nil || pgrp <= 0 {
+		return 0
+	}
+	return pgrp
 }
 
 // Fd returns the underlying file descriptor of the PTY master. Used by
@@ -113,12 +156,7 @@ func (s *Session) Pid() int {
 	if pid := s.ShellPid(); pid > 0 {
 		return pid
 	}
-	if s.ptmx != nil {
-		if pgrp, err := unix.IoctlGetInt(int(s.ptmx.Fd()), unix.TIOCGPGRP); err == nil && pgrp > 0 {
-			return pgrp
-		}
-	}
-	return 0
+	return s.pgrp()
 }
 
 // ShellPid is the session's shell's pid when it is known for certain: we
@@ -141,13 +179,7 @@ func (s *Session) ShellPid() int {
 // running" from "sitting at the shell prompt" even for inline TUIs that never
 // take the alt screen (e.g. Claude Code): compare it against the shell's pid.
 func (s *Session) ForegroundPgrp() int {
-	if s.ptmx == nil {
-		return 0
-	}
-	if pgrp, err := unix.IoctlGetInt(int(s.ptmx.Fd()), unix.TIOCGPGRP); err == nil && pgrp > 0 {
-		return pgrp
-	}
-	return 0
+	return s.pgrp()
 }
 
 func (s *Session) CopyFrom(r io.Reader, done chan<- struct{}) {
