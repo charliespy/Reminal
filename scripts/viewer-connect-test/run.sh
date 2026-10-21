@@ -17,7 +17,7 @@
 #      is never written into it
 #  10. a tap in the session dock on the session being opened (its socket
 #      open, its handshake in flight, or its session key still being
-#      exchanged) dials nothing
+#      exchanged) dials nothing; with its agent away and its key in, it does
 #
 # Needs docker; the browser runs in a Playwright container. Nothing here
 # touches the host's reminal.

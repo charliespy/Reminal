@@ -305,11 +305,17 @@ const sealedNow = p => p.evaluate(() => ({ key: !!cryptoKey, sealed: !!sealState
     authed = true; cryptoKey = null; // authed, its session key not yet in
     const midKeys = sessdockDialing();
     authed = was; cryptoKey = key;
-    return { live, midHandshake, midKeys };
+    // Its agent gone with its key in (its machine asleep, say): not on its
+    // way, so a tap opens it again — what the dock is for.
+    const alive = agentLive;
+    agentLive = false;
+    const awayDials = !sessdockDialing();
+    agentLive = alive;
+    return { live, midHandshake, midKeys, awayDials };
   });
-  const ok = r.live && r.midHandshake && r.midKeys;
+  const ok = r.live && r.midHandshake && r.midKeys && r.awayDials;
   if (!ok) process.exitCode = 1;
-  out.push(`TEST 10  dock tap on the session being opened: live → no dial ${r.live}, open mid-handshake → no dial ${r.midHandshake}, authed with its key not in → no dial ${r.midKeys}   ${ok ? 'PASS' : 'FAIL'}`);
+  out.push(`TEST 10  dock tap on the session being opened: live → no dial ${r.live}, open mid-handshake → no dial ${r.midHandshake}, authed with its key not in → no dial ${r.midKeys}, its agent away with its key in → dials ${r.awayDials}   ${ok ? 'PASS' : 'FAIL'}`);
   await ctx.close();
 }
 console.log(out.join('\n'));
