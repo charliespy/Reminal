@@ -16,7 +16,8 @@
 #   9. the relay's word on a session it has not stays over the terminal, and
 #      is never written into it
 #  10. a tap in the session dock on the session being opened (its socket
-#      open, its handshake in flight) dials nothing
+#      open, its handshake in flight, or its session key still being
+#      exchanged) dials nothing
 #
 # Needs docker; the browser runs in a Playwright container. Nothing here
 # touches the host's reminal.
