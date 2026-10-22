@@ -112,6 +112,14 @@ const left = await page.evaluate(async () => {
   p = pair(1);
   await uploadBatch([file('one.bin', 10), file('two.bin', 10), file('three.bin', 10)]);
   r.batchOnA = kinds(p.a).length; r.batchOnB = kinds(p.b).filter(t => t === 'upload').length;
+  // A batch begun while a switch is under way (switchingTo set; the page's
+  // session still the one on its socket, with its key): it goes to that
+  // session, and none of it to the one switched to when the switch lands
+  // mid-batch.
+  p = pair(1); switchingTo = 'BBBB2222';
+  await uploadBatch([file('one.bin', 10), file('two.bin', 10)]);
+  switchingTo = '';
+  r.midSwitchOnA = kinds(p.a).filter(t => t === 'upload').length; r.midSwitchOnB = kinds(p.b).filter(t => t === 'upload').length;
   p = pair(1);
   const dt = new DataTransfer();
   dt.items.add(new File([new Uint8Array(10)], 'a.png', { type: 'image/png' }));
@@ -134,6 +142,7 @@ if (left.afterHuge !== 2 || !left.hugeSaid) fails.push('a too-large file mid-bat
 if (left.stayed !== 6) fails.push('an upload whose session was not left sent ' + left.stayed + ' of 6 chunks');
 if (left.fileOnA !== 1 || left.fileOnB) fails.push('a file whose session was left mid-upload: ' + left.fileOnB + ' chunk(s) went to the next session (' + left.fileOnA + ' on its own)');
 if (left.batchOnA !== 1 || left.batchOnB) fails.push('a batch whose session was left: ' + left.batchOnB + ' file(s) went to the next session');
+if (left.midSwitchOnA !== 1 || left.midSwitchOnB) fails.push('a batch begun while a switch was under way: ' + left.midSwitchOnA + ' file(s) to the session it was begun on, ' + left.midSwitchOnB + ' to the one switched to');
 if (left.pasteOnA !== 1 || left.pasteOnB) fails.push('pasted images whose session was left: ' + left.pasteOnB + ' went to the next session');
 if (left.ackOnB) fails.push('a snapshot part acknowledged as its session was left: the ack went on the next one\'s socket');
 
