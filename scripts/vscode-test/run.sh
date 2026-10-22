@@ -53,7 +53,7 @@ docker exec -d "$NAME" sh -c '~/.local/bin/reminal relay 18080 >/tmp/relay.log 2
 for _ in $(seq 30); do docker exec "$NAME" curl -fs http://127.0.0.1:8443/healthz >/dev/null 2>&1 && break; sleep 1; done
 
 browser() {
-  docker run --rm --network "container:${NET:-$NAME}" -e PASTE_CODE="${PASTE_CODE:-}" -e PASTE_CODE2="${PASTE_CODE2:-}" -e PORT_MARKER="${PORT_MARKER:-}" -e OPEN_ID="${OPEN_ID:-}" \
+  docker run --rm --network "container:${NET:-$NAME}" -e RIG_RUN="${RIG_RUN:-}" -e PASTE_CODE="${PASTE_CODE:-}" -e PASTE_CODE2="${PASTE_CODE2:-}" -e PORT_MARKER="${PORT_MARKER:-}" -e OPEN_ID="${OPEN_ID:-}" \
     -v "$PWD:/t" -w /tmp "$PW" sh -c \
     'npm i -s playwright@1.56.0 >/dev/null 2>&1 && cp /t/checks.mjs . && node checks.mjs "$@"' _ "$@"
 }
@@ -195,9 +195,9 @@ names() {
     let s = \"\"; process.stdin.on(\"data\", (d) => (s += d)).on(\"end\", () => {
       for (const x of JSON.parse(s)) console.log(x.name || \"-\"); });"' | sort | tr '\n' ' '
 }
-until_file() { for _ in $(seq 180); do [ -e "out/$1" ] && return 0; sleep 1; done; return 1; }
-rm -f out/rename-old out/rename-new out/rename-reloaded out/rename-go out/rename-done
-NET="$NAME-rename" browser renametab > out/rename.log 2>&1 &
+RIG_RUN=$N
+until_file() { for _ in $(seq 180); do [ -e "out/$1-$RIG_RUN" ] && return 0; sleep 1; done; return 1; }
+NET="$NAME-rename" RIG_RUN=$RIG_RUN browser renametab > out/rename.log 2>&1 &
 bpid=$!
 if until_file rename-old; then
   got=$(names)
@@ -205,13 +205,13 @@ if until_file rename-old; then
   else echo "FAIL  control: before this update the session was named: $got"; fail=1; fi
   docker exec "$NAME-rename" code-server --install-extension /tmp/reminal.vsix --force >/dev/null 2>&1
 fi
-touch out/rename-new
+touch "out/rename-new-$RIG_RUN"
 if until_file rename-reloaded; then
   got=$(names)
   if [ "$got" = "legacy-tab " ]; then echo "PASS  after the update, a tab renamed before it gives its session that name"
   else echo "FAIL  after the update, the tab renamed before it did not name its session: $got"; fail=1; fi
 fi
-touch out/rename-go
+touch "out/rename-go-$RIG_RUN"
 wait $bpid || true
 cat out/rename.log
 grep -q '^FAIL' out/rename.log && fail=1
@@ -221,6 +221,7 @@ if [ "$got" = "- C3PRICING-501 legacy-tab " ]; then
   echo "PASS  a tab renamed by hand names its session; one never renamed, whose program set its title, stays unnamed, also after a reload"
 else echo "FAIL  sessions after renaming a tab: $got"; fail=1; fi
 docker rm -f "$NAME-rename" >/dev/null 2>&1 || true
+rm -f out/rename-*-"$RIG_RUN"
 
 # A window reload, in a browser of its own (it closes the terminals above).
 browser revive | tee out/revive.log || true

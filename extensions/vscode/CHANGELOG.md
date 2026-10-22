@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Renaming a reminal terminal's tab renames its session too, so the cloud
+  button's list, a browser and `reminal list` all show the new name. A tab
+  renamed before this update passes its name on as well.
+
 ## 0.2.1
 
 - The cloud button's list shows the other reminals running on this machine,

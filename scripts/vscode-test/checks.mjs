@@ -955,11 +955,14 @@ if (phase === 'renametab') {
   // itself, then puts this build in its place while the terminals run on.
   // The two take turns through files in out/: this side signals, run.sh
   // checks what reminal itself says and answers.
+  // The names are new each run: a file deleted on the host can still look
+  // present, and can't be made again, through the container's shared folder.
   const fs = await import('fs');
-  const signal = (f) => fs.writeFileSync(`${SHOTS}/${f}`, '');
+  const run = process.env.RIG_RUN;
+  const signal = (f) => fs.writeFileSync(`${SHOTS}/${f}-${run}`, '');
   const waitFor = async (f) => {
     const t0 = Date.now();
-    while (!fs.existsSync(`${SHOTS}/${f}`)) {
+    while (!fs.existsSync(`${SHOTS}/${f}-${run}`)) {
       if (Date.now() - t0 > 180000) throw new Error(`run.sh never sent ${f}`);
       await p.waitForTimeout(1000);
     }
