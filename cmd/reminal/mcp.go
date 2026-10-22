@@ -881,8 +881,10 @@ func runMCP(_ []string) error {
 	go mcpWatchBinary(stopWatch)
 
 	out := json.NewEncoder(os.Stdout)
+	// Every message out goes through send: one path to stdout.
+	send := func(m map[string]any) { _ = out.Encode(m) }
 	reply := func(id json.RawMessage, result any) {
-		_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+		send(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
 	}
 	// A swap onto a new binary never happens while this process holds notes
 	// of its own: with no daemon to keep them, exec would drop them and the
@@ -900,14 +902,14 @@ func runMCP(_ []string) error {
 	// refreshes on its own and nobody has to restart anything.
 	if os.Getenv(reloadedEnv) != "" {
 		_ = os.Unsetenv(reloadedEnv)
-		_ = out.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+		send(map[string]any{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
 	}
 
 	// One request per line. Between lines, and only then, the process may
 	// swap itself onto a newly installed binary (mcpReadLines).
 	mcpReadLines(os.Stdin, func(line string) {
-		var msg rpcMessage
-		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		msg, ok := mcpParseLine(line, send)
+		if !ok {
 			return
 		}
 		switch msg.Method {
@@ -969,11 +971,30 @@ func runMCP(_ []string) error {
 			if len(msg.ID) == 0 {
 				return // a notification; nothing to answer
 			}
-			_ = out.Encode(map[string]any{
+			send(map[string]any{
 				"jsonrpc": "2.0", "id": msg.ID,
 				"error": map[string]any{"code": -32601, "message": "method not found: " + msg.Method},
 			})
 		}
 	})
 	return nil
+}
+
+// mcpParseLine reads one request line. One that is not a request is answered
+// as JSON-RPC asks, through send (the loop's one way out), never dropped in
+// silence — a caller could not tell its line was never read: -32700 for a
+// line that is not JSON, -32600 for JSON that is not a request object. Its id
+// cannot be read from either, so the answer's is null.
+func mcpParseLine(line string, send func(map[string]any)) (rpcMessage, bool) {
+	var msg rpcMessage
+	err := json.Unmarshal([]byte(line), &msg)
+	if err == nil {
+		return msg, true
+	}
+	code, what := -32700, "Parse error: "+err.Error()
+	if json.Valid([]byte(line)) {
+		code, what = -32600, "Invalid Request: not a request object"
+	}
+	send(map[string]any{"jsonrpc": "2.0", "id": nil, "error": map[string]any{"code": code, "message": what}})
+	return msg, false
 }
