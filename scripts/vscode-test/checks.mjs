@@ -950,6 +950,77 @@ if (phase === 'existing') {
   await p.waitForTimeout(3000);
 }
 
+if (phase === 'renametab') {
+  // run.sh starts this with the published 0.2.1, which keeps a tab's name to
+  // itself, then puts this build in its place while the terminals run on.
+  // The two take turns through files in out/: this side signals, run.sh
+  // checks what reminal itself says and answers.
+  // The names are new each run: a file deleted on the host can still look
+  // present, and can't be made again, through the container's shared folder.
+  const fs = await import('fs');
+  const run = process.env.RIG_RUN;
+  const signal = (f) => fs.writeFileSync(`${SHOTS}/${f}-${run}`, '');
+  const waitFor = async (f) => {
+    const t0 = Date.now();
+    while (!fs.existsSync(`${SHOTS}/${f}-${run}`)) {
+      if (Date.now() - t0 > 180000) throw new Error(`run.sh never sent ${f}`);
+      await p.waitForTimeout(1000);
+    }
+  };
+  // Renames the active terminal the way a person does, from the palette.
+  const renameActive = async (name) => {
+    await runExact('Terminal: Rename...');
+    await p.waitForTimeout(800);
+    await p.keyboard.press('Control+A');
+    await p.keyboard.type(name);
+    await p.keyboard.press('Enter');
+    await p.waitForTimeout(1000);
+  };
+  const openOne = async () => {
+    await newViaButton();
+    await waitToast(/reminal is sharing/, 30000).catch(() => {});
+    await clearNotifications();
+  };
+  const reload = async () => {
+    await p.reload({ waitUntil: 'domcontentloaded' });
+    await p.waitForSelector('.monaco-workbench', { timeout: 60000 });
+    await p.waitForTimeout(6000);
+    await runCommand('View: Focus into Panel');
+    await p.waitForTimeout(10000);
+  };
+  await runCommand('Terminal: Focus Terminal');
+  await p.waitForTimeout(3000);
+  await clearNotifications();
+  await openOne();
+  await renameActive('legacy-tab');
+  await p.waitForTimeout(8000);
+  await tabShot('r1-renamed-before-update.png');
+  signal('rename-old');
+  await waitFor('rename-new');
+  await reload();
+  await tabShot('r2-after-update.png');
+  signal('rename-reloaded');
+  await waitFor('rename-go');
+
+  // Renamed by hand now, beside one that is never renamed but whose program
+  // sets the terminal's title.
+  await openOne();
+  await renameActive('C3PRICING-501');
+  await openOne();
+  await typeInTerminal("printf '\\033]0;title-from-a-program\\007'");
+  await p.waitForTimeout(9000);
+  await openList();
+  const listed = (await p.locator('.quick-input-widget .quick-input-list').innerText()).replace(/\s+/g, ' ');
+  await p.screenshot({ path: `${SHOTS}/r3-list.png` });
+  await p.keyboard.press('Escape');
+  check('the cloud list calls a terminal renamed by hand by its new name', listed.includes('C3PRICING-501'), JSON.stringify(listed.slice(0, 300)));
+  await tabShot('r4-renamed.png');
+  // A reload brings every tab back by its name; that is no rename.
+  await reload();
+  await tabShot('r5-after-reload.png');
+  signal('rename-done');
+}
+
 } catch (e) {
   await p.screenshot({ path: `${SHOTS}/failed-${phase}.png` }).catch(() => {});
   check(`${phase}: ${e.message.split('\n')[0]}`, false);

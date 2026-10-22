@@ -356,7 +356,34 @@ export function otherSessions(all: SessionInfo[], shown: Set<string>, self?: str
 // control or direction-changing characters, not too long. undefined for a
 // session with no name.
 export function tabName(name: string | undefined): string | undefined {
-  const t = (name ?? "").replace(/[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g, " ").replace(/\s+/g, " ").trim();
+  const t = oneLine(name);
   if (!t) return undefined;
   return t.length > 60 ? `${t.slice(0, 60)}…` : t;
+}
+
+function oneLine(name: string | undefined): string {
+  return (name ?? "").replace(/[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// renamedTo is the name a reminal terminal's tab was given by hand, for its
+// session to take, or undefined when the tab has none to give: its name is
+// one this extension gave it, its session's, or one a tab has before anyone
+// names it. A tab's name changes from one look to the next only when someone
+// renames it. On the first look at a tab, one just opened or brought back by
+// a window reload, a name it already has is passed on only to a session with
+// none: a session that has one may have been renamed since the tab was.
+export function renamedTo(o: {
+  // tab is the tab's name now, seen what it was at the last look (undefined
+  // at the first), given the name this extension last gave it.
+  tab: string;
+  seen: string | undefined;
+  given: string | undefined;
+  session: string | undefined;
+  defaults: string[];
+}): string | undefined {
+  const name = oneLine(o.tab);
+  const shown = tabName(name);
+  if (!shown || shown === o.given || shown === tabName(o.session) || o.defaults.includes(shown)) return undefined;
+  if (o.seen === undefined) return tabName(o.session) ? undefined : name;
+  return o.tab === o.seen ? undefined : name;
 }
