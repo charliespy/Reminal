@@ -158,7 +158,7 @@ sleep 2
 docker exec -d "$NAME-open" sh -c 'cd /home/coder/demo-project/src && sleep infinity | script -qfc ~/.local/bin/reminal /dev/null'
 OPEN_ID=
 for _ in $(seq 30); do
-  OPEN_ID=$(docker exec "$NAME-open" sh -c '~/.local/bin/reminal info --all --json' 2>/dev/null | grep -o '"id":"[A-Z0-9]*"' | head -1 | cut -d'"' -f4)
+  OPEN_ID=$(docker exec "$NAME-open" sh -c '~/.local/bin/reminal info --all --json' 2>/dev/null | grep -o '"id":"[A-Z0-9]*"' | head -1 | cut -d'"' -f4) || true
   [ -n "$OPEN_ID" ] && break; sleep 1
 done
 docker exec "$NAME-open" sh -c "~/.local/bin/reminal rename $OPEN_ID build-server" >/dev/null
