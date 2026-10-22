@@ -11,6 +11,7 @@ import {
   attachedId,
   otherSessions,
   tabName,
+  renamedTo,
   copyCodeOf,
   exposedOf,
   findReminal,
@@ -243,4 +244,29 @@ test("tabName: one plain line, cut short, and nothing for no name", () => {
   assert.equal(tabName(""), undefined);
   assert.equal(tabName("   "), undefined);
   assert.equal(tabName(undefined), undefined);
+});
+
+test("renamedTo: a tab renamed by hand names its session, nothing else does", () => {
+  const defaults = ["reminal", "reminal.exe"];
+  const r = (tab: string, seen: string | undefined, given?: string, session?: string) =>
+    renamedTo({ tab, seen, given, session, defaults });
+  // Renamed by hand since the last look.
+  assert.equal(r("C3PRICING-501", "reminal"), "C3PRICING-501");
+  assert.equal(r("new name", "old name", "old name", "old name"), "new name");
+  assert.equal(r("  two\nlines ", "reminal"), "two lines");
+  assert.equal(r("y".repeat(80), "reminal"), "y".repeat(80));
+  // Unchanged, or a name this extension gave it or the session already has.
+  assert.equal(r("C3PRICING-501", "C3PRICING-501"), undefined);
+  assert.equal(r("from-session", "reminal", "from-session", "from-session"), undefined);
+  assert.equal(r("x".repeat(60) + "\u2026", "reminal", undefined, "x".repeat(80)), undefined);
+  // The name it was given before the session was renamed elsewhere, while
+  // the tab was not the active one: not taken back.
+  assert.equal(r("old", "old", "old", "renamed-elsewhere"), undefined);
+  // A default name, or none.
+  assert.equal(r("reminal", "something"), undefined);
+  assert.equal(r("reminal.exe", undefined), undefined);
+  assert.equal(r("   ", "reminal"), undefined);
+  // First look: passed on only to a session with no name.
+  assert.equal(r("C3PRICING-501", undefined), "C3PRICING-501");
+  assert.equal(r("C3PRICING-501", undefined, undefined, "named-since"), undefined);
 });

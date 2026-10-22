@@ -21,6 +21,8 @@ import {
   plainText,
   queryAll,
   querySessions,
+  renamedTo,
+  runReminal,
   statusOf,
   summary,
   tabName,
@@ -306,6 +308,31 @@ function syncName(t: vscode.Terminal): void {
   void vscode.commands.executeCommand("workbench.action.terminal.renameWithArg", { name });
 }
 
+// The name each reminal terminal's tab had at the last look, so that a
+// rename by hand can be told from no change.
+const seen = new WeakMap<vscode.Terminal, string>();
+
+// passRename gives a terminal's session the name its tab was given by hand,
+// so the session goes by it everywhere: this window's lists, a browser,
+// `reminal list`.
+function passRename(t: vscode.Terminal, bin: string): void {
+  const s = sessions.get(t);
+  if (!s || stopped.has(t)) return;
+  const exe = path.basename(bin);
+  const name = renamedTo({
+    tab: t.name,
+    seen: seen.get(t),
+    given: named.get(t),
+    session: s.name,
+    defaults: [TERMINAL_NAME, PLACEHOLDER_NAME, exe, exe.replace(/\.exe$/i, "")],
+  });
+  seen.set(t, t.name);
+  if (!name) return;
+  named.set(t, tabName(name)!);
+  sessions.set(t, { ...s, name });
+  void runReminal(bin, ["rename", s.id, name], 10000);
+}
+
 function statusFor(t: vscode.Terminal): Status | undefined {
   return statusOf(sessions.get(t)?.attn);
 }
@@ -364,6 +391,7 @@ async function poll(bin: string): Promise<void> {
       }
       sessions.set(t, now);
       stopped.delete(t);
+      passRename(t, bin);
       syncName(t);
       if (statusOf(now.attn) === "needs" && statusOf(prev.attn) !== "needs") void needsYou(t, now);
     }

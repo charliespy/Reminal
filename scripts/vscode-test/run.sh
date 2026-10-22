@@ -34,7 +34,7 @@ GOOS=linux GOARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
   && npx vsce package --no-dependencies -o "$OLDPWD/reminal.vsix" >/dev/null)
 cleanup() {
   docker exec "$NAME-ports" /home/coder/.local/bin/reminal stop 3000 >/dev/null 2>&1 || true
-  docker rm -f "$NAME-peer" "$NAME-ports" "$NAME-cancel" "$NAME-open" >/dev/null 2>&1 || true
+  docker rm -f "$NAME-peer" "$NAME-ports" "$NAME-cancel" "$NAME-open" "$NAME-rename" >/dev/null 2>&1 || true
   [ "${KEEP:-}" = 1 ] || docker rm -f "$NAME" >/dev/null 2>&1 || true
   rm -f "$PWD/reminal" "$PWD/reminal.vsix"
 }
@@ -173,6 +173,54 @@ if grep -q '^PASS  opening it gives a tab' out/existing.log \
   echo "PASS  closing its tab left the session running"
 else echo "FAIL  closing its tab ended the session"; fail=1; fi
 docker rm -f "$NAME-open" >/dev/null 2>&1 || true
+
+# A terminal renamed by hand in the editor: its session takes the name,
+# here and wherever else it is seen. In a container of its own, which starts
+# on the published 0.2.1 (no such sync) and is updated to this build with its
+# terminals still running, as an update reaches someone. Programs may set a
+# terminal's title, and tabs here show titles that way, so one does; that
+# must not be taken for a rename.
+docker run -d --name "$NAME-rename" "$NAME" >/dev/null
+for _ in $(seq 30); do docker exec "$NAME-rename" curl -fs http://127.0.0.1:8443/healthz >/dev/null 2>&1 && break; sleep 1; done
+docker exec -d "$NAME-rename" sh -c '~/.local/bin/reminal relay 18080 >/tmp/relay.log 2>&1'
+docker exec "$NAME-rename" sh -c 'curl -fsSL -o /tmp/old.vsix https://open-vsx.org/api/reminal/reminal/0.2.1/file/reminal.reminal-0.2.1.vsix \
+  && code-server --install-extension /tmp/old.vsix --force >/dev/null 2>&1'
+docker exec "$NAME-rename" /usr/lib/code-server/lib/node -e '
+  const f = "/home/coder/.local/share/code-server/User/settings.json", fs = require("fs");
+  const s = JSON.parse(fs.readFileSync(f, "utf8")); s["terminal.integrated.tabs.title"] = "${sequence}";
+  fs.writeFileSync(f, JSON.stringify(s, null, 2));'
+# Each session's name as reminal gives it ("-" for none), one per line, sorted.
+names() {
+  docker exec "$NAME-rename" sh -c '~/.local/bin/reminal info --all --json | /usr/lib/code-server/lib/node -e "
+    let s = \"\"; process.stdin.on(\"data\", (d) => (s += d)).on(\"end\", () => {
+      for (const x of JSON.parse(s)) console.log(x.name || \"-\"); });"' | sort | tr '\n' ' '
+}
+until_file() { for _ in $(seq 180); do [ -e "out/$1" ] && return 0; sleep 1; done; return 1; }
+rm -f out/rename-old out/rename-new out/rename-reloaded out/rename-go out/rename-done
+NET="$NAME-rename" browser renametab > out/rename.log 2>&1 &
+bpid=$!
+if until_file rename-old; then
+  got=$(names)
+  if [ "$got" = "- " ]; then echo "PASS  control: before this update, renaming a tab left its session unnamed"
+  else echo "FAIL  control: before this update the session was named: $got"; fail=1; fi
+  docker exec "$NAME-rename" code-server --install-extension /tmp/reminal.vsix --force >/dev/null 2>&1
+fi
+touch out/rename-new
+if until_file rename-reloaded; then
+  got=$(names)
+  if [ "$got" = "legacy-tab " ]; then echo "PASS  after the update, a tab renamed before it gives its session that name"
+  else echo "FAIL  after the update, the tab renamed before it did not name its session: $got"; fail=1; fi
+fi
+touch out/rename-go
+wait $bpid || true
+cat out/rename.log
+grep -q '^FAIL' out/rename.log && fail=1
+grep -q '^DONE' out/rename.log || { echo "FAIL  the rename checks did not finish"; fail=1; }
+got=$(names)
+if [ "$got" = "- C3PRICING-501 legacy-tab " ]; then
+  echo "PASS  a tab renamed by hand names its session; one never renamed, whose program set its title, stays unnamed, also after a reload"
+else echo "FAIL  sessions after renaming a tab: $got"; fail=1; fi
+docker rm -f "$NAME-rename" >/dev/null 2>&1 || true
 
 # A window reload, in a browser of its own (it closes the terminals above).
 browser revive | tee out/revive.log || true
