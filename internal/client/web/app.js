@@ -7008,7 +7008,9 @@
       // Typed for the session being left — or held for one a switch was
       // under way to, when this connect is to another (back to the session
       // still on the page, say): never sent where it was not typed for.
-      if (s !== sessionId || (switchingTo && switchingTo !== s)) {
+      // Held while a switch to s itself was under way (it asked again), it
+      // was typed for s: kept.
+      if ((s !== sessionId && switchingTo !== s) || (switchingTo && switchingTo !== s)) {
         if (switchingTo && switchingTo !== s && (heldInput.length || heldOverflow)) {
           viewerNote('What you typed for ' + switchingTo + ' was not sent.');
         }

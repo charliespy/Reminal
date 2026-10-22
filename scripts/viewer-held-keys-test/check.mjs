@@ -16,12 +16,12 @@ await page.goto('http://127.0.0.1:8099/');
 const out = await page.evaluate(async () => {
   openSocket = () => {}; // no relay here: nothing dials
   const held = () => heldInput.map((x) => x.data).join('');
-  const back = async (heldFor) => {
+  const back = async (heldFor, to = 'XXXX1111') => {
     dropHeldInput();
     sessionId = 'XXXX1111'; // the session on the page
     switchingTo = heldFor; // '' : nothing under way; else a switch to it
     holdInput('rm -rf build', ++inputSerial);
-    sessionInput.value = 'XXXX1111';
+    sessionInput.value = to;
     pinInput.value = '';
     startConnect(); // back to the session on the page; its drop runs before any await
     const r = { held: held(), switchingTo };
@@ -34,7 +34,16 @@ const out = await page.evaluate(async () => {
   };
   const forOther = await back('YYYY2222');
   term.reset();
-  return { forOther, forThis: await back('') };
+  const forThis = await back('');
+  term.reset();
+  // Its open under way and asked again (a second press, the same session
+  // chosen again): what was typed meanwhile was held for it, and is kept.
+  const sameAgain = await back('YYYY2222', 'YYYY2222');
+  term.reset();
+  // Control: typed with no switch under way, it was the page's session's;
+  // another session opened, it is dropped as before.
+  const pageThen = await back('', 'YYYY2222');
+  return { forOther, forThis, sameAgain, pageThen };
 });
 console.log(JSON.stringify(out));
 // The held-input chip: what it counts, and that whatever is dropped is said.
@@ -56,9 +65,12 @@ const ok3 = /^5 characters /.test(chipOut.bracketed) && /^5 characters /.test(ch
 const ok4 = /too large to hold was not sent/.test(chipOut.tooBig) && new RegExp('^' + (65536 - 1) + ' characters ').test(chipOut.underLimit);
 const ok1 = out.forOther.held === '' && out.forOther.switchingTo === '' && out.forOther.said;
 const ok2 = out.forThis.held === 'rm -rf build' && !out.forThis.said;
+const ok5 = out.sameAgain.held === 'rm -rf build' && out.sameAgain.switchingTo === 'YYYY2222' && !out.sameAgain.said
+  && out.pageThen.held === '' && !out.pageThen.said;
 console.log((ok1 ? 'PASS  ' : 'FAIL  ') + 'keys held for a session being switched to are dropped, and said so, when the person goes back to the one on the page');
 console.log((ok2 ? 'PASS  ' : 'FAIL  ') + 'keys typed for the session on the page are kept when it connects again');
 console.log((ok3 ? 'PASS  ' : 'FAIL  ') + 'a bracketed paste is counted by what is inside it (as the same text unbracketed; a lone Esc as one)');
 console.log((ok4 ? 'PASS  ' : 'FAIL  ') + 'a paste too large to hold, with nothing else held, is said to be dropped (one just under the limit is held)');
+console.log((ok5 ? 'PASS  ' : 'FAIL  ') + 'keys held for a session whose open is under way are kept when it is opened again (typed for the page\'s session, they are still dropped)');
 await b.close(); srv.close();
-process.exit(ok1 && ok2 && ok3 && ok4 ? 0 : 1);
+process.exit(ok1 && ok2 && ok3 && ok4 && ok5 ? 0 : 1);
