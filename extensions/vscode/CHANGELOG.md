@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- The pictures on this page show again.
+
 ## 0.2.2
 
 - Renaming a reminal terminal's tab renames its session too, so the cloud
