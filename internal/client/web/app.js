@@ -3164,6 +3164,7 @@
     let manualClose = false;  // user clicked Disconnect; do not auto-reconnect
     let fatal = false;        // unrecoverable (bad PIN, session expired); do not auto-reconnect
     let fatalWords = '';      // what the relay said when it ended or refused the session: kept over the terminal
+    const uploadWaiters = new Set(); // uploads waiting for the link to be back (uploadLinkWhenBack); here, before anything can settle them
     let reconnectTimer = null;
     let backoffMs = 1000;
     // The first close after a session that was up redials at once: most are
@@ -5516,6 +5517,7 @@
     // we have to wait for the slower one.
     function startSessionFlow() {
       if (!cryptoKey || !agentLive) return;
+      settleUploadWaiters(true); // an upload waiting for this link goes now
       if (!helloShown) {
         helloShown = true;
         const ht = lastDialMs > 0 ? ' · handshake ' + lastDialMs + 'ms' : '';
@@ -6991,6 +6993,7 @@
         pinInput.value = '';
       }
       if (!s) { setStatus('Session required', 'error'); return; }
+      if (s !== sessionId) settleUploadWaiters('left'); // an upload for the session being left is not sent to this one
       // The PIN handshake's library, fetched now rather than once auth_ok
       // asks for it: on a slow link that fetch was a round trip and more on
       // every first open. Fetching it does nothing else (loadRistretto: one
@@ -7244,12 +7247,14 @@
         // "reconnect" to).
         if (helloShown && !manualClose && !fatal) { reconnectMessagePending = true; winStreamsNeedRestart = true; }
         if (manualClose) {
+          settleUploadWaiters('left');
           setStatus('Disconnected');
           hideOverlay();
           setBtnConnect();
           return;
         }
         if (fatal) {
+          settleUploadWaiters('ended');
           // Status already set by error handler. What the relay said, if it
           // was its word that ended it, stays over the terminal: the socket
           // closing after it is no news.
@@ -7738,6 +7743,7 @@
         // found or not ready" over an agent's footer).
         case 'closed':
           fatal = true;
+          settleUploadWaiters('ended');
           fatalWords = msg.error || 'Session ended';
           clearCred();
           setStatus(fatalWords, 'error');
@@ -7745,6 +7751,7 @@
           break;
         case 'error':
           fatal = true;
+          settleUploadWaiters('ended');
           fatalWords = msg.error || 'Error';
           clearCred();
           setStatus(fatalWords, 'error');
@@ -7759,6 +7766,7 @@
       const switching = !!(opts && opts.switching);
       cacheScreen(); // before the "Disconnected" line goes over it
       manualClose = true;
+      settleUploadWaiters('left');
       cancelReconnect();
       cancelDial();
       clearCred();
@@ -9006,6 +9014,37 @@
     // switch, the rest of it to the next one, sealed for that one.
     function uploadLink() { return authed && cryptoKey && ws && ws.readyState === WebSocket.OPEN ? { sock: ws, key: cryptoKey } : null; }
     function uploadLinkLive(l) { return !!l && ws === l.sock && cryptoKey === l.key && l.sock.readyState === WebSocket.OPEN; }
+    // uploadLinkWhenBack is the session's link for an upload, waited for when
+    // it is down: a phone drops it while its file picker is open, and the
+    // page is still reconnecting when the picked file comes back. The redial
+    // is nudged (fastReconnect) and the same session waited for: told the
+    // moment it is live again (startSessionFlow), or that it cannot be — left
+    // (a switch away, a disconnect) or ended (refused, closed) — or given up
+    // after UPLOAD_RELINK_MS. { link } to send on, or { why } it is not:
+    // 'never' (not connected here), 'left', 'ended', 'timeout'.
+    const UPLOAD_RELINK_MS = 30000;
+    // settleUploadWaiters tells every waiting upload what became of its link:
+    // true, it may be live (each checks it is its own session's); 'left' or
+    // 'ended', it will not be.
+    function settleUploadWaiters(how) {
+      for (const w of [...uploadWaiters]) w(how);
+    }
+    function uploadLinkWhenBack() {
+      if (inputLive()) return Promise.resolve({ link: uploadLink() });
+      const sid = sessionId;
+      if (!sid || !helloShown || manualClose || fatal) return Promise.resolve({ why: 'never' }); // never up here: nothing to wait for
+      viewerNote('reconnecting to ' + sid + ' to upload…');
+      return new Promise(resolve => {
+        const done = (r) => { uploadWaiters.delete(waiter); clearTimeout(timer); resolve(r); };
+        const waiter = (how) => {
+          if (how !== true) return done({ why: how });
+          if (sessionId === sid && inputLive()) done({ link: uploadLink() }); // else not its link yet
+        };
+        const timer = setTimeout(() => done({ why: 'timeout' }), UPLOAD_RELINK_MS);
+        uploadWaiters.add(waiter);
+        fastReconnect();
+      });
+    }
     // uploadFile sends file to the session of link (the current one when
     // none is given). false: none sent, nor will any more be — that session
     // left, not connected, or a send failed; a batch stops there. A file
@@ -9085,9 +9124,17 @@
       if (ttlStr === null) return; // user cancelled
       const ttl = parseTTL(ttlStr);
       // Every file to the session they were dropped on: the batch stops
-      // once it has been left.
-      const link = uploadLink();
-      if (!link) { alert('Not connected — connect to a session first.'); return; }
+      // once it has been left. Its link down (a phone's file picker dropped
+      // it), it waits for the session to be back.
+      const wanted = sessionId;
+      const { link, why } = await uploadLinkWhenBack();
+      if (!link) {
+        if (why === 'left') viewerNote('Not uploaded: you left ' + wanted + '.'); // as asked: no alert over it
+        else if (why === 'ended') alert('Not uploaded: the connection to ' + wanted + ' ended.');
+        else if (why === 'timeout') alert('Not uploaded: could not reconnect to ' + wanted + '. Try again once it is back.');
+        else alert('Not connected — connect to a session first.');
+        return;
+      }
       for (const f of files) if ((await uploadFile(f, ttl, link)) === false) return;
     }
     const uploadInput = document.getElementById('upload-input');
