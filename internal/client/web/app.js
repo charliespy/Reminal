@@ -9030,7 +9030,10 @@
       for (const w of [...uploadWaiters]) w(how);
     }
     function uploadLinkWhenBack() {
-      if (inputLive()) return Promise.resolve({ link: uploadLink() });
+      // A link there now is used at once, as before there was any waiting:
+      // only one that is down is waited for.
+      const now = uploadLink();
+      if (now) return Promise.resolve({ link: now });
       const sid = sessionId;
       if (!sid || !helloShown || manualClose || fatal) return Promise.resolve({ why: 'never' }); // never up here: nothing to wait for
       viewerNote('reconnecting to ' + sid + ' to upload…');
