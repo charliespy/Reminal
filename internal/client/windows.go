@@ -1320,17 +1320,16 @@ const (
 	inputBurstFor      = 300 * time.Millisecond
 )
 
-// A window that has not changed for a while is captured less often: on a
-// still window each capture is pure cost (import spawns a process per frame),
-// and most mirrored windows sit still most of the time. The floor steps back
-// from windowFrameInterval after stillAfter and again after stillLongAfter;
-// any change or viewer input (inputWake, then the burst) brings it straight
-// back, so typing and clicking are untouched.
+// A window that has not changed for stillAfter is captured every
+// stillInterval instead of every windowFrameInterval, where each capture costs
+// a process (import, and the other per-frame tools): most mirrored windows sit
+// still most of the time. The step is small so a change the window makes on
+// its own still shows within about a tenth of a second more; any change or
+// viewer input (inputWake, then the burst) brings the full rate straight back,
+// so typing and clicking are untouched.
 const (
-	stillAfter     = 2 * time.Second
-	stillFloor     = 250 * time.Millisecond
-	stillLongAfter = 10 * time.Second
-	stillLongFloor = 500 * time.Millisecond
+	stillAfter    = 2 * time.Second
+	stillInterval = 100 * time.Millisecond
 )
 
 // ackWaitTimeout bounds how long streamWindow waits for a frame ack before
@@ -1877,6 +1876,21 @@ func (s *winStream) run() {
 			}
 		}
 	}
+}
+
+// stillFloor is the loop's floor: stillInterval once the picture has been
+// still for stillAfter, on a capture path that pays per frame; else
+// windowFrameInterval.
+func (s *winStream) stillFloor(now time.Time) time.Duration {
+	if s.bands != nil || s.lastChange.IsZero() {
+		// Read from the X server's framebuffer file: a still frame costs a
+		// read and a checksum, and slowing it would only delay changes.
+		return windowFrameInterval
+	}
+	if now.Sub(s.lastChange) >= stillAfter {
+		return stillInterval
+	}
+	return windowFrameInterval
 }
 
 // applyQuality applies the latest browser profile at a frame boundary. The
@@ -2456,20 +2470,6 @@ func (s *winStream) wsFrameDue(vc, confirmed int, now time.Time) bool {
 // frames (they would only delay the result) and ask the encoder for a key so
 // the next AU is a valid entry point. Same number of relay messages — the
 // next one just leaves sooner and is current.
-// stillFloor is the loop's floor for how long the picture has been still.
-func (s *winStream) stillFloor(now time.Time) time.Duration {
-	if s.lastChange.IsZero() {
-		return windowFrameInterval
-	}
-	switch still := now.Sub(s.lastChange); {
-	case still >= stillLongAfter:
-		return stillLongFloor
-	case still >= stillAfter:
-		return stillFloor
-	}
-	return windowFrameInterval
-}
-
 // inputWake is the channel viewer input wakes the loop on; nil (never ready)
 // for a stream made without one.
 func (s *winStream) inputWake() <-chan struct{} {

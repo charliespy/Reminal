@@ -155,21 +155,28 @@ func TestAStillWindowIsCapturedLessOften(t *testing.T) {
 	}{
 		{0, windowFrameInterval},
 		{stillAfter - time.Millisecond, windowFrameInterval},
-		{stillAfter, stillFloor},
-		{stillLongAfter - time.Millisecond, stillFloor},
-		{stillLongAfter, stillLongFloor},
-		{time.Hour, stillLongFloor},
+		{stillAfter, stillInterval},
+		{time.Hour, stillInterval},
 	} {
 		s.lastChange = now.Add(-c.still)
 		if got := s.stillFloor(now); got != c.want {
 			t.Errorf("still %v: floor %v, want %v", c.still, got, c.want)
 		}
 	}
+	if stillInterval > 100*time.Millisecond {
+		t.Errorf("stillInterval %v: a change the window makes on its own would show more than a tenth of a second late", stillInterval)
+	}
 	var fresh winStream
 	if got := fresh.stillFloor(now); got != windowFrameInterval {
 		t.Errorf("a stream with no change yet: floor %v, want %v", got, windowFrameInterval)
 	}
+	// The framebuffer path reads a file per frame: never slowed.
 	s.lastChange = now.Add(-time.Hour)
+	s.bands = &winBands{}
+	if got := s.stillFloor(now); got != windowFrameInterval {
+		t.Errorf("framebuffer capture: floor %v, want %v", got, windowFrameInterval)
+	}
+	s.bands = nil
 	s.flush.raise()
 	s.takeInputFlush()
 	if got := s.stillFloor(time.Now()); got != windowFrameInterval {
