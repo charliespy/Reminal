@@ -38,6 +38,15 @@ for tag, trials in v["trials"].items():
         "host_to_paint_ms": {"p50": pct(h2p, .5), "p95": pct(h2p, .95)},
         "by_kind_p50": {k: pct([t["g2g"] for t in trials if t["kind"] == k], .5) for k in ("key", "click")},
     }
+if v.get("passive"):
+    # A change the window made on its own after being still: its flip -> the pane showing it.
+    pv, lostp = [], 0
+    for tr in v["passive"]:
+        ev = next((t for k, t in events if k == "self" and tr["w0"] - 5 <= t <= tr["w0"] + 1000), None)
+        if ev is None or tr["paintWall"] is None:
+            lostp += 1; continue
+        pv.append(tr["paintWall"] - ev)
+    res["passive_change_to_paint_ms"] = {"trials": len(v["passive"]), "lost": lostp, "p50": pct(pv, .5), "p95": pct(pv, .95), "max": pct(pv, 1)}
 res["viewer"] = v["phases"]
 cpu = {}
 for line in open(S + "procstat.jsonl"):

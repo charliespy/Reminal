@@ -24,6 +24,14 @@ def flip(kind):
 root.bind("<Key>", lambda e: flip("key"))
 root.bind("<Button-1>", lambda e: flip("click"))
 def tick():
+    # A change the window makes on its own, with no input (a build finishing,
+    # a log line): /shared/selfflip asks for one flip, logged as "self".
+    if os.path.exists("/shared/selfflip"):
+        try:
+            os.remove("/shared/selfflip")
+        except FileNotFoundError:
+            pass
+        flip("self")
     if os.path.exists("/shared/anim"):
         state["x"] = (state["x"] + 6) % (W - 40)
         c.coords(bar, state["x"], 0, state["x"] + 40, 24)

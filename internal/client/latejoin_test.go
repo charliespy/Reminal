@@ -143,3 +143,36 @@ func TestInputWakesTheFrameFloor(t *testing.T) {
 		t.Fatal("a stream without a signal must never wake")
 	}
 }
+
+// A still window is captured less often, and input brings the full rate back.
+func TestAStillWindowIsCapturedLessOften(t *testing.T) {
+	s := lateJoinStream()
+	s.flush = newWinInputSignal()
+	now := time.Now()
+	for _, c := range []struct {
+		still time.Duration
+		want  time.Duration
+	}{
+		{0, windowFrameInterval},
+		{stillAfter - time.Millisecond, windowFrameInterval},
+		{stillAfter, stillFloor},
+		{stillLongAfter - time.Millisecond, stillFloor},
+		{stillLongAfter, stillLongFloor},
+		{time.Hour, stillLongFloor},
+	} {
+		s.lastChange = now.Add(-c.still)
+		if got := s.stillFloor(now); got != c.want {
+			t.Errorf("still %v: floor %v, want %v", c.still, got, c.want)
+		}
+	}
+	var fresh winStream
+	if got := fresh.stillFloor(now); got != windowFrameInterval {
+		t.Errorf("a stream with no change yet: floor %v, want %v", got, windowFrameInterval)
+	}
+	s.lastChange = now.Add(-time.Hour)
+	s.flush.raise()
+	s.takeInputFlush()
+	if got := s.stillFloor(time.Now()); got != windowFrameInterval {
+		t.Errorf("after input: floor %v, want %v", got, windowFrameInterval)
+	}
+}

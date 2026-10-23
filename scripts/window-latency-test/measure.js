@@ -3,7 +3,8 @@
 //
 // run.sh: the real viewer, mirroring the probe window. Phases (each written
 // to /shared/phase for procstat.py): the viewer joined with no pane open;
-// the probe mirrored while still; latency trials (a key or a click sent the
+// the probe mirrored while still; changes the probe makes on its own after a
+// few still seconds (passive); latency trials (a key or a click sent the
 // way the pane sends one, then the first paint whose centre shows the
 // probe's new colour); the probe mirrored while it moves. The latency and
 // moving phases run again at each CPU throttle rate in THROTTLE (a slow
@@ -80,6 +81,30 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   phase('mirror-static');
   m0 = await metrics(); let d0 = await page.evaluate(() => __draws.length); await sleep(SECS * 1000);
   out.phases['mirror-static'] = { ...busy(m0, await metrics(), SECS), paintsPerSec: +((await page.evaluate(() => __draws.length) - d0) / SECS).toFixed(1) };
+
+  // A change the window makes on its own after it has been still a while
+  // (no input to wake anything): the probe flips itself, and the time to
+  // the pane showing it is read against the probe's log (summarize.py).
+  phase('passive');
+  const passive = [];
+  for (let i = 0; i < +(process.env.PASSIVE_TRIALS || 8); i++) {
+    await sleep(4000 + Math.random() * 4000); // still for 4–8 s first
+    const want = await page.evaluate(() => 1 - window.__lastColor);
+    const w0 = Date.now();
+    fs.writeFileSync('/shared/selfflip', '');
+    const t1 = await page.evaluate(async (want) => {
+      const t0 = performance.now();
+      return await new Promise((res) => {
+        (function chk() {
+          if (window.__lastColor === want) return res(performance.timeOrigin + performance.now());
+          if (performance.now() - t0 > 5000) return res(null);
+          setTimeout(chk, 2);
+        })();
+      });
+    }, want);
+    passive.push({ w0, paintWall: t1 });
+  }
+  out.passive = passive;
 
   for (const rate of RATES) {
     const tag = rate === 1 ? '' : '@' + rate + 'x';

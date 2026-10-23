@@ -1320,6 +1320,19 @@ const (
 	inputBurstFor      = 300 * time.Millisecond
 )
 
+// A window that has not changed for a while is captured less often: on a
+// still window each capture is pure cost (import spawns a process per frame),
+// and most mirrored windows sit still most of the time. The floor steps back
+// from windowFrameInterval after stillAfter and again after stillLongAfter;
+// any change or viewer input (inputWake, then the burst) brings it straight
+// back, so typing and clicking are untouched.
+const (
+	stillAfter     = 2 * time.Second
+	stillFloor     = 250 * time.Millisecond
+	stillLongAfter = 10 * time.Second
+	stillLongFloor = 500 * time.Millisecond
+)
+
 // ackWaitTimeout bounds how long streamWindow waits for a frame ack before
 // proceeding anyway. It keeps the stream alive if an ack is lost or the viewer
 // is an older build that never acks (it just runs slower), and lets a
@@ -1625,6 +1638,9 @@ type winStream struct {
 	// inputBurstInterval rather than windowFrameInterval, so the frame showing
 	// what the input changed is captured as soon as the window draws it.
 	burstUntil time.Time
+	// lastChange is when the captured picture last changed; the loop's floor
+	// backs off while it is old (see stillFloor).
+	lastChange time.Time
 	// shipNow is set when input just landed: drop unsent pre-click AUs, re-key,
 	// and send the next frame without waiting for the billing interval. Does
 	// not add messages — it only moves the next one earlier.
@@ -1702,7 +1718,7 @@ type winStream struct {
 // maxFramesInFlight unacknowledged frames, so latency can't accumulate on a
 // slow link and the rate adapts to what the viewer actually consumes.
 func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, quality <-chan windowQuality, keyReq *atomic.Bool, flush *winInputSignal) {
-	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, flush: flush, lastGeoCheck: time.Now()}
+	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, flush: flush, lastGeoCheck: time.Now(), lastChange: time.Now()}
 	defer s.cleanup()
 	s.run()
 }
@@ -1814,6 +1830,9 @@ func (s *winStream) run() {
 			} else {
 				changed = s.detectChange(f.Data) || s.forceSend
 			}
+			if changed {
+				s.lastChange = time.Now()
+			}
 			if len(f.Data) > 0 {
 				s.lastImg = f.Data
 			}
@@ -1842,7 +1861,7 @@ func (s *winStream) run() {
 		// can't spin a core. The helper path self-paces (next blocks until SCK
 		// delivers, at most winHelperFPS), so flooring it would only cap P2P.
 		if !s.capNative {
-			floor := windowFrameInterval
+			floor := s.stillFloor(time.Now())
 			if time.Now().Before(s.burstUntil) {
 				floor = inputBurstInterval
 			}
@@ -2437,6 +2456,20 @@ func (s *winStream) wsFrameDue(vc, confirmed int, now time.Time) bool {
 // frames (they would only delay the result) and ask the encoder for a key so
 // the next AU is a valid entry point. Same number of relay messages — the
 // next one just leaves sooner and is current.
+// stillFloor is the loop's floor for how long the picture has been still.
+func (s *winStream) stillFloor(now time.Time) time.Duration {
+	if s.lastChange.IsZero() {
+		return windowFrameInterval
+	}
+	switch still := now.Sub(s.lastChange); {
+	case still >= stillLongAfter:
+		return stillLongFloor
+	case still >= stillAfter:
+		return stillFloor
+	}
+	return windowFrameInterval
+}
+
 // inputWake is the channel viewer input wakes the loop on; nil (never ready)
 // for a stream made without one.
 func (s *winStream) inputWake() <-chan struct{} {
@@ -2451,6 +2484,9 @@ func (s *winStream) takeInputFlush() {
 		return
 	}
 	s.burstUntil = time.Now().Add(inputBurstFor)
+	// Input counts as activity: a window that answers a click slowly is
+	// still captured at the full rate when it does.
+	s.lastChange = time.Now()
 	s.wsBatch = s.wsBatch[:0]
 	s.wsBatchBytes = 0
 	if s.helper != nil {
