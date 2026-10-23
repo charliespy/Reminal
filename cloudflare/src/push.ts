@@ -68,8 +68,21 @@ export function allowedEndpoint(raw: unknown): URL | null {
   // One spelling per subscription, as the browser gave it: the limits and
   // the token are keyed on it, so another spelling of the same endpoint
   // (a case, a default port, a query or a fragment) is not let through.
-  if (u.search !== "" || u.hash !== "" || raw !== u.href) return null;
+  if (u.hash !== "" || raw !== u.href) return null;
+  // A query only where a push service puts one: Edge on Windows subscribes
+  // through WNS, whose endpoints are https://<host>.notify.windows.com/w/
+  // with a single token parameter. Any other query is refused.
+  if (u.search !== "" && !wnsEndpoint(u)) return null;
   return PUSH_HOSTS.some((re) => re.test(u.hostname)) ? u : null;
+}
+
+// wnsEndpoint says whether u is a WNS push endpoint with its token: one host
+// label under notify.windows.com, the path /w/, and the query ?token= and
+// nothing else.
+function wnsEndpoint(u: URL): boolean {
+  return /^[a-z0-9-]+\.notify\.windows\.com$/.test(u.hostname) &&
+    u.pathname === "/w/" &&
+    /^\?token=[A-Za-z0-9%._~+\/=-]+$/.test(u.search);
 }
 
 // What one alert may cost, counted where the count is the count (the
