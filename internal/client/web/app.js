@@ -3783,6 +3783,9 @@
     // socket both are for; once is enough.
     function racePinHandshake(sock) {
       if (cryptoKey || !pinValue || sock !== ws || handshakeSock !== sock || kexAttempts.size) return;
+      // The owner answer is in and its key is being made: an owner, so no
+      // PIN spent on it.
+      if (keyComing && keyComing.sock === sock) return;
       dbg('no owner answer yet — PIN handshake alongside');
       sendKexInit().catch(() => {});
     }
