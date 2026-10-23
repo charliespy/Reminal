@@ -32,7 +32,7 @@ self.addEventListener('push', (e) => {
   const body = String(d.body || '').slice(0, 300);
   // A same-origin path only: the message came from a machine, and a machine
   // should not be able to send this browser somewhere else on a tap.
-  const url = (typeof d.url === 'string' && d.url.startsWith('/') && !d.url.startsWith('//')) ? d.url : '/';
+  const url = notificationURL(d.url);
   // Same machine + same kind replaces the last one instead of stacking.
   const tag = (title + ':' + String(d.tag || 'alert')).slice(0, 120);
   // When the machine saw it. Push services do not promise order or speed.
@@ -62,9 +62,19 @@ self.addEventListener('push', (e) => {
   })());
 });
 
+// notificationURL is where a tapped notification may take the page: home
+// ("/") or one session ("/?s=" and its id, 8 of the session-id characters),
+// nothing else. No fragment (a PIN rides in one), no other parameter (an
+// invite, say): anything else is home.
+function notificationURL(u) {
+  return typeof u === 'string' && (u === '/' || /^\/\?s=[A-HJ-NP-Z2-9]{8}$/.test(u)) ? u : '/';
+}
+
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || '/';
+  // Checked again here: a notification shown before this check was added
+  // carries whatever url it was given.
+  const url = notificationURL(e.notification.data && e.notification.data.url);
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const w of wins) {

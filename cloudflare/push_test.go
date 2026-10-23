@@ -157,3 +157,58 @@ console.log(out.join("\n"));
 		}
 	}
 }
+
+// A push is posted to the endpoint that was allowed and nowhere else: the
+// post goes with redirect "manual", and a push service that answers with a
+// redirect is not followed — the caller is told its status, the failure it
+// is. An endpoint longer than any push service's is refused before anything
+// is sent.
+func TestAPushIsNeverSentOnElsewhere(t *testing.T) {
+	got := runWorkerTS(t, `
+import { handlePushToken, allowedEndpoint } from "SRC/push.ts";
+const out = [];
+const say = (k, v) => out.push(k + " " + v);
+const b64 = (u8) => btoa(String.fromCharCode(...new Uint8Array(u8)));
+const b64u = (u8) => b64(u8).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const ua = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+const p256dh = new Uint8Array(await crypto.subtle.exportKey("raw", ua.publicKey));
+const auth = crypto.getRandomValues(new Uint8Array(16));
+const vapid = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
+const env = { VAPID_PUBLIC: "x", VAPID_PRIVATE_JWK: JSON.stringify(await crypto.subtle.exportKey("jwk", vapid.privateKey)), PUSH_TOKEN_KEY: "k".repeat(48) };
+const k = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+const machine = b64(await crypto.subtle.exportKey("raw", k.publicKey));
+const sent = [];
+let answer = 201;
+globalThis.fetch = async (u, init) => {
+  sent.push({ u: String(u), redirect: init.redirect });
+  return new Response(null, { status: answer, headers: answer >= 300 && answer < 400 ? { Location: "https://evil.example/collect" } : {} });
+};
+let ip = 0;
+const ask = (endpoint) => handlePushToken(new Request("https://live.reminal.app/push/token", { method: "POST",
+  body: JSON.stringify({ endpoint, p256dh: b64u(p256dh), auth: b64u(auth), machine }),
+  headers: { "cf-connecting-ip": "203.0.113." + (++ip % 250) } }), env);
+
+let r = await ask("https://fcm.googleapis.com/fcm/send/ok");
+say("delivered", r.status + " " + JSON.stringify(await r.json()) + " redirect=" + sent[0].redirect);
+answer = 302;
+r = await ask("https://fcm.googleapis.com/fcm/send/moved");
+const moved = await r.json();
+say("redirected", r.status + " status=" + moved.status + " error=" + JSON.stringify(moved.error ?? "") + " posts=" + sent.length + " to=" + sent[sent.length - 1].u + " redirect=" + sent[sent.length - 1].redirect);
+const long = "https://fcm.googleapis.com/fcm/send/" + "a".repeat(1024);
+const n = sent.length;
+r = await ask(long);
+say("over-long", r.status + " allowed=" + (allowedEndpoint(long) !== null) + " posts=" + (sent.length - n));
+say("at-limit", "allowed=" + (allowedEndpoint("https://fcm.googleapis.com/fcm/send/" + "a".repeat(1024 - 36)) !== null));
+console.log(out.join("\n"));
+`)
+	for _, want := range []string{
+		`delivered 200 {"status":201} redirect=manual`,
+		`redirected 200 status=302 error="the push service redirected; not followed" posts=2 to=https://fcm.googleapis.com/fcm/send/moved redirect=manual`,
+		"over-long 400 allowed=false posts=0",
+		"at-limit allowed=true",
+	} {
+		if !strings.Contains(got, want+"\n") && !strings.HasSuffix(strings.TrimSpace(got), want) {
+			t.Errorf("want %q in:\n%s", want, got)
+		}
+	}
+}
