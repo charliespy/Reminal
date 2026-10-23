@@ -1,0 +1,49 @@
+# The macOS helpers (native/) are Swift and are otherwise compiled only by the
+# release build, so a change to them that does not compile would first show up
+# when a release is cut. This builds both, for both release architectures, on
+# the same runner and with the same flags as release.yml, whenever a change
+# touches them. It builds and nothing else: no signing, no secrets, no upload.
+name: Native helpers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "native/**"
+      - ".github/workflows/native.yml"
+  pull_request:
+    paths:
+      - "native/**"
+      - ".github/workflows/native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        swift_target: [arm64-apple-macos12.3, x86_64-apple-macos12.3]
+    name: build (${{ matrix.swift_target }})
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build reminal-capture
+        run: swiftc -O -target ${{ matrix.swift_target }} -o reminal-capture native/reminal-capture/main.swift
+      - name: Build reminal-overlay
+        run: swiftc -O -target ${{ matrix.swift_target }} -o reminal-overlay native/reminal-overlay/main.swift
+      - name: The keys helper answers what the agent sends it
+        if: startsWith(matrix.swift_target, 'arm64')
+        run: |
+          # Lines the agent writes to `reminal-capture keys`: each must answer
+          # ok, and an unknown one error (how an older helper tells the agent
+          # to fall back). Pings and zero-length moves only: nothing is typed
+          # or clicked on the runner.
+          out=$(printf '%s\n' \
+            '{"t":"ping"}' \
+            '{"t":"scroll","x":1,"y":1,"dy":0,"dx":0}' \
+            '{"t":"bogus"}' | ./reminal-capture keys)
+          echo "$out"
+          [ "$out" = "$(printf 'ok\nok\nerror')" ]
