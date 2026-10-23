@@ -629,9 +629,31 @@ func (a *Agent) noteWindowFlush(id string) {
 	f := a.winFlush[id]
 	a.winMu.Unlock()
 	if f != nil {
-		f.Store(true)
+		f.raise()
 	}
 }
+
+// winInputSignal is raised when a viewer sends a window input: the stream
+// ships its next frame at once (pending) and, if it is sitting out its frame
+// floor, wakes (wake) to capture what the input changed, instead of finishing
+// a 60ms sleep first.
+type winInputSignal struct {
+	pending atomic.Bool
+	wake    chan struct{}
+}
+
+func newWinInputSignal() *winInputSignal { return &winInputSignal{wake: make(chan struct{}, 1)} }
+
+func (f *winInputSignal) raise() {
+	f.pending.Store(true)
+	select {
+	case f.wake <- struct{}{}:
+	default:
+	}
+}
+
+// take reports whether input arrived since the last take, and clears it.
+func (f *winInputSignal) take() bool { return f.pending.Swap(false) }
 
 // requestWindowKey marks a window's stream as needing an immediate keyframe.
 // A viewer raises this when it detects a gap in the frame sequence: its decoder
@@ -775,7 +797,7 @@ func (a *Agent) startWindowStream(id, viewer string, bands bool) {
 		a.winStreams = map[string]chan struct{}{}
 		a.winAck = map[string]chan uint64{}
 		a.winKeyReq = map[string]*atomic.Bool{}
-		a.winFlush = map[string]*atomic.Bool{}
+		a.winFlush = map[string]*winInputSignal{}
 	}
 	// Keep this independent of winStreams for tests and hot-restart state made
 	// by an older image, where the pre-existing maps do not include quality.
@@ -783,7 +805,7 @@ func (a *Agent) startWindowStream(id, viewer string, bands bool) {
 		a.winQuality = map[string]chan windowQuality{}
 	}
 	if a.winFlush == nil {
-		a.winFlush = map[string]*atomic.Bool{}
+		a.winFlush = map[string]*winInputSignal{}
 	}
 	if _, ok := a.winStreams[id]; ok {
 		a.winMu.Unlock() // already streaming this window
@@ -801,7 +823,7 @@ func (a *Agent) startWindowStream(id, viewer string, bands bool) {
 	ack := make(chan uint64, 4)
 	quality := make(chan windowQuality, 1)
 	keyReq := &atomic.Bool{}
-	flush := &atomic.Bool{}
+	flush := newWinInputSignal()
 	a.winStreams[id] = stop
 	a.winAck[id] = ack
 	a.winQuality[id] = quality
@@ -830,7 +852,7 @@ func (a *Agent) stopWindowStream(id string) {
 		a.winAck = map[string]chan uint64{}
 		a.winQuality = map[string]chan windowQuality{}
 		a.winKeyReq = map[string]*atomic.Bool{}
-		a.winFlush = map[string]*atomic.Bool{}
+		a.winFlush = map[string]*winInputSignal{}
 	} else if ch, ok := a.winStreams[id]; ok {
 		close(ch)
 		delete(a.winStreams, id)
@@ -1288,6 +1310,16 @@ func (t *frontWindowTracker) note(id string) {
 // it, making the floor a no-op in practice.
 const windowFrameInterval = 60 * time.Millisecond
 
+// inputBurstInterval is the floor for inputBurstFor after viewer input: the
+// window redraws a few ms after a key or click lands, and a 60ms floor held
+// that redraw back for up to a whole period, which is most of what a click
+// felt like. A short burst at about a display frame catches it; the cost is
+// bounded to the burst.
+const (
+	inputBurstInterval = 16 * time.Millisecond
+	inputBurstFor      = 300 * time.Millisecond
+)
+
 // ackWaitTimeout bounds how long streamWindow waits for a frame ack before
 // proceeding anyway. It keeps the stream alive if an ack is lost or the viewer
 // is an older build that never acks (it just runs slower), and lets a
@@ -1586,8 +1618,13 @@ type winStream struct {
 	// IDR to resync its decoder (see requestWindowKey).
 	keyReq *atomic.Bool
 	// flush is raised by viewer input so the next relay batch ships immediately
-	// instead of waiting out wsFrameMinInterval (see noteWindowFlush).
-	flush *atomic.Bool
+	// instead of waiting out wsFrameMinInterval, and wakes the loop out of its
+	// frame floor (see noteWindowFlush).
+	flush *winInputSignal
+	// burstUntil: until then, just after viewer input, the loop's floor is
+	// inputBurstInterval rather than windowFrameInterval, so the frame showing
+	// what the input changed is captured as soon as the window draws it.
+	burstUntil time.Time
 	// shipNow is set when input just landed: drop unsent pre-click AUs, re-key,
 	// and send the next frame without waiting for the billing interval. Does
 	// not add messages — it only moves the next one earlier.
@@ -1664,7 +1701,7 @@ type winStream struct {
 // the viewer acks one over them. The stream is ack-paced: at most
 // maxFramesInFlight unacknowledged frames, so latency can't accumulate on a
 // slow link and the rate adapts to what the viewer actually consumes.
-func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, quality <-chan windowQuality, keyReq, flush *atomic.Bool) {
+func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, quality <-chan windowQuality, keyReq *atomic.Bool, flush *winInputSignal) {
 	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, flush: flush, lastGeoCheck: time.Now()}
 	defer s.cleanup()
 	s.run()
@@ -1805,11 +1842,18 @@ func (s *winStream) run() {
 		// can't spin a core. The helper path self-paces (next blocks until SCK
 		// delivers, at most winHelperFPS), so flooring it would only cap P2P.
 		if !s.capNative {
-			if rem := windowFrameInterval - time.Since(start); rem > 0 {
+			floor := windowFrameInterval
+			if time.Now().Before(s.burstUntil) {
+				floor = inputBurstInterval
+			}
+			if rem := floor - time.Since(start); rem > 0 {
 				select {
 				case <-s.stop:
 					return
 				case <-time.After(rem):
+				case <-s.inputWake():
+					// Input landed: capture what it changed now, not after
+					// the rest of the floor (takeInputFlush starts a burst).
 				}
 			}
 		}
@@ -2393,10 +2437,20 @@ func (s *winStream) wsFrameDue(vc, confirmed int, now time.Time) bool {
 // frames (they would only delay the result) and ask the encoder for a key so
 // the next AU is a valid entry point. Same number of relay messages — the
 // next one just leaves sooner and is current.
+// inputWake is the channel viewer input wakes the loop on; nil (never ready)
+// for a stream made without one.
+func (s *winStream) inputWake() <-chan struct{} {
+	if s.flush == nil {
+		return nil
+	}
+	return s.flush.wake
+}
+
 func (s *winStream) takeInputFlush() {
-	if s.flush == nil || !s.flush.Swap(false) {
+	if s.flush == nil || !s.flush.take() {
 		return
 	}
+	s.burstUntil = time.Now().Add(inputBurstFor)
 	s.wsBatch = s.wsBatch[:0]
 	s.wsBatchBytes = 0
 	if s.helper != nil {
