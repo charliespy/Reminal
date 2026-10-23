@@ -33,14 +33,14 @@ import (
 // The extension itself. Listed file by file rather than with a directory
 // pattern: the test harness beside it has no business in the shipped binary.
 //
-//go:embed extension/package.json extension/index.ts extension/mcp.ts
+//go:embed extension/package.json extension/index.ts extension/mcp.ts extension/inbox.ts
 var files embed.FS
 
 // shipped is the extension, file by file, relative to its directory. Named here
 // rather than walked so that both sides of a comparison read the same list in
 // the same order — and so a file added to the embed above without being added
 // here fails the installer's own test rather than going unnoticed.
-var shipped = []string{"package.json", "index.ts", "mcp.ts"}
+var shipped = []string{"package.json", "index.ts", "mcp.ts", "inbox.ts"}
 
 // dirName is the folder the extension is installed as. pi shows a discovered
 // extension under its directory name, so this is what a user sees in `pi config`

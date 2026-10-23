@@ -38,6 +38,9 @@ say "3. the extension against a real reminal mcp"
 REMINAL_BIN=/tmp/reminal node --experimental-strip-types \
     internal/piext/extension/test/harness.ts
 
+say "3b. messages handed to another extension (inbox.ts)"
+node --experimental-strip-types internal/piext/extension/test/inbox.ts
+
 say "4. reminal integrate pi"
 # A home of its own, so nothing here can touch a real pi config.
 export HOME=/tmp/pihome

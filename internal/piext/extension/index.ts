@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { McpClient } from "./mcp.ts";
+import { startInbox } from "./inbox.ts";
 
 /**
  * Attention states reminal understands. "input" is the loud one — it is what
@@ -37,6 +38,10 @@ const REFRESH_MS = 5 * 60 * 1000;
 
 export default function reminalExtension(pi: ExtensionAPI): void {
 	const bin = resolveBin();
+
+	// ---- 0. messages for this session, to an extension that asks (inbox.ts) --
+
+	startInbox(pi, bin);
 
 	// ---- 1. report what this session is doing -------------------------------
 
