@@ -159,6 +159,36 @@ test("a reminal without the command is asked once, never again", async () => {
 	r.done();
 });
 
+test("a reminal that failed without a word (not an unknown command) is asked again at the next run", async () => {
+	const r = rig("broken");
+	process.env.REMINAL_SESSION = "TESTSESS";
+	const { pi, bus, fire } = fakePi();
+	startInbox(pi, FAKE);
+	bus.emit(SUBSCRIBE, { v: 1 });
+	await until(() => r.spawns().length === 1, "the first ask");
+	await new Promise((res) => setTimeout(res, 300));
+	assert.equal(r.spawns().length, 1, "not on a timer");
+	fire("agent_start");
+	await until(() => r.spawns().length === 2, "asked again at the next run");
+	fire("session_shutdown");
+	r.done();
+});
+
+test("no reminal to run at all: pi carries on, nothing thrown", async () => {
+	const r = rig("events");
+	process.env.REMINAL_SESSION = "TESTSESS";
+	const { pi, bus, fire } = fakePi();
+	startInbox(pi, "/nonexistent/reminal");
+	bus.emit(SUBSCRIBE, { v: 1 });
+	await new Promise((res) => setTimeout(res, 300));
+	fire("agent_start");
+	bus.emit(SUBSCRIBE, { v: 1 });
+	await new Promise((res) => setTimeout(res, 300));
+	assert.deepEqual(r.spawns(), [], "nothing ran");
+	fire("session_shutdown");
+	r.done();
+});
+
 test("a refusal is asked again at the next run", async () => {
 	const r = rig("refused");
 	process.env.REMINAL_SESSION = "TESTSESS";
