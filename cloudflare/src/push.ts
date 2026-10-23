@@ -53,7 +53,7 @@ const PUSH_HOSTS = [
   /^([a-z0-9-]+\.)*notify\.windows\.com$/,
 ];
 
-function allowedEndpoint(raw: unknown): URL | null {
+export function allowedEndpoint(raw: unknown): URL | null {
   if (typeof raw !== "string" || raw.length > 1024) return null;
   let u: URL;
   try {
@@ -109,7 +109,7 @@ function b64ToBytes(s: string): Uint8Array<ArrayBuffer> {
 let signingKey: CryptoKey | null = null;
 const jwtCache = new Map<string, { jwt: string; exp: number }>();
 
-async function vapidJWT(env: PushEnv, audience: string, nowSec: number): Promise<string> {
+export async function vapidJWT(env: PushEnv, audience: string, nowSec: number): Promise<string> {
   const hit = jwtCache.get(audience);
   if (hit && hit.exp - nowSec > 3600) return hit.jwt;
   if (!signingKey) {
