@@ -220,3 +220,51 @@ console.log(out.join("\n"));
 		}
 	}
 }
+
+// Edge on Windows subscribes through WNS: its endpoint is
+// https://<host>.notify.windows.com/w/?token=<token>. That one query is let
+// through, and the push is posted to the endpoint as given; any other query
+// (another host, another path, another parameter, an empty token) is not.
+func TestPushAlertsFromEdgeOnWindows(t *testing.T) {
+	got := runWorkerTS(t, `
+import { handlePushToken, allowedEndpoint } from "SRC/push.ts";
+const out = [];
+const say = (k, v) => out.push(k + " " + v);
+const ok = (e) => allowedEndpoint(e) !== null;
+const wns = "https://wns2-par02p.notify.windows.com/w/?token=BQYAAABQ%2bB5example%2fToken%3d%3d";
+say("wns", ok(wns));
+const refused = [
+  "https://fcm.googleapis.com/fcm/send/x?token=x",
+  "https://wns2-par02p.notify.windows.com/x/?token=x",
+  "https://wns2-par02p.notify.windows.com/w/?token=x&a=1",
+  "https://wns2-par02p.notify.windows.com/w/?t=x",
+  "https://wns2-par02p.notify.windows.com/w/?token=",
+  "https://a.b.notify.windows.com/w/?token=x",
+  "https://wns2-par02p.notify.windows.com/w/?token=x#f",
+  "https://notify.windows.com.evil.example/w/?token=x",
+];
+say("refused", refused.map(ok).join(","));
+const b64 = (u8) => btoa(String.fromCharCode(...new Uint8Array(u8)));
+const b64u = (u8) => b64(u8).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const ua = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+const vapid = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
+const env = { VAPID_PUBLIC: "x", VAPID_PRIVATE_JWK: JSON.stringify(await crypto.subtle.exportKey("jwk", vapid.privateKey)), PUSH_TOKEN_KEY: "k".repeat(48) };
+const k = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+const sent = [];
+globalThis.fetch = async (u) => { sent.push(String(u)); return new Response(null, { status: 201 }); };
+const r = await handlePushToken(new Request("https://live.reminal.app/push/token", { method: "POST",
+  body: JSON.stringify({ endpoint: wns, p256dh: b64u(new Uint8Array(await crypto.subtle.exportKey("raw", ua.publicKey))), auth: b64u(crypto.getRandomValues(new Uint8Array(16))), machine: b64(await crypto.subtle.exportKey("raw", k.publicKey)) }),
+  headers: { "cf-connecting-ip": "203.0.113.9" } }), env);
+say("wns-asked", r.status + " " + JSON.stringify(await r.json()) + " to-endpoint=" + (sent[0] === wns));
+console.log(out.join("\n"));
+`)
+	for _, want := range []string{
+		"wns true",
+		"refused false,false,false,false,false,false,false,false",
+		`wns-asked 200 {"status":201} to-endpoint=true`,
+	} {
+		if !strings.Contains(got, want+"\n") && !strings.HasSuffix(strings.TrimSpace(got), want) {
+			t.Errorf("want %q in:\n%s", want, got)
+		}
+	}
+}
