@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"reminal/internal/protocol"
 )
 
@@ -386,16 +388,66 @@ func (a *Agent) broadcastNotify(message string) error {
 	if err != nil {
 		return err
 	}
-	a.currentConnMu.Lock()
-	conn := a.currentConn
-	a.currentConnMu.Unlock()
-	if conn == nil {
-		return errors.New("not connected to relay (is the agent paused?)")
-	}
-	if err := a.writeMsg(conn, protocol.Message{Type: protocol.TypeNotify, Data: enc}); err != nil {
+	if err := a.toViewers(protocol.Message{Type: protocol.TypeNotify, Data: enc}); err != nil {
 		return err
 	}
 	a.broadcastNotice("notified viewers: " + message)
+	return nil
+}
+
+// errNoViewerConn: neither the relay nor a viewer on this machine to write to.
+var errNoViewerConn = errors.New("not connected to relay (is the agent paused?)")
+
+// viewerConns is every connection a viewer is reached on: the relay's, and
+// each attached on this machine (a `reminal connect` here attaches over the
+// local socket, never through the relay).
+func (a *Agent) viewerConns() []*websocket.Conn {
+	a.currentConnMu.Lock()
+	defer a.currentConnMu.Unlock()
+	var out []*websocket.Conn
+	if a.currentConn != nil {
+		out = append(out, a.currentConn)
+	}
+	for c := range a.localConns {
+		out = append(out, c)
+	}
+	return out
+}
+
+func (a *Agent) addLocalConn(c *websocket.Conn) {
+	a.currentConnMu.Lock()
+	defer a.currentConnMu.Unlock()
+	if a.localConns == nil {
+		a.localConns = map[*websocket.Conn]struct{}{}
+	}
+	a.localConns[c] = struct{}{}
+}
+
+func (a *Agent) removeLocalConn(c *websocket.Conn) {
+	a.currentConnMu.Lock()
+	defer a.currentConnMu.Unlock()
+	delete(a.localConns, c)
+}
+
+// toViewers writes msg to every viewer connection (viewerConns). An error
+// only when none took it: one viewer gone is not the others'.
+func (a *Agent) toViewers(msg protocol.Message) error {
+	conns := a.viewerConns()
+	if len(conns) == 0 {
+		return errNoViewerConn
+	}
+	var last error
+	sent := 0
+	for _, c := range conns {
+		if err := a.writeMsg(c, msg); err != nil {
+			last = err
+			continue
+		}
+		sent++
+	}
+	if sent == 0 {
+		return last
+	}
 	return nil
 }
 
@@ -435,11 +487,8 @@ func (a *Agent) broadcastFile(path string) error {
 			humanByteSize(int(info.Size())), humanByteSize(downloadMaxBytes))
 	}
 
-	a.currentConnMu.Lock()
-	conn := a.currentConn
-	a.currentConnMu.Unlock()
-	if conn == nil {
-		return errors.New("not connected to relay (is the agent paused?)")
+	if len(a.viewerConns()) == 0 {
+		return errNoViewerConn
 	}
 
 	f, err := os.Open(path)
@@ -493,7 +542,7 @@ func (a *Agent) broadcastFile(path string) error {
 		if err != nil {
 			return err
 		}
-		if err := a.writeMsg(conn, protocol.Message{Type: protocol.TypeDownload, Data: enc}); err != nil {
+		if err := a.toViewers(protocol.Message{Type: protocol.TypeDownload, Data: enc}); err != nil {
 			return err
 		}
 	}
