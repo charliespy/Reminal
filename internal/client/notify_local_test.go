@@ -107,3 +107,53 @@ func TestANotifyReachesAViewerAttachedHereWithNoRelay(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// resizeOn reads what reaches viewer end v until a resize, and returns its
+// size (ok false if none in time).
+func resizeOn(t *testing.T, box *crypto.Box, v *websocket.Conn) (cols, rows uint16, ok bool) {
+	t.Helper()
+	_ = v.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		var m protocol.Message
+		if err := v.ReadJSON(&m); err != nil {
+			return 0, 0, false
+		}
+		if m.Type != protocol.TypeResize {
+			continue
+		}
+		pt, err := box.Decrypt(m.Data)
+		if err != nil {
+			t.Fatalf("resize did not decrypt: %v", err)
+		}
+		var s struct {
+			Cols uint16 `json:"cols"`
+			Rows uint16 `json:"rows"`
+		}
+		_ = json.Unmarshal(pt, &s)
+		return s.Cols, s.Rows, true
+	}
+}
+
+// When a viewer leaves, the agent forgets every viewer's size and asks the
+// rest to report theirs again (a 0x0 resize). A viewer attached on this
+// machine must be asked too: one that is not is left out of the next size,
+// and the PTY grows past a smaller terminal here.
+func TestAResizeReachesAViewerAttachedHereAndOneThroughTheRelay(t *testing.T) {
+	box, _ := crypto.NewBox(make([]byte, 32))
+	a := &Agent{box: box, buf: newScrollback(1 << 16)}
+	relayEnd, relayViewer := wsPair(t)
+	localEnd, localViewer := wsPair(t)
+	a.currentConn = relayEnd
+	a.addLocalConn(localEnd)
+	a.broadcastSize(0, 0)
+	if c, r, ok := resizeOn(t, box, localViewer); !ok || c != 0 || r != 0 {
+		t.Errorf("the viewer attached here got %dx%d (arrived %v), want the 0x0 ask", c, r, ok)
+	}
+	if c, r, ok := resizeOn(t, box, relayViewer); !ok || c != 0 || r != 0 {
+		t.Errorf("the viewer through the relay got %dx%d (arrived %v), want the 0x0 ask", c, r, ok)
+	}
+	a.broadcastSize(120, 40)
+	if c, r, ok := resizeOn(t, box, localViewer); !ok || c != 120 || r != 40 {
+		t.Errorf("the viewer attached here got %dx%d (arrived %v), want 120x40", c, r, ok)
+	}
+}

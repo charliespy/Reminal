@@ -1371,14 +1371,12 @@ func (a *Agent) broadcastSize(cols, rows uint16) {
 	if err != nil {
 		return
 	}
-	a.currentConnMu.Lock()
-	conn := a.currentConn
-	a.currentConnMu.Unlock()
-	if conn == nil {
-		return
-	}
 	sizeLog("broadcast %dx%d", cols, rows)
-	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeResize, Data: enc})
+	// Every viewer, those attached on this machine included: the (0, 0)
+	// sentinel follows forgetting every viewer's wrap, so one that never
+	// hears it is left out of the next size, and a smaller terminal here
+	// was grown past.
+	_ = a.toViewers(protocol.Message{Type: protocol.TypeResize, Data: enc})
 }
 
 // signalRegistered releases the parent (`reminal new`) handshake the first time
@@ -2125,13 +2123,7 @@ func (a *Agent) broadcastUploadAck(uploadID, path string) {
 	if err != nil {
 		return
 	}
-	a.currentConnMu.Lock()
-	conn := a.currentConn
-	a.currentConnMu.Unlock()
-	if conn == nil {
-		return
-	}
-	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeUploadAck, Data: enc})
+	_ = a.toViewers(protocol.Message{Type: protocol.TypeUploadAck, Data: enc})
 }
 
 // copyToClipboard puts `text` onto the host's clipboard via whichever
