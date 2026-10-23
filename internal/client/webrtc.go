@@ -187,7 +187,7 @@ type rtcPeer struct {
 	// (proving big frames actually traverse it — small acks alone can't)
 
 	mu         sync.Mutex
-	openedAt   time.Time                 // when probing started (guarded by mu)
+	openedAt   time.Time                 // when probing with frames started; zero until a stream first asks (guarded by mu)
 	haveRemote bool                      // remote description applied yet?
 	pendingICE []webrtc.ICECandidateInit // candidates that arrived early
 }
@@ -238,14 +238,29 @@ func (p *rtcPeer) sendCtl(raw []byte) {
 	}
 }
 
+// startProbe marks the channel open and not yet probed: its probe clock
+// starts when a stream first asks for it (probeAge), not now. A viewer with no
+// window open sends and receives no frames, so nothing could confirm the
+// channel; timed from the open, a healthy channel was already "stale" the
+// moment the viewer opened a window after a pause of more than rtcProbeWindow,
+// and was closed there and then, putting the window on the relay for the
+// viewer's retry cooldown and a whole new handshake (~30s).
 func (p *rtcPeer) startProbe() {
 	p.mu.Lock()
-	p.openedAt = time.Now()
+	p.openedAt = time.Time{}
 	p.mu.Unlock()
 }
+
+// probeAge is how long the channel has been probed with frames: zero, and the
+// clock started, the first time a stream asks (rtcSinks, called only by a
+// stream about to send).
 func (p *rtcPeer) probeAge() time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.openedAt.IsZero() {
+		p.openedAt = time.Now()
+		return 0
+	}
 	return time.Since(p.openedAt)
 }
 
