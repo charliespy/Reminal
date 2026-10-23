@@ -47,6 +47,17 @@ if v.get("passive"):
             lostp += 1; continue
         pv.append(tr["paintWall"] - ev)
     res["passive_change_to_paint_ms"] = {"trials": len(v["passive"]), "lost": lostp, "p50": pct(pv, .5), "p95": pct(pv, .95), "max": pct(pv, 1)}
+if v.get("rapid"):
+    # Inputs close together: send -> the last of them reaching the window.
+    def last(trials, kind, want):
+        xs, short = [], 0
+        for tr in trials:
+            got = [t for k, t in events if k == kind and tr["w0"] - 5 <= t <= tr["w0"] + 2400]
+            if len(got) < want: short += 1
+            if got: xs.append(got[-1] - tr["w0"])
+        return {"trials": len(trials), "short": short, "p50": pct(xs, .5), "p95": pct(xs, .95), "max": pct(xs, 1)}
+    res["rapid_scroll_5_notches_last_ms"] = last(v["rapid"]["scroll"], "wheel", 5)
+    res["rapid_3_clicks_last_ms"] = last(v["rapid"]["clicks"], "click", 3)
 res["viewer"] = v["phases"]
 cpu = {}
 for line in open(S + "procstat.jsonl"):

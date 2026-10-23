@@ -8,7 +8,8 @@
 // way the pane sends one, then the first paint whose centre shows the
 // probe's new colour); the probe mirrored while it moves. The latency and
 // moving phases run again at each CPU throttle rate in THROTTLE (a slow
-// phone). Writes /shared/viewer.json.
+// phone). Last, inputs close together (rapid): a five-notch scroll and three
+// clicks back to back. Writes /shared/viewer.json.
 const { chromium } = require('playwright');
 const fs = require('fs');
 const join = fs.readFileSync('/shared/join.txt', 'utf8').trim();
@@ -150,6 +151,27 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await sleep(1500);
   }
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+
+  // Inputs that come close together: a five-notch scroll in one message, and
+  // three clicks sent back to back. What counts is when the LAST one reached
+  // the window (summarize.py reads probe.log).
+  phase('rapid');
+  const rapid = { scroll: [], clicks: [] };
+  for (let i = 0; i < +(process.env.RAPID_TRIALS || 10); i++) {
+    rapid.scroll.push(await page.evaluate((id) => {
+      const w0 = Date.now();
+      sendWin('window_input', { id, kind: 'scroll', x: 0.5, y: 0.6, dx: 0, dy: (Math.random() < 0.5 ? 1 : -1) * 200 });
+      return { w0 };
+    }, w.id));
+    await sleep(2500);
+    rapid.clicks.push(await page.evaluate((id) => {
+      const w0 = Date.now();
+      for (let k = 0; k < 3; k++) sendWin('window_input', { id, kind: 'click', x: 0.5, y: 0.6 });
+      return { w0 };
+    }, w.id));
+    await sleep(2500);
+  }
+  out.rapid = rapid;
   phase('done');
   fs.writeFileSync('/shared/viewer.json', JSON.stringify(out, null, 1));
   await b.close();

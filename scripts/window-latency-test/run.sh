@@ -19,7 +19,7 @@
 #   CAPTURE=fbdir|import   Xvfb's screen file, or ImageMagick per frame (default fbdir)
 #   BOX_CPUS=2 BOX_MEM=4g  a weak machine
 #   THROTTLE=1,4,6         viewer CPU throttle rates (a slow phone)
-#   TRIALS=40 PHASE_SECS=15 IDLE_SECS=20 PASSIVE_TRIALS=8
+#   TRIALS=40 PHASE_SECS=15 IDLE_SECS=20 PASSIVE_TRIALS=8 RAPID_TRIALS=10
 #   P2P=0                  measure the relay path (default: wait for peer-to-peer)
 #   REQUIRE_P2P=1          fail if the peer-to-peer path never comes up
 #   RESULT=path            also write the summary there
@@ -66,7 +66,7 @@ echo "http://127.0.0.1:8080/?s=$SID#p=$PIN" > "$OUT/shared/join.txt"
 echo idle > "$OUT/shared/phase"
 sleep "${IDLE_SECS:-20}"
 docker run --rm --network "container:$NAME-box" -v "$OUT/shared":/shared -v "$PWD":/t:ro -w /tmp \
-  -e TRIALS="${TRIALS:-40}" -e PASSIVE_TRIALS="${PASSIVE_TRIALS:-8}" -e PHASE_SECS="${PHASE_SECS:-15}" -e THROTTLE="${THROTTLE:-1}" \
+  -e TRIALS="${TRIALS:-40}" -e PASSIVE_TRIALS="${PASSIVE_TRIALS:-8}" -e RAPID_TRIALS="${RAPID_TRIALS:-10}" -e PHASE_SECS="${PHASE_SECS:-15}" -e THROTTLE="${THROTTLE:-1}" \
   -e P2P="${P2P:-}" -e P2P_WAIT_MS="${P2P_WAIT_MS:-}" -e REQUIRE_P2P="${REQUIRE_P2P:-}" "$PW" \
   sh -c 'npm i -s playwright@1.56.0 >/dev/null 2>&1 && cp /t/measure.js . && node measure.js' || true
 sleep 2
