@@ -403,6 +403,11 @@ type Agent struct {
 	// to readDeadline (60s) for the read to time out.
 	currentConnMu sync.Mutex
 	currentConn   *websocket.Conn
+	// localConns are the viewers attached on this machine (serveAttach,
+	// under currentConnMu). They take no relay traffic, so what is pushed to
+	// viewers rather than pulled from the screen (a notify, a download) is
+	// written to each of them as well as to the relay (viewerConns).
+	localConns map[*websocket.Conn]struct{}
 
 	// sizeBook is the source of PTY geometry: each viewer's wrap, the
 	// settled min of those wraps, and the last size applied to the PTY.
@@ -3206,6 +3211,10 @@ func (a *Agent) serveConn(conn *websocket.Conn, shellExit <-chan struct{}, local
 	}()
 	defer conn.Close()
 	conn.SetReadLimit(maxRelayMessageBytes) // untrusted peer — bound frame size
+	if local {
+		a.addLocalConn(conn)
+		defer a.removeLocalConn(conn)
+	}
 
 	cursorCh := make(chan uint64, 4)
 	stop := make(chan struct{})
