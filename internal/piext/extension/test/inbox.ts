@@ -110,6 +110,20 @@ test("each event is passed on whole, acked once, and live while its stream is", 
 	r.done();
 });
 
+test("a name that is not a plain word (a flag, a space, too long) is passed as pi", async () => {
+	for (const bad of ["--help", "-x", "a b", "x".repeat(65), "naïve"]) {
+		const r = rig("events");
+		process.env.REMINAL_SESSION = "TESTSESS";
+		const { pi, bus, fire } = fakePi();
+		startInbox(pi, FAKE);
+		bus.emit(SUBSCRIBE, { v: 1, name: bad });
+		await until(() => r.spawns().length === 1, "the ask for " + JSON.stringify(bad));
+		assert.deepEqual(r.spawns(), ["inbox-stream 1 pi"], "for " + JSON.stringify(bad));
+		fire("session_shutdown");
+		r.done();
+	}
+});
+
 test("a stream reminal closed: its events no longer live, opened again at the next run", async () => {
 	const ev = { t: "event", v: 1, id: "m2", type: "notice", body: "n", line: "[x] n" };
 	const r = rig("close", [ev]);

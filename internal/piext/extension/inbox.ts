@@ -30,6 +30,9 @@ export const EVENT = "reminal:inbox:event";
 
 type Status = "shown" | "declined";
 
+// What a subscriber may call itself (it is passed to reminal as an argument).
+const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 export function startInbox(pi: ExtensionAPI, bin: string): void {
 	// Outside a reminal session there is nothing to stream; a pi without an
 	// event bus has no one to hand it to.
@@ -119,7 +122,10 @@ export function startInbox(pi: ExtensionAPI, bin: string): void {
 	pi.events.on(SUBSCRIBE, (data: unknown) => {
 		const d = (data ?? {}) as { v?: unknown; name?: unknown };
 		if (d.v !== 1) return;
-		if (typeof d.name === "string" && d.name.trim() !== "") name = d.name.trim().slice(0, 64);
+		// A name reminal is handed as an argument: letters, digits, '.', '_'
+		// and '-', not leading with '-' (never read as a flag). Anything else
+		// keeps "pi".
+		if (typeof d.name === "string" && NAME.test(d.name.trim())) name = d.name.trim();
 		wanted = true;
 		open();
 	});
