@@ -1640,6 +1640,9 @@ type winStream struct {
 	// lastChange is when the captured picture last changed; the loop's floor
 	// backs off while it is old (see stillFloor).
 	lastChange time.Time
+	// damage, on X11, is raised when something is drawn on the window: a still
+	// window waits for it instead of capturing on a timer (xdamage_linux.go).
+	damage *winDamage
 	// shipNow is set when input just landed: drop unsent pre-click AUs, re-key,
 	// and send the next frame without waiting for the billing interval. Does
 	// not add messages — it only moves the next one earlier.
@@ -1718,6 +1721,7 @@ type winStream struct {
 // slow link and the rate adapts to what the viewer actually consumes.
 func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, quality <-chan windowQuality, keyReq *atomic.Bool, flush *winInputSignal) {
 	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, flush: flush, lastGeoCheck: time.Now(), lastChange: time.Now()}
+	s.damage = newWinDamage(s.b, w)
 	defer s.cleanup()
 	s.run()
 }
@@ -1727,6 +1731,9 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64,
 // keep-awake inhibitor when this was the last stream, and stops the helper.
 func (s *winStream) cleanup() {
 	s.bands = nil // its pictures are a window's worth of pixels each
+	if s.damage != nil {
+		s.damage.close()
+	}
 	s.flushWSBatch(s.a.liveConn())
 	if s.helper != nil {
 		s.helper.stop()
@@ -1788,6 +1795,8 @@ func (s *winStream) run() {
 		// A viewer lost sync (gap in the sequence): re-key before capturing, so
 		// the very next AU it receives is a self-contained entry point.
 		s.noteKeyRequest()
+		// still: this frame showed no change (the picture-path verdict).
+		still := false
 		start := time.Now()
 		f, err := s.capture()
 		switch {
@@ -1832,6 +1841,7 @@ func (s *winStream) run() {
 			if changed {
 				s.lastChange = time.Now()
 			}
+			still = !changed
 			if len(f.Data) > 0 {
 				s.lastImg = f.Data
 			}
@@ -1872,25 +1882,81 @@ func (s *winStream) run() {
 				case <-s.inputWake():
 					// Input landed: capture what it changed now, not after
 					// the rest of the floor (takeInputFlush starts a burst).
+					continue
 				}
+			}
+			// A window that was still at the last frame, with Damage to say
+			// when it is drawn on: wait for that rather than capture again.
+			if still && s.damageLive() && !s.awaitDamage() {
+				return
 			}
 		}
 	}
 }
 
 // stillFloor is the loop's floor: stillInterval once the picture has been
-// still for stillAfter, on a capture path that pays per frame; else
-// windowFrameInterval.
+// still for stillAfter, on a capture path that pays per frame and has no
+// Damage to wait on; else windowFrameInterval.
 func (s *winStream) stillFloor(now time.Time) time.Duration {
-	if s.bands != nil || s.lastChange.IsZero() {
+	if s.bands != nil || s.lastChange.IsZero() || s.damageLive() {
 		// Read from the X server's framebuffer file: a still frame costs a
-		// read and a checksum, and slowing it would only delay changes.
+		// read and a checksum, and slowing it would only delay changes. With
+		// Damage, a still window is not captured at all (awaitDamage).
 		return windowFrameInterval
 	}
 	if now.Sub(s.lastChange) >= stillAfter {
 		return stillInterval
 	}
 	return windowFrameInterval
+}
+
+// A still window waiting on Damage still runs the loop's own checks (the window
+// still there, where it is, a frame re-sent after winMinFrameInterval) at least
+// every damageIdleMax, and looks every damagePoll for what a viewer asked of
+// it: an entry point, a new quality. Those looks read a flag; they capture
+// nothing.
+const (
+	damageIdleMax = winMinFrameInterval
+	damagePoll    = 100 * time.Millisecond
+)
+
+// damageLive reports whether the stream has a live Damage watch, dropping one
+// whose connection went away (the stream then captures on its timer).
+func (s *winStream) damageLive() bool {
+	if s.damage != nil && !s.damage.ok() {
+		s.damage.close()
+		s.damage = nil
+	}
+	return s.damage != nil
+}
+
+// awaitDamage holds a still window's loop until something is drawn on it,
+// input lands, a viewer needs something, or damageIdleMax passes. false: the
+// stream was stopped.
+func (s *winStream) awaitDamage() bool {
+	if _, menu := s.a.activeMenu(s.w.ID); menu || time.Now().Before(s.burstUntil) {
+		return true // a menu is a region grab, and a burst is input's: capture on
+	}
+	idle := time.NewTimer(damageIdleMax)
+	defer idle.Stop()
+	poll := time.NewTicker(damagePoll)
+	defer poll.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return false
+		case <-s.damage.C():
+			return true
+		case <-s.inputWake():
+			return true
+		case <-idle.C:
+			return true
+		case <-poll.C:
+			if (s.keyReq != nil && s.keyReq.Load()) || len(s.quality) > 0 || !s.damage.ok() {
+				return true
+			}
+		}
+	}
 }
 
 // applyQuality applies the latest browser profile at a frame boundary. The
@@ -2376,6 +2442,9 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		// with: a move needs it started again as much as a resize does.
 		moved := exact && (cur.X != s.w.X || cur.Y != s.w.Y || cur.W != s.w.W || cur.H != s.w.H)
 		s.w = cur
+		if s.damage != nil {
+			s.damage.setRect(cur)
+		}
 		if (resized || moved) && s.helper != nil {
 			s.helper.stop()
 			s.helper = nil
