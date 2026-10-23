@@ -271,8 +271,22 @@ export async function handlePushToken(request: Request, env: PushEnv): Promise<R
       Authorization: `vapid t=${jwt}, k=${env.VAPID_PUBLIC}`,
     },
     body: sealed,
+    redirect: "manual", // never sent on elsewhere (pushAnswer)
   });
   await res.body?.cancel();
+  return pushAnswer(res);
+}
+
+// pushAnswer is the push service's answer as the caller is told it: its
+// status. A redirect is not followed (the post is sent with redirect:
+// "manual"): the sealed alert and the relay's VAPID signature go to the
+// endpoint that was allowed, never on to wherever it points. Its status is
+// passed on as the failure it is (a machine counts anything but 2xx, 404
+// and 410 as a failed send).
+function pushAnswer(res: Response): Response {
+  if (res.status >= 300 && res.status < 400) {
+    return json({ status: res.status, error: "the push service redirected; not followed" });
+  }
   return json({ status: res.status });
 }
 
@@ -357,9 +371,10 @@ export async function handlePush(request: Request, env: PushEnv, nowMs = Date.no
       Authorization: `vapid t=${jwt}, k=${env.VAPID_PUBLIC}`,
     },
     body: payload,
+    redirect: "manual", // never sent on elsewhere (pushAnswer)
   });
   // Drain without reading into memory we keep; the body is the service's
   // diagnostic text, which we do not relay.
   await res.body?.cancel();
-  return json({ status: res.status });
+  return pushAnswer(res);
 }

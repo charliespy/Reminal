@@ -12,13 +12,13 @@ const check = (c, good, why) => (c ? ok(good) : fail(good + ' — ' + why));
 
 // ---- the service worker, with what it is given by the browser stood in -----
 {
-  const shown = [], kept = [], posted = [];
+  const shown = [], kept = [], posted = [], opened = [];
   const handlers = {};
   const self = {
     addEventListener: (t, f) => { handlers[t] = f; },
     skipWaiting: () => {},
     registration: { showNotification: async (title, o) => { shown.push({ title, ...o }); }, getNotifications: async () => [] },
-    clients: { matchAll: async () => [{ postMessage: (m) => posted.push(m) }], claim: async () => {} },
+    clients: { matchAll: async () => [{ postMessage: (m) => posted.push(m) }], openWindow: async (u) => { opened.push(u); }, claim: async () => {} },
   };
   const caches = { open: async (name) => ({ put: async (req, res) => { kept.push([name, req, await res.text()]); } }) };
   vm.runInNewContext(readFileSync('/t/sw.js', 'utf8'), { self, caches, Response, URL, Date, String, Number, encodeURIComponent, JSON });
@@ -34,6 +34,18 @@ const check = (c, good, why) => (c ? ok(good) : fail(good + ' — ' + why));
   check(shown.length === 2 && kept.length === 1, 'a malformed one is shown (a push must show) but nothing is kept', JSON.stringify(kept));
   await push({ title: 'box', body: 'Battery at 12%', tag: 'battery' });
   check(shown.length === 3 && shown[2].title === 'box' && shown[2].body === 'Battery at 12%', 'an alert shows as before', JSON.stringify(shown[2]));
+  // Where a tapped notification may take the page: home, or one session by
+  // its id; never a PIN (it rides in a fragment), an invite, or anywhere else.
+  const urlOf = async (url) => { await push({ title: 'box', body: 'x', tag: 'u' + shown.length, url }); return shown[shown.length - 1].data.url; };
+  const kept2 = [await urlOf('/'), await urlOf('/?s=ABCD2345')];
+  check(kept2[0] === '/' && kept2[1] === '/?s=ABCD2345', 'home, and one session by its id, are kept', JSON.stringify(kept2));
+  const crafted = ['/?s=ABCD2345#p=12345678', '/?s=ABCD2345&invite=x', '/?s=abcd2345', '/?s=ABCD234I', '/?s=ABCD23456', '/join', '//evil.example/', 'https://evil.example/', '/?s=ABCD2345 ', 42];
+  const went = [];
+  for (const u of crafted) went.push(await urlOf(u));
+  check(went.every((u) => u === '/'), 'a crafted url (a PIN fragment, another parameter, a bad id, another path or host) is home', JSON.stringify(went));
+  const tap = async (data) => { let p; handlers.notificationclick({ notification: { data, close: () => {} }, waitUntil: (x) => { p = x; } }); await p; return opened[opened.length - 1]; };
+  const tapped = [await tap({ url: '/?s=ABCD2345#p=12345678' }), await tap({ url: '/?s=ABCD2345' }), await tap(undefined)];
+  check(tapped[0] === '/' && tapped[1] === '/?s=ABCD2345' && tapped[2] === '/', 'tapped, a notification shown before this check opens home for a crafted url, its session for a good one', JSON.stringify(tapped));
 }
 
 // ---- the page ---------------------------------------------------------------
