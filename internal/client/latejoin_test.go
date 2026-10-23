@@ -93,10 +93,10 @@ func TestForcedFrameStaysArmedUntilItShips(t *testing.T) {
 
 func TestInputFlushShipsNextRelayFrameNow(t *testing.T) {
 	s := lateJoinStream()
-	s.flush = &atomic.Bool{}
+	s.flush = newWinInputSignal()
 	s.wsBatch = []winFrame{{Data: []byte("old")}}
 	s.wsBatchBytes = 3
-	s.flush.Store(true)
+	s.flush.raise()
 	s.takeInputFlush()
 	if len(s.wsBatch) != 0 || s.wsBatchBytes != 0 {
 		t.Fatal("pre-click batch should be dropped, not billed a beat later")
@@ -106,5 +106,40 @@ func TestInputFlushShipsNextRelayFrameNow(t *testing.T) {
 	}
 	if !s.wsFrameDue(s.a.framesWantedBy(), 0, time.Now()) {
 		t.Error("shipNow did not open the relay gate")
+	}
+}
+
+// Viewer input wakes a stream sitting out its frame floor, and starts a short
+// burst at a display frame's floor, so the redraw the input causes is captured
+// at once rather than after up to 60ms. Many inputs before the loop looks
+// coalesce into one wake and never block the input path.
+func TestInputWakesTheFrameFloor(t *testing.T) {
+	s := lateJoinStream()
+	s.flush = newWinInputSignal()
+	select {
+	case <-s.inputWake():
+		t.Fatal("woken with no input")
+	default:
+	}
+	for i := 0; i < 5; i++ {
+		s.flush.raise() // must not block: the wake is one slot, coalesced
+	}
+	select {
+	case <-s.inputWake():
+	default:
+		t.Fatal("input did not wake the floor")
+	}
+	select {
+	case <-s.inputWake():
+		t.Fatal("five inputs woke it more than once")
+	default:
+	}
+	s.takeInputFlush()
+	if !time.Now().Before(s.burstUntil) || time.Until(s.burstUntil) > inputBurstFor {
+		t.Fatalf("no burst after input (burstUntil in %v)", time.Until(s.burstUntil))
+	}
+	var none winStream
+	if none.inputWake() != nil {
+		t.Fatal("a stream without a signal must never wake")
 	}
 }
