@@ -8285,9 +8285,14 @@
       'ctrl-l': '\x0c', // clear screen
       'ctrl-o': '\x0f', // SI — readline operate-and-get-next; expand output in
       //                   Claude Code, save in nano. Sent raw like the rest.
+      'ctrl-q': '\x11', // XON — resumes output a Ctrl-S paused; quit in some programs
       'ctrl-r': '\x12', // reverse history search
+      'ctrl-s': '\x13', // XOFF — save in nano and many editors; with tty flow
+      //                   control on, a shell's output pauses until Ctrl-Q.
+      //                   Sent raw, as typed on a keyboard.
       'ctrl-u': '\x15', // clear line
       'ctrl-w': '\x17', // delete word back
+      'ctrl-x': '\x18', // exit in nano, cut in many editors
       'ctrl-z': '\x1a', // suspend
       pipe:       '|',
       tilde:      '~',
@@ -8341,6 +8346,7 @@
       'ctrl-a': { special: 'ctrl-a' }, 'ctrl-c': { special: 'ctrl-c' }, 'ctrl-d': { special: 'ctrl-d' },
       'ctrl-e': { special: 'ctrl-e' }, 'ctrl-k': { special: 'ctrl-k' }, 'ctrl-l': { special: 'ctrl-l' },
       'ctrl-o': { special: 'ctrl-o' },
+      'ctrl-q': { special: 'ctrl-q' }, 'ctrl-s': { special: 'ctrl-s' }, 'ctrl-x': { special: 'ctrl-x' },
       'ctrl-r': { special: 'ctrl-r' }, 'ctrl-u': { special: 'ctrl-u' }, 'ctrl-w': { special: 'ctrl-w' },
       'ctrl-z': { special: 'ctrl-z' },
     };
