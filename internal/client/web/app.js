@@ -3609,6 +3609,14 @@
     const OWNER_SILENT_WAITS = [1200, 3000, 6000, 12000];
     const OWNER_BUSY_RETRIES = 4;
     const OWNER_RETRY_MS = 1200;
+    // With the PIN in hand, an owner answer is waited for this long (or two
+    // round trips, on a slow link) before the PIN handshake goes too; the
+    // first of the two to answer is the connection. A machine that owns this
+    // browser answers within a round trip, so an owner still connects as
+    // one and spends none of the machine's PIN allowance; one that does not
+    // stays silent (a refusal says nothing), and waiting out that silence
+    // took nine seconds on every open.
+    const OWNER_RACE_MS = 300;
     let ownerTimer = 0;
     let ownerSilentTries = 0;
     let ownerBusyTries = 0;
@@ -3771,6 +3779,13 @@
     // Have we ever completed an owner connect to this machine? (drives the
     // Machines list's owned-only "+".)
     async function isOwnedMachine(sid) { try { return (await getPinnedMachine(sid)) !== null; } catch (_) { return false; } }
+    // The PIN handshake alongside an owner one still unanswered, on the
+    // socket both are for; once is enough.
+    function racePinHandshake(sock) {
+      if (cryptoKey || !pinValue || sock !== ws || handshakeSock !== sock || kexAttempts.size) return;
+      dbg('no owner answer yet — PIN handshake alongside');
+      sendKexInit().catch(() => {});
+    }
 
     async function sendOwnerInit() {
       if (!ws || ws.readyState !== WebSocket.OPEN) return false;
@@ -3797,6 +3812,7 @@
           frames: 1,
         }));
         sendEarlyResume(sock, exID);
+        if (pinValue) setTimeout(() => racePinHandshake(sock), Math.max(OWNER_RACE_MS, 2 * (observedRTT || 0) + 100));
         if (ownerTimer) clearTimeout(ownerTimer);
         ownerTimer = setTimeout(() => {
           ownerTimer = 0;
@@ -3804,11 +3820,17 @@
           // No agent to answer: silence says nothing. Its coming back
           // (agent_online) starts the handshake again, counted afresh.
           if (!agentLive) { ownerAttempts.clear(); return; }
+          // The PIN handshake is already under way (racePinHandshake), with a
+          // watchdog of its own; an owner answer still coming may win yet.
+          if (pinValue && (kexAttempts.size || kexInFlight)) return;
           if (pinValue ? ownerSilentTries < OWNER_SILENT_RETRIES : ownerSilentTries < OWNER_SILENT_WAITS.length) {
             const wait = pinValue ? OWNER_RETRY_MS : OWNER_SILENT_WAITS[ownerSilentTries];
             ownerSilentTries++;
             dbg('owner handshake timed out — retry ' + ownerSilentTries + ' in ' + wait + 'ms');
-            if (!pinValue) setStatus('Waiting for the machine to answer…', 'warn connecting');
+            // Asked again, as a machine just woken may need, but said now:
+            // silence is as likely a machine that does not own this browser,
+            // and the PIN gets in either way.
+            if (!pinValue) setStatus('No answer to this device as an owner yet — still asking. Enter the PIN to connect now.', 'warn connecting');
             retryOwnerInit(wait);
             return;
           }

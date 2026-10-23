@@ -56,3 +56,15 @@ there's a key to send the size under, so its first frame may still be at
 the old size. It's on the last row once the size lands (`fullAtMs`). Every
 `ok` is true. Run it against the Go relay and against `wrangler dev` (the
 sessions' `REMINAL_RELAY`/`REMINAL_WEB` pointed at it).
+
+## Owner key, opened by PIN
+
+`owner-pin.sh` (builds reminal in Docker, then runs `owner-pin.js` in a
+Playwright container with a relay and three machines, a HOME and owner list
+each) opens sessions from a browser that has an owner key: one on a machine
+that does not own it, by its PIN, is live well under a second (the owner
+handshake goes unanswered, and the PIN one goes a moment behind it); one on a
+machine that owns it opens as an owner, with no PIN handshake; one on a
+machine that stopped owning it is live by its PIN within a moment; with no
+PIN, the status says within a few seconds that the PIN gets in; a browser
+with no key and no PIN says "PIN required". It prints `ALL OK`.
