@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Harshal Gajjar
+#
+# The probe window. Every key or click flips it between black and white and
+# logs when the event arrived (wall clock ms, the same clock the viewer's
+# container reads): input -> host latency is read from that. While
+# /shared/anim exists a bar moves along its top edge every 16 ms, so the
+# window changes continuously: delivered frame rate and jitter are read from
+# that. The flip covers the centre, which the bar never reaches.
+import os, time, tkinter as tk
+W, H = 480, 320
+root = tk.Tk()
+root.title("latency-probe")
+root.geometry(f"{W}x{H}+120+120")
+c = tk.Canvas(root, width=W, height=H, highlightthickness=0, bg="#000000")
+c.pack(fill="both", expand=True)
+bar = c.create_rectangle(0, 0, 40, 24, fill="#ff0000", width=0)
+state = {"v": 0, "x": 0}
+log = open("/shared/probe.log", "a", buffering=1)
+def flip(kind):
+    state["v"] ^= 1
+    c.configure(bg="#ffffff" if state["v"] else "#000000")
+    log.write(f"{kind} {time.time() * 1000:.3f} {state['v']}\n")
+root.bind("<Key>", lambda e: flip("key"))
+root.bind("<Button-1>", lambda e: flip("click"))
+def tick():
+    if os.path.exists("/shared/anim"):
+        state["x"] = (state["x"] + 6) % (W - 40)
+        c.coords(bar, state["x"], 0, state["x"] + 40, 24)
+    root.after(16, tick)
+tick()
+root.focus_force()
+root.mainloop()
