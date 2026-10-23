@@ -23,6 +23,9 @@ def flip(kind):
     log.write(f"{kind} {time.time() * 1000:.3f} {state['v']}\n")
 root.bind("<Key>", lambda e: flip("key"))
 root.bind("<Button-1>", lambda e: flip("click"))
+# Each wheel notch (X11 buttons 4 and 5) is logged and flips it too.
+root.bind("<Button-4>", lambda e: flip("wheel"))
+root.bind("<Button-5>", lambda e: flip("wheel"))
 def tick():
     # A change the window makes on its own, with no input (a build finishing,
     # a log line): /shared/selfflip asks for one flip, logged as "self".

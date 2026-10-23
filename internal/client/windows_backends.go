@@ -1288,6 +1288,15 @@ func launchDetached(name string, args ...string) error {
 	return nil
 }
 
+// xdotool sleeps after every click (100 ms) and every key (12 ms) unless told
+// otherwise, and input runs one event at a time: each click held the next
+// event back by a tenth of a second, and a ten-notch scroll took a whole
+// second to play out, a notch every 100 ms. A click and a key are one event
+// each, so they pass --delay 0; wheel notches keep a short gap so they still
+// arrive as a fast wheel rather than all at once. (type keeps its default:
+// some apps drop characters typed with no gap.)
+const xdoNotchGapMs = "8"
+
 func (linuxWindows) clickN(w winInfo, fx, fy float64, count int, right bool) error {
 	if !have("xdotool") {
 		return fmt.Errorf("install xdotool for input control")
@@ -1301,7 +1310,7 @@ func (linuxWindows) clickN(w winInfo, fx, fy float64, count int, right bool) err
 	// X11 has no click-state field, so it coalesces rapid successive clicks into
 	// double/triple by timing itself: each viewer tap is one click here (unlike
 	// macOS, where count is authoritative). Right-click uses button 3.
-	_, err := run("xdotool", "mousemove", fmt.Sprintf("%d", absX), fmt.Sprintf("%d", absY), "click", btn)
+	_, err := run("xdotool", "mousemove", fmt.Sprintf("%d", absX), fmt.Sprintf("%d", absY), "click", "--delay", "0", btn)
 	return err
 }
 
@@ -1366,11 +1375,11 @@ func (linuxWindows) scroll(w winInfo, fx, fy, dx, dy float64) error {
 	if dx < 0 {
 		hb = "6"
 	}
-	for i := 0; i < notches(dy); i++ {
-		args = append(args, "click", vb)
+	if n := notches(dy); n > 0 {
+		args = append(args, "click", "--repeat", strconv.Itoa(n), "--delay", xdoNotchGapMs, vb)
 	}
-	for i := 0; i < notches(dx); i++ {
-		args = append(args, "click", hb)
+	if n := notches(dx); n > 0 {
+		args = append(args, "click", "--repeat", strconv.Itoa(n), "--delay", xdoNotchGapMs, hb)
 	}
 	if len(args) == 3 { // only the mousemove — nothing to scroll
 		return nil
@@ -1412,7 +1421,7 @@ func (linuxWindows) key(w winInfo, name string) error {
 			prefix += v + "+"
 		}
 	}
-	_, err := run("xdotool", "key", prefix+sym) // e.g. ctrl+c, super+l, ctrl+shift+t
+	_, err := run("xdotool", "key", "--delay", "0", prefix+sym) // e.g. ctrl+c, super+l, ctrl+shift+t
 	return err
 }
 
