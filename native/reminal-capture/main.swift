@@ -89,6 +89,12 @@ if args.count >= 2, args[1] == "scroll" {
 // Lines are JSON, one per event:
 //   {"t":"text","s":"hello"}            type this text
 //   {"t":"key","code":36,"flags":1}     a key by virtual keycode, with modifiers
+//   {"t":"click","x":10,"y":20,"right":false,"count":1}
+//   {"t":"scroll","x":10,"y":20,"dy":-40,"dx":0}    wheel deltas, CGEvent sign
+//   {"t":"drag","phase":"down","x":10,"y":20}       down, move or up
+// Clicks, scrolls and drag steps come here for the same reason keys do: each
+// used to start a process (osascript for a click, this helper for the rest).
+// An older helper answers "error" to them, and the agent falls back.
 // Flags are the CGEventFlags bits the agent already computes. Unicode goes in
 // as a string on a synthetic key, which is what makes layout-independent text
 // work; the JXA path could not marshal it, which is why osascript was used.
@@ -133,6 +139,38 @@ if args.count >= 2, args[1] == "keys" {
         }
     }
 
+    // A click: move there, then press and release with a click state (count
+    // gives native double and triple clicks) and a brief gap between them;
+    // without both, many apps take it for cursor movement.
+    func click(_ p: CGPoint, _ right: Bool, _ count: Int64) {
+        let btn: CGMouseButton = right ? .right : .left
+        func ev(_ t: CGEventType) {
+            guard let e = CGEvent(mouseEventSource: src, mouseType: t, mouseCursorPosition: p, mouseButton: btn) else { return }
+            e.setIntegerValueField(.mouseEventClickState, value: max(1, count))
+            post(e)
+        }
+        ev(.mouseMoved)
+        ev(right ? .rightMouseDown : .leftMouseDown)
+        usleep(30_000)
+        ev(right ? .rightMouseUp : .leftMouseUp)
+    }
+
+    // A scroll, as the `scroll` subcommand posts it: apps honour only
+    // trackpad-style phased gestures from a synthetic source.
+    func scroll(_ p: CGPoint, _ dy: Int32, _ dx: Int32) {
+        post(CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left))
+        func phased(_ phase: Int64, _ w1: Int32, _ w2: Int32) {
+            guard let e = CGEvent(scrollWheelEvent2Source: src, units: .pixel,
+                                  wheelCount: 2, wheel1: w1, wheel2: w2, wheel3: 0) else { return }
+            e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            e.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+            post(e)
+        }
+        phased(1, dy / 2, dx / 2)
+        phased(2, dy - dy / 2, dx - dx / 2)
+        phased(4, 0, 0)
+    }
+
     while let line = readLine(strippingNewline: true) {
         if line.isEmpty { continue }
         guard let data = line.data(using: .utf8),
@@ -146,6 +184,19 @@ if args.count >= 2, args[1] == "keys" {
         case "key":
             if let code = obj["code"] as? Int {
                 typeKey(CGKeyCode(code), UInt64(obj["flags"] as? Int ?? 0))
+            }
+        case "click":
+            if let x = obj["x"] as? Double, let y = obj["y"] as? Double {
+                click(CGPoint(x: x, y: y), (obj["right"] as? Bool) ?? false, Int64(obj["count"] as? Int ?? 1))
+            }
+        case "scroll":
+            if let x = obj["x"] as? Double, let y = obj["y"] as? Double {
+                scroll(CGPoint(x: x, y: y), Int32(obj["dy"] as? Int ?? 0), Int32(obj["dx"] as? Int ?? 0))
+            }
+        case "drag":
+            if let x = obj["x"] as? Double, let y = obj["y"] as? Double,
+               let t = ["down": CGEventType.leftMouseDown, "move": .leftMouseDragged, "up": .leftMouseUp][obj["phase"] as? String ?? ""] {
+                post(CGEvent(mouseEventSource: src, mouseType: t, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left))
             }
         case "ping":
             break // a round trip with no injection, for checking the helper is alive

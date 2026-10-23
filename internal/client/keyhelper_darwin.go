@@ -164,3 +164,19 @@ func keyHelperKey(code int, mods []string) bool {
 	}
 	return keysHelper.send(map[string]any{"t": "key", "code": code, "flags": flags})
 }
+
+// keyHelperClick clicks at a screen point: what clickN used to start an
+// osascript for, at every click.
+func keyHelperClick(x, y int, right bool, count int) bool {
+	return keysHelper.send(map[string]any{"t": "click", "x": x, "y": y, "right": right, "count": count})
+}
+
+// keyHelperScroll scrolls at a screen point by wheel deltas (CGEvent sign).
+func keyHelperScroll(x, y, dy, dx int) bool {
+	return keysHelper.send(map[string]any{"t": "scroll", "x": x, "y": y, "dy": dy, "dx": dx})
+}
+
+// keyHelperDrag posts one step of a live drag: down, move or up.
+func keyHelperDrag(phase string, x, y int) bool {
+	return keysHelper.send(map[string]any{"t": "drag", "phase": phase, "x": x, "y": y})
+}

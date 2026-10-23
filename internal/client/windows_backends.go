@@ -485,6 +485,12 @@ func (darwinWindows) clickN(w winInfo, fx, fy float64, count int, right bool) er
 	}
 	x := w.X + int(fx*float64(w.W))
 	y := w.Y + int(fy*float64(w.H))
+	// The running helper posts the same events in well under a millisecond
+	// plus the press-release gap; the osascript below starts a process and a
+	// JavaScript bridge for every click.
+	if keyHelperClick(x, y, right, count) {
+		return nil
+	}
 	btn, down, up := "kCGMouseButtonLeft", "kCGEventLeftMouseDown", "kCGEventLeftMouseUp"
 	if right {
 		btn, down, up = "kCGMouseButtonRight", "kCGEventRightMouseDown", "kCGEventRightMouseUp"
@@ -517,6 +523,11 @@ func (darwinWindows) dragPhase(w winInfo, phase string, fx, fy float64) error {
 	}
 	x := w.X + int(fx*float64(w.W))
 	y := w.Y + int(fy*float64(w.H))
+	// Through the running helper when it takes drags; a process per step
+	// otherwise.
+	if keyHelperDrag(phase, x, y) {
+		return nil
+	}
 	_, err = runHelper(p, "drag", phase, strconv.Itoa(x), strconv.Itoa(y))
 	return err
 }
@@ -560,7 +571,11 @@ func (darwinWindows) scroll(w winInfo, fx, fy, dx, dy float64) error {
 	// scroll event whose wheel deltas don't marshal — it posts as a silent
 	// no-op, so viewer scrolling did nothing (the mouse-move from the same
 	// script works, which is why clicks were fine). The helper is also ~5×
-	// faster per event than an osascript spawn.
+	// faster per event than an osascript spawn. The running helper is faster
+	// again: no process started at all.
+	if keyHelperScroll(x, y, w1, w2) {
+		return nil
+	}
 	if p, err := captureHelperPath(); err == nil {
 		if _, err := runHelper(p, "scroll", strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(w1), strconv.Itoa(w2)); err == nil {
 			return nil
