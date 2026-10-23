@@ -143,3 +143,43 @@ func TestInputWakesTheFrameFloor(t *testing.T) {
 		t.Fatal("a stream without a signal must never wake")
 	}
 }
+
+// A still window is captured less often, and input brings the full rate back.
+func TestAStillWindowIsCapturedLessOften(t *testing.T) {
+	s := lateJoinStream()
+	s.flush = newWinInputSignal()
+	now := time.Now()
+	for _, c := range []struct {
+		still time.Duration
+		want  time.Duration
+	}{
+		{0, windowFrameInterval},
+		{stillAfter - time.Millisecond, windowFrameInterval},
+		{stillAfter, stillInterval},
+		{time.Hour, stillInterval},
+	} {
+		s.lastChange = now.Add(-c.still)
+		if got := s.stillFloor(now); got != c.want {
+			t.Errorf("still %v: floor %v, want %v", c.still, got, c.want)
+		}
+	}
+	if stillInterval > 100*time.Millisecond {
+		t.Errorf("stillInterval %v: a change the window makes on its own would show more than a tenth of a second late", stillInterval)
+	}
+	var fresh winStream
+	if got := fresh.stillFloor(now); got != windowFrameInterval {
+		t.Errorf("a stream with no change yet: floor %v, want %v", got, windowFrameInterval)
+	}
+	// The framebuffer path reads a file per frame: never slowed.
+	s.lastChange = now.Add(-time.Hour)
+	s.bands = &winBands{}
+	if got := s.stillFloor(now); got != windowFrameInterval {
+		t.Errorf("framebuffer capture: floor %v, want %v", got, windowFrameInterval)
+	}
+	s.bands = nil
+	s.flush.raise()
+	s.takeInputFlush()
+	if got := s.stillFloor(time.Now()); got != windowFrameInterval {
+		t.Errorf("after input: floor %v, want %v", got, windowFrameInterval)
+	}
+}

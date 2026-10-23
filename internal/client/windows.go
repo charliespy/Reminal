@@ -1320,6 +1320,18 @@ const (
 	inputBurstFor      = 300 * time.Millisecond
 )
 
+// A window that has not changed for stillAfter is captured every
+// stillInterval instead of every windowFrameInterval, where each capture costs
+// a process (import, and the other per-frame tools): most mirrored windows sit
+// still most of the time. The step is small so a change the window makes on
+// its own still shows within about a tenth of a second more; any change or
+// viewer input (inputWake, then the burst) brings the full rate straight back,
+// so typing and clicking are untouched.
+const (
+	stillAfter    = 2 * time.Second
+	stillInterval = 100 * time.Millisecond
+)
+
 // ackWaitTimeout bounds how long streamWindow waits for a frame ack before
 // proceeding anyway. It keeps the stream alive if an ack is lost or the viewer
 // is an older build that never acks (it just runs slower), and lets a
@@ -1625,6 +1637,9 @@ type winStream struct {
 	// inputBurstInterval rather than windowFrameInterval, so the frame showing
 	// what the input changed is captured as soon as the window draws it.
 	burstUntil time.Time
+	// lastChange is when the captured picture last changed; the loop's floor
+	// backs off while it is old (see stillFloor).
+	lastChange time.Time
 	// shipNow is set when input just landed: drop unsent pre-click AUs, re-key,
 	// and send the next frame without waiting for the billing interval. Does
 	// not add messages — it only moves the next one earlier.
@@ -1702,7 +1717,7 @@ type winStream struct {
 // maxFramesInFlight unacknowledged frames, so latency can't accumulate on a
 // slow link and the rate adapts to what the viewer actually consumes.
 func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, quality <-chan windowQuality, keyReq *atomic.Bool, flush *winInputSignal) {
-	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, flush: flush, lastGeoCheck: time.Now()}
+	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, flush: flush, lastGeoCheck: time.Now(), lastChange: time.Now()}
 	defer s.cleanup()
 	s.run()
 }
@@ -1814,6 +1829,9 @@ func (s *winStream) run() {
 			} else {
 				changed = s.detectChange(f.Data) || s.forceSend
 			}
+			if changed {
+				s.lastChange = time.Now()
+			}
 			if len(f.Data) > 0 {
 				s.lastImg = f.Data
 			}
@@ -1842,7 +1860,7 @@ func (s *winStream) run() {
 		// can't spin a core. The helper path self-paces (next blocks until SCK
 		// delivers, at most winHelperFPS), so flooring it would only cap P2P.
 		if !s.capNative {
-			floor := windowFrameInterval
+			floor := s.stillFloor(time.Now())
 			if time.Now().Before(s.burstUntil) {
 				floor = inputBurstInterval
 			}
@@ -1858,6 +1876,21 @@ func (s *winStream) run() {
 			}
 		}
 	}
+}
+
+// stillFloor is the loop's floor: stillInterval once the picture has been
+// still for stillAfter, on a capture path that pays per frame; else
+// windowFrameInterval.
+func (s *winStream) stillFloor(now time.Time) time.Duration {
+	if s.bands != nil || s.lastChange.IsZero() {
+		// Read from the X server's framebuffer file: a still frame costs a
+		// read and a checksum, and slowing it would only delay changes.
+		return windowFrameInterval
+	}
+	if now.Sub(s.lastChange) >= stillAfter {
+		return stillInterval
+	}
+	return windowFrameInterval
 }
 
 // applyQuality applies the latest browser profile at a frame boundary. The
@@ -2451,6 +2484,9 @@ func (s *winStream) takeInputFlush() {
 		return
 	}
 	s.burstUntil = time.Now().Add(inputBurstFor)
+	// Input counts as activity: a window that answers a click slowly is
+	// still captured at the full rate when it does.
+	s.lastChange = time.Now()
 	s.wsBatch = s.wsBatch[:0]
 	s.wsBatchBytes = 0
 	if s.helper != nil {
