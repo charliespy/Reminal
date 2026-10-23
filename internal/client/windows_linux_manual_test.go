@@ -596,3 +596,54 @@ func TestX11ListApps(t *testing.T) {
 		}
 	}
 }
+
+// TestX11DamageWakesOnDraw: a stream watching a window is woken when something
+// is drawn on that window, and one watching another part of the screen is not.
+func TestX11DamageWakesOnDraw(t *testing.T) {
+	b := requireX11(t)
+	w := findTestWindow(t, b)
+	d := newWinDamage(b, w)
+	if d == nil {
+		t.Fatal("no Damage watch on an X11 display that has the extension")
+	}
+	defer d.close()
+	// A rectangle of the screen the window does not cover.
+	away := winInfo{ID: "0x1", X: w.X + w.W + 40, Y: w.Y, W: 40, H: 40}
+	o := newWinDamage(b, away)
+	if o == nil {
+		t.Fatal("no second Damage watch")
+	}
+	defer o.close()
+	quiet := func(c <-chan struct{}) {
+		// Wait out whatever earlier tests left drawing.
+		for end := time.Now().Add(3 * time.Second); time.Now().Before(end); {
+			select {
+			case <-c:
+			case <-time.After(300 * time.Millisecond):
+				return
+			}
+		}
+		t.Fatal("the screen never went quiet")
+	}
+	quiet(d.C())
+	quiet(o.C())
+	if err := b.focus(w); err != nil {
+		t.Fatalf("focus: %v", err)
+	}
+	if err := b.typeText(w, "echo drawn"); err != nil {
+		t.Fatalf("typeText: %v", err)
+	}
+	select {
+	case <-d.C():
+	case <-time.After(2 * time.Second):
+		t.Fatal("text drawn in the window did not wake its watch")
+	}
+	select {
+	case <-o.C():
+		t.Error("a watch on a part of the screen nothing was drawn on was woken")
+	case <-time.After(500 * time.Millisecond):
+	}
+	if !d.ok() || !o.ok() {
+		t.Error("a live watch reports its connection lost")
+	}
+}

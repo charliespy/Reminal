@@ -10,6 +10,7 @@ require (
 	github.com/creack/pty v1.1.21
 	github.com/gorilla/websocket v1.5.3
 	github.com/gtank/ristretto255 v0.2.0
+	github.com/jezek/xgb v1.3.1
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/webrtc/v4 v4.2.16
