@@ -653,6 +653,10 @@ func argBool(args map[string]any, key string, def bool) bool {
 	return def
 }
 
+// mcpMacOnlyTools are the window-notes tools that need macOS's overlay
+// (read_replies reads what came back, and works anywhere).
+var mcpMacOnlyTools = map[string]bool{"list_windows": true, "add_note": true, "remove_note": true, "clear_notes": true}
+
 func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 	switch name {
 	case "list_sessions":
@@ -677,7 +681,9 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 			argBool(args, "enter", false) || argBool(args, "newline", false),
 		)
 	}
-	if runtime.GOOS != "darwin" && name != "read_replies" {
+	// Window notes draw over a window, which only macOS does for now: those
+	// tools say so elsewhere. Any other name, on every OS, is not a tool.
+	if runtime.GOOS != "darwin" && mcpMacOnlyTools[name] {
 		return "", errors.New("window notes are macOS-only for now")
 	}
 	switch name {
