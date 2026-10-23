@@ -544,6 +544,10 @@
     let ownRevealed = false; // the raw id string is hidden by default (it's ugly)
     let ownErr = '';
     let iOwnThisMachine = false; // true once we've owner-connected to the current machine → hide the enroll offer
+    // keyByPin: this socket's session key came by the PIN handshake, so the
+    // machine did not answer this device as an owner here, whatever it did
+    // before (an owner list can drop it). Reset with each socket.
+    let keyByPin = false;
     let ownFp = null;        // this browser's short device fingerprint (dv_…), shown so you can match it in `reminal owners`
 
     // deviceFingerprint mirrors Go's: "dv_" + hex(first 4 bytes of SHA-256(pub)).
@@ -3575,6 +3579,10 @@
       sealState = st;
       cryptoKey = key;
       dbg('✓ handshake complete — session key set' + (sealState ? ', sealed frames' : ''));
+      // In by PIN: not an owner here, even of a machine this device once owned
+      // (ownership can be revoked on the host). Owner-only controls go.
+      keyByPin = true;
+      if (iOwnThisMachine) { iOwnThisMachine = false; if (typeof renderHost === 'function') renderHost(); }
       pakeTimeouts = 0;
       pakeBusyTries = 0;
       // Whatever a wait on the way said ("Busy — trying again in 3s"), the
@@ -7147,8 +7155,9 @@
       // Re-evaluate ownership for this session's machine: false until proven by an
       // owner connect, but prime it from the pin store so a machine we already own
       // hides the enroll offer immediately instead of flashing it.
+      keyByPin = false;
       iOwnThisMachine = false;
-      isOwnedMachine(sessionId).then(v => { if (v && !iOwnThisMachine) { iOwnThisMachine = true; if (typeof renderHost === 'function') renderHost(); } }).catch(() => {});
+      isOwnedMachine(sessionId).then(v => { if (v && !iOwnThisMachine && !keyByPin) { iOwnThisMachine = true; if (typeof renderHost === 'function') renderHost(); } }).catch(() => {});
       // A new socket means a fresh session key; tear down any peer connection so
       // it renegotiates cleanly (the agent may be a different process now). Clear
       // the cooldown so P2P is retried immediately — the network may have changed.

@@ -3,7 +3,8 @@
 //             a moment behind it, live well under a second;
 //   owned     m1, met as an owner before: the owner handshake, and no PIN one;
 //   revoked   m3, met as an owner, then its owner list emptied: the owner
-//             handshake, the PIN one behind it in a moment, live;
+//             handshake, the PIN one behind it in a moment, live, and not
+//             taken for an owner (no owner-only controls);
 //   noPin     m2 with no PIN: said within a few seconds that the PIN gets in;
 //   noKey     a browser with no owner key and no PIN: "PIN required".
 // Every switch is a fresh dial (the parked sockets closed first).
@@ -37,6 +38,9 @@ const fs = require('fs');
     let ms = -1;
     try { await p.waitForFunction(live, null, { timeout: until, polling: 20 }); ms = Date.now() - t0; } catch (_) {}
     if (process.env.DBG) for (const l of p.logs) console.log('  ' + (Number(l.split(' ')[0]) - t0) + 'ms ' + l.slice(l.indexOf(' ') + 1));
+    // Owner or not is read a moment after: the pin store is read in the
+    // background on every socket and must not have made it an owner again.
+    await p.waitForTimeout(500);
     return { ms, sent: p.sent.join(','), owner: await p.evaluate(() => iOwnThisMachine) };
   }
   const out = {};
@@ -54,13 +58,16 @@ const fs = require('fs');
   for (const m of ['m1', 'm3']) { const r = await open(p, M[m], ''); if (!r.owner) throw new Error(m + ' did not open as an owner: ' + JSON.stringify(r)); }
 
   out.notOwned = await open(p, M.m2, M.m2.pin);
-  out.notOwned.ok = out.notOwned.ms >= 0 && out.notOwned.ms < 1000 && out.notOwned.sent === 'own_init,pake_init';
+  out.notOwned.ok = out.notOwned.ms >= 0 && out.notOwned.ms < 1000 && out.notOwned.sent === 'own_init,pake_init' && !out.notOwned.owner;
   out.owned = await open(p, M.m1, M.m1.pin);
   out.owned.ok = out.owned.ms >= 0 && out.owned.owner && out.owned.sent.startsWith('own_init') && !out.owned.sent.includes('pake_init');
   fs.writeFileSync('/p/revoke-m3', '');
   while (!fs.existsSync('/p/revoked')) await p.waitForTimeout(100);
   out.revoked = await open(p, M.m3, M.m3.pin);
-  out.revoked.ok = out.revoked.ms >= 0 && out.revoked.ms < 1500 && out.revoked.sent === 'own_init,pake_init';
+  // The host panel as drawn: no "You own this machine" for a machine that
+  // dropped this device (an owner-only control would follow it).
+  out.revoked.saysOwned = await p.evaluate(() => { try { renderHost(); } catch (_) {} return document.body.innerHTML.includes('You own this machine'); });
+  out.revoked.ok = out.revoked.ms >= 0 && out.revoked.ms < 1500 && out.revoked.sent === 'own_init,pake_init' && !out.revoked.owner && !out.revoked.saysOwned;
 
   await p.evaluate(() => closeAllWarm());
   const t0 = Date.now();
