@@ -6,6 +6,8 @@
 // $FAKE_INBOX_DIR/mode, read as it starts:
 //   absent     a reminal without the command: a word on stderr, exit 2
 //   refused    {"t":"refused"} and exit 1
+//   broken     a word on stderr and exit 1, nothing on stdout (its session's
+//              reminal not reachable just then)
 //   events     ready, then each line of $FAKE_INBOX_DIR/events, then it waits
 //              for stdin to close
 //   close      ready, one event, then it ends (reminal closing the stream)
@@ -26,6 +28,9 @@ switch (mode) {
 	case "absent":
 		process.stderr.write('reminal: unknown command "inbox-stream"\n');
 		process.exit(2);
+	case "broken":
+		process.stderr.write("error: connect to this session's reminal: no such file\n");
+		process.exit(1);
 	case "refused":
 		out({ t: "refused", why: "no" });
 		process.exit(1);

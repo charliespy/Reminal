@@ -41,7 +41,8 @@ export function startInbox(pi: ExtensionAPI, bin: string): void {
 	let wanted = false;
 	let name = "pi";
 	let proc: ChildProcessWithoutNullStreams | undefined;
-	// A reminal that has no inbox stream at all: asked once, never again.
+	// A reminal that has no inbox stream at all (it said "unknown command", or
+	// there is no reminal to run): asked once, never again.
 	let unavailable = false;
 	// Another extension in this session took the stream over: it is theirs.
 	let replaced = false;
@@ -56,8 +57,7 @@ export function startInbox(pi: ExtensionAPI, bin: string): void {
 			return;
 		}
 		proc = p;
-		// Anything said at all: a reminal that has the command (ready, or a
-		// refusal it may lift by the next run).
+		// Anything said at all: a reminal that has the command.
 		let said = false;
 		let buf = "";
 		const live = (): boolean => proc === p;
@@ -106,15 +106,18 @@ export function startInbox(pi: ExtensionAPI, bin: string): void {
 			}
 		});
 		p.stdin.on("error", () => {});
-		p.on("error", () => {
-			unavailable = true;
+		p.on("error", (err: NodeJS.ErrnoException) => {
+			// No reminal to run at all; any other failure to start is asked again.
+			if (err.code === "ENOENT") unavailable = true;
 			if (proc === p) proc = undefined;
 		});
-		p.on("exit", () => {
+		p.on("exit", (code) => {
 			if (proc === p) proc = undefined;
-			// Not a word: this reminal has no inbox stream. A refusal is asked
-			// again at the next run; an absent command never.
-			if (!said) unavailable = true;
+			// Exit 2 without a word is reminal's "unknown command": this one has no
+			// inbox stream, and is never asked again. Anything else (a refusal, a
+			// stream it closed, its session's reminal not reachable just then) is
+			// asked again at the next run.
+			if (code === 2 && !said) unavailable = true;
 		});
 	};
 
