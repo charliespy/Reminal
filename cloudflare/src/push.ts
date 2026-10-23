@@ -62,6 +62,9 @@ export function allowedEndpoint(raw: unknown): URL | null {
     return null;
   }
   if (u.protocol !== "https:" || u.port !== "") return null;
+  // No credentials in it: a push service's endpoint never carries a user or
+  // a password, and the relay posts to the host alone.
+  if (u.username !== "" || u.password !== "") return null;
   // One spelling per subscription, as the browser gave it: the limits and
   // the token are keyed on it, so another spelling of the same endpoint
   // (a case, a default port, a query or a fragment) is not let through.

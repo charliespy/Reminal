@@ -199,6 +199,12 @@ const n = sent.length;
 r = await ask(long);
 say("over-long", r.status + " allowed=" + (allowedEndpoint(long) !== null) + " posts=" + (sent.length - n));
 say("at-limit", "allowed=" + (allowedEndpoint("https://fcm.googleapis.com/fcm/send/" + "a".repeat(1024 - 36)) !== null));
+// An endpoint carrying credentials is refused; the same endpoint plain is not.
+const creds = ["https://u:p@fcm.googleapis.com/fcm/send/x", "https://u@fcm.googleapis.com/fcm/send/x", "https://:p@fcm.googleapis.com/fcm/send/x"];
+say("credentials", creds.map((e) => allowedEndpoint(e) !== null).join(",") + " plain=" + (allowedEndpoint("https://fcm.googleapis.com/fcm/send/x") !== null));
+const n2 = sent.length;
+r = await ask(creds[0]);
+say("credentials-asked", r.status + " posts=" + (sent.length - n2));
 console.log(out.join("\n"));
 `)
 	for _, want := range []string{
@@ -206,6 +212,8 @@ console.log(out.join("\n"));
 		`redirected 200 status=302 error="the push service redirected; not followed" posts=2 to=https://fcm.googleapis.com/fcm/send/moved redirect=manual`,
 		"over-long 400 allowed=false posts=0",
 		"at-limit allowed=true",
+		"credentials false,false,false plain=true",
+		"credentials-asked 400 posts=0",
 	} {
 		if !strings.Contains(got, want+"\n") && !strings.HasSuffix(strings.TrimSpace(got), want) {
 			t.Errorf("want %q in:\n%s", want, got)
