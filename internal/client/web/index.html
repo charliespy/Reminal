@@ -103,10 +103,18 @@
       font-weight: 500;
       padding: 6px 14px;
     }
-    button:hover { background: #2ea043; }
-    button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+    /* Hover looks are for a mouse. A tap leaves :hover on what was tapped
+       until something else is, so on a touch screen a control that opts out
+       of the green with one class (which this rule outranks) stayed solid
+       green after a tap. And background-color, not the shorthand, here and
+       for :disabled: the shorthand resets another rule's background image,
+       repeat, position and size. */
+    @media (hover: hover) {
+      button:hover { background-color: #2ea043; }
+      button.danger:hover { background-color: #f85149; }
+    }
+    button:disabled { background-color: #21262d; color: #484f58; cursor: not-allowed; }
     button.danger { background: #da3633; }
-    button.danger:hover { background: #f85149; }
     /* Connection status as a compact pill, tinted by state. */
     #status {
       font-size: 12px; color: #8b949e; display: inline-flex; align-items: center; gap: 6px;
