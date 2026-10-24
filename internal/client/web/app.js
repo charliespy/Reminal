@@ -589,19 +589,99 @@
         t.onerror = () => rej(t.error);
       });
     }
+    // A curve key (Ed25519, X25519) made by this browser. A build of WebKit
+    // refuses any such key whose first byte is 0: making one fails
+    // (OperationError) about once in 200, importing one every time
+    // (DataError). Each try is a fresh random key: three at most.
+    async function curveKeyMade(name, extractable, usages) {
+      for (let i = 1; ; i++) {
+        try { return await crypto.subtle.generateKey({ name: name }, extractable, usages); }
+        catch (e) { if (i >= 3 || !e || e.name !== 'OperationError') throw e; }
+      }
+    }
+    // An Ed25519 key from a 32-byte seed: { pub (32 bytes), sign(bytes) →
+    // 64 bytes }. The browser's own where it takes the seed; tweetnacl's
+    // where it has no Ed25519 or refuses that seed (WebKit, its first byte
+    // 0): the same key, and the same signatures (Ed25519's are
+    // deterministic), so whoever checks them cannot tell which made them.
+    async function ed25519FromSeed(seed) {
+      const pk8 = new Uint8Array(48);
+      pk8.set(hexToU8('302e020100300506032b657004220420')); pk8.set(seed, 16);
+      try {
+        const k = await crypto.subtle.importKey('pkcs8', pk8, { name: 'Ed25519' }, true, ['sign']);
+        const pub = base64ToU8(b64URLToStd((await crypto.subtle.exportKey('jwk', k)).x));
+        return { pub: pub, sign: async b => new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, k, b)) };
+      } catch (_) {
+        const nacl = await loadNacl(), kp = nacl.sign.keyPair.fromSeed(seed);
+        return { pub: kp.publicKey, sign: async b => nacl.sign.detached(new Uint8Array(b), kp.secretKey) };
+      }
+    }
+    // Whether sig is pub's Ed25519 signature of msg: the browser's own check,
+    // tweetnacl's where it has no Ed25519 (Safari 16: NotSupportedError). A
+    // key or signature the browser refuses for its shape is refused as before.
+    async function ed25519Verify(pub, sig, msg) {
+      try {
+        const k = await crypto.subtle.importKey('raw', pub, { name: 'Ed25519' }, false, ['verify']);
+        return await crypto.subtle.verify({ name: 'Ed25519' }, k, sig, msg);
+      } catch (e) {
+        if (!e || e.name !== 'NotSupportedError') throw e;
+        const nacl = await loadNacl();
+        return nacl.sign.detached.verify(new Uint8Array(msg), new Uint8Array(sig), new Uint8Array(pub));
+      }
+    }
+    // This device's owner key signs bytes: the browser's own key, or, in a
+    // browser with no Ed25519, the one made from its sealed seed
+    // (loadDeviceKeyPair).
+    async function deviceSign(dk, bytes) {
+      if (dk.sign) return dk.sign(bytes);
+      return new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, bytes));
+    }
+    // What a person reads where a browser cannot make the owner key at all
+    // (no Ed25519, and tweetnacl not loaded): in place of the browser's own
+    // "The operation is not supported."
+    const DEVICE_KEY_UNSUPPORTED = 'This browser can’t make the keys reminal needs. Update Safari (to 17 or later), or use another browser, then try again.';
+    // An owner key where the browser makes no Ed25519 key itself: a random
+    // seed, its key tweetnacl's (ed25519FromSeed: the same key, signatures and
+    // device id a browser's own would give), the seed kept sealed under a key
+    // the browser keeps and never gives out (AES-GCM, not extractable, like the
+    // exchange key's), and read back to be sure it was kept.
+    async function deviceSeedKeyMade(db) {
+      let k, seed;
+      try {
+        seed = crypto.getRandomValues(new Uint8Array(32));
+        k = await ed25519FromSeed(seed);
+      } catch (_) { throw new Error(DEVICE_KEY_UNSUPPORTED); }
+      const seal = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, seal, seed));
+      seed.fill(0);
+      await idbPut(db, 'device', { seed: { seal: seal, iv: iv, sealed: sealed }, pubRaw: new Uint8Array(k.pub) });
+      const back = await idbGet(db, 'device');
+      if (!back || !back.seed || !back.pubRaw || u8ToBase64(new Uint8Array(back.pubRaw)) !== u8ToBase64(k.pub)) throw new Error('This browser did not keep the owner key it was given: allow this site to store data, then try again.');
+      return new Uint8Array(k.pub);
+    }
     async function ownDeviceId() {
       const db = await openOwnDB();
       const rec = await idbGet(db, 'device');
       let pub;
       if (rec && rec.publicKey) {
         pub = new Uint8Array(await crypto.subtle.exportKey('raw', rec.publicKey));
+      } else if (rec && rec.seed && rec.pubRaw) {
+        pub = new Uint8Array(rec.pubRaw); // made from a seed (a browser with no Ed25519)
       } else {
         // extractable=false → the PRIVATE key can never leave the browser.
-        const kp = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
-        await idbPut(db, 'device', { privateKey: kp.privateKey, publicKey: kp.publicKey });
+        // Made only when none is kept: a kept one is never made again.
+        let kp = null;
+        try { kp = await curveKeyMade('Ed25519', false, ['sign', 'verify']); }
+        catch (e) { if (!e || e.name !== 'NotSupportedError') throw e; }
+        if (kp) {
+          await idbPut(db, 'device', { privateKey: kp.privateKey, publicKey: kp.publicKey });
+          pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+        } else {
+          pub = await deviceSeedKeyMade(db); // no Ed25519 here (Safari 16)
+        }
         forgetCachedScreen(); // a new owner key: what the old one opened is not this one's
         closeAllWarm();
-        pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
       }
       return 'rmnl_' + b64url(pub);
     }
@@ -1710,7 +1790,7 @@
       new DataView(ts.buffer).setBigUint64(0, BigInt(unix), false);
       const tr = await ownerTranscript('reminal-owner-action-v1:', sid || sessionId,
         [new TextEncoder().encode(action), nonce, ts]);
-      const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
+      const sig = await deviceSign(dk, tr);
       return { device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig),
                nonce: u8ToBase64(nonce), unix };
     }
@@ -3435,20 +3515,27 @@
     let _x25519Native = null;
     async function x25519NativeOK() {
       if (_x25519Native === null) {
-        try { await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']); _x25519Native = true; }
-        catch (_) { _x25519Native = false; }
+        // Only a browser that does not know X25519 has none: one that failed
+        // to make a key three times (curveKeyMade) has it, and its own keys
+        // fall back where they are made.
+        try { await curveKeyMade('X25519', true, ['deriveBits']); _x25519Native = true; }
+        catch (e) { _x25519Native = !(e && e.name === 'NotSupportedError'); }
       }
       return _x25519Native;
     }
     // Ephemeral keypair → { pub: Uint8Array(32), deriveShared(peerPubBytes) -> Uint8Array(32) }.
     async function newEphemeralX25519() {
       if (await x25519NativeOK()) {
-        const kp = await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
-        const pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
-        return { pub, deriveShared: async (peer) => {
-          const pk = await crypto.subtle.importKey('raw', peer, { name: 'X25519' }, false, []);
-          return new Uint8Array(await crypto.subtle.deriveBits({ name: 'X25519', public: pk }, kp.privateKey, 256));
-        } };
+        // Not made by the browser after three tries (curveKeyMade): by nacl,
+        // below — the peer cannot tell the two apart.
+        try {
+          const kp = await curveKeyMade('X25519', true, ['deriveBits']);
+          const pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+          return { pub, deriveShared: async (peer) => {
+            const pk = await crypto.subtle.importKey('raw', peer, { name: 'X25519' }, false, []);
+            return new Uint8Array(await crypto.subtle.deriveBits({ name: 'X25519', public: pk }, kp.privateKey, 256));
+          } };
+        } catch (_) {}
       }
       const nacl = await loadNacl();
       const priv = crypto.getRandomValues(new Uint8Array(32));
@@ -3658,6 +3745,16 @@
       try {
         const db = await openOwnDB();
         const rec = await idbGet(db, 'device');
+        if (rec && rec.seed && rec.pubRaw) {
+          // Made from a seed, where the browser has no Ed25519 (ownDeviceId):
+          // opened from its seal, and the same key it was, or none.
+          const seed = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: rec.seed.iv }, rec.seed.seal, rec.seed.sealed));
+          const k = await ed25519FromSeed(seed);
+          seed.fill(0);
+          const pubRaw = new Uint8Array(rec.pubRaw);
+          if (u8ToBase64(new Uint8Array(k.pub)) !== u8ToBase64(pubRaw)) return null;
+          return { pubRaw, sign: k.sign };
+        }
         if (!rec || !rec.privateKey || !rec.publicKey) return null;
         const pubRaw = new Uint8Array(await crypto.subtle.exportKey('raw', rec.publicKey));
         return { privateKey: rec.privateKey, pubRaw };
@@ -4139,7 +4236,7 @@
                 // Prove this is a SELF-revoke: sign (machineKey, deviceKey) with our
                 // device key. Matches Go's RevokeSelfTranscript (sessionID = "").
                 const tr = await ownerTranscript('reminal-revoke-self-v1', '', [machinePubU8, dk.pubRaw]);
-                const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
+                const sig = await deviceSign(dk, tr);
                 const enc = await encrypt(box, JSON.stringify({ device_pub: u8ToBase64(dk.pubRaw), sig: u8ToBase64(sig), req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_revoke_self', data: enc }));
                 state = 'revoke';
@@ -5687,19 +5784,18 @@
       const tr = await ownerTranscript('reminal-owner-cli-v1', sid, [viewerEph, dk.pubRaw]);
       const trF = await ownerTranscript('reminal-owner-cli-v1', sid, [viewerEph, dk.pubRaw, utf8(FRAMES_LABEL)]);
       return {
-        device_sig: u8ToBase64(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr))),
-        frames_sig: u8ToBase64(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, trF))),
+        device_sig: u8ToBase64(await deviceSign(dk, tr)),
+        frames_sig: u8ToBase64(await deviceSign(dk, trF)),
       };
     }
     // The machine's signature on an owner answer: over the transcript with the
     // answer to the offer signed in (true), over the one as before (false), or
     // neither (null).
     async function ownerAnswerBound(sid, viewerEph, agentEph, devicePubRaw, machinePub, machineSig, seal) {
-      const macKey = await crypto.subtle.importKey('raw', machinePub, { name: 'Ed25519' }, false, ['verify']);
       const trF = await ownerTranscript('reminal-owner-srv-v1', sid, [viewerEph, agentEph, devicePubRaw, machinePub, utf8(FRAMES_LABEL), utf8(seal || '')]);
-      if (await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, trF)) return true;
+      if (await ed25519Verify(machinePub, machineSig, trF)) return true;
       const tr = await ownerTranscript('reminal-owner-srv-v1', sid, [viewerEph, agentEph, devicePubRaw, machinePub]);
-      if (await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, tr)) return false;
+      if (await ed25519Verify(machinePub, machineSig, tr)) return false;
       return null;
     }
     async function openSealInfo(shared, exIDBytes, sealed, sessionKeyRaw) {
