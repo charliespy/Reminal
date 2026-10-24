@@ -7,9 +7,11 @@ package pty
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -94,5 +96,56 @@ func TestTheShellIsStartedInTheShellCgroup(t *testing.T) {
 	_ = s.Close()
 	for i := 0; i < 50 && os.Remove(dir) != nil; i++ {
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// The cgroup start keeps whatever process attributes the command set, as the
+// usual start does, and does not change the command's own.
+func TestTheShellCgroupKeepsTheCommandsOwnAttributes(t *testing.T) {
+	base := &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
+	a := cgroupAttrs(base, 7)
+	if a.Pdeathsig != syscall.SIGTERM {
+		t.Errorf("Pdeathsig %v, want SIGTERM kept", a.Pdeathsig)
+	}
+	if !a.Setsid || !a.Setctty || a.Ctty != 0 || !a.UseCgroupFD || a.CgroupFD != 7 {
+		t.Errorf("got %+v, want a session, the PTY as its terminal and cgroup fd 7", a)
+	}
+	if base.UseCgroupFD || base.Setsid || a == base {
+		t.Errorf("the command's own attributes were changed: %+v", base)
+	}
+	if n := cgroupAttrs(nil, 3); n == nil || !n.UseCgroupFD || n.CgroupFD != 3 || !n.Setsid {
+		t.Errorf("with none of the command's own: %+v", n)
+	}
+}
+
+// End to end: a command that sets Pdeathsig, started in the cgroup, is
+// started with it. Needs a writable cgroup2 mount, as the test above.
+func TestACommandsOwnAttributesSurviveTheShellCgroup(t *testing.T) {
+	if os.Getenv("REMINAL_CGROUP_TEST") != "1" {
+		t.Skip("set REMINAL_CGROUP_TEST=1 with a writable cgroup v2 mount at /sys/fs/cgroup")
+	}
+	dir := filepath.Join("/sys/fs/cgroup", "reminal-attrs-test")
+	if err := os.Mkdir(dir, 0o755); err != nil && !os.IsExist(err) {
+		t.Fatal(err)
+	}
+	t.Setenv(ShellCgroupEnv, dir)
+	ptmx, cmd, cg, err := startShell(func() *exec.Cmd {
+		c := exec.Command("/bin/sh")
+		c.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
+		return c
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait(); _ = ptmx.Close(); _ = os.Remove(dir) }()
+	if cg == nil || !cg.OK {
+		t.Fatalf("not started in the cgroup: %+v", cg)
+	}
+	if a := cmd.SysProcAttr; a == nil || a.Pdeathsig != syscall.SIGTERM || !a.UseCgroupFD {
+		t.Errorf("started with %+v, want Pdeathsig SIGTERM kept alongside the cgroup", a)
+	}
+	raw, _ := os.ReadFile("/proc/" + strconv.Itoa(cmd.Process.Pid) + "/cgroup")
+	if got := strings.TrimSpace(string(raw)); got != "0::/reminal-attrs-test" {
+		t.Errorf("the shell's cgroup is %q", got)
 	}
 }
