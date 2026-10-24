@@ -174,6 +174,15 @@ func watchBinaryAndExit(stop <-chan struct{}) {
 				// starts a fresh instance from the new binary. Flock and sockets are
 				// released by the OS on exit, so no cleanup is needed here.
 				//
+				// Where no service manager would (a Linux machine with no user
+				// manager, whose daemon was started by hand; another Unix), it
+				// starts itself on the new binary, in place: the same process, its
+				// locks and sockets let go by the exec and taken again by the new
+				// image. Exited, it would never have come back.
+				if runtime.GOOS != "windows" && !daemonServiceManaged() {
+					runDaemonExitHooks()
+					_ = execDaemonInPlace(exe) // returns only when it could not
+				}
 				// Windows has no supervising service manager (the Run key only
 				// fires at logon), so hand off to a fresh copy of the new binary
 				// ourselves before exiting.
@@ -201,8 +210,11 @@ func onDaemonExit(f func()) {
 }
 
 func runDaemonExitHooks() {
+	// Each once: an exec in place that failed falls back to the exit, which
+	// runs them again.
 	exitHooksMu.Lock()
-	hooks := append([]func(){}, exitHooks...)
+	hooks := exitHooks
+	exitHooks = nil
 	exitHooksMu.Unlock()
 	for _, f := range hooks {
 		f()

@@ -6,6 +6,7 @@
 package client
 
 import (
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
@@ -79,4 +80,10 @@ func watchResize() (<-chan os.Signal, func()) {
 // logon), so the exiting instance starts its own replacement.
 func respawnDaemonAfterUpgrade(exe string) {
 	_ = spawnDetachedDaemon(exe)
+}
+
+// execDaemonInPlace is Unix's: Windows has no exec, and hands off to a fresh
+// copy instead (respawnDaemonAfterUpgrade).
+func execDaemonInPlace(exe string) error {
+	return errors.New("no exec in place on Windows")
 }
