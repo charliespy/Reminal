@@ -46,4 +46,13 @@ func watchResize() (<-chan os.Signal, func()) {
 
 // respawnDaemonAfterUpgrade is a no-op where a service manager (launchd
 // KeepAlive / systemd Restart=always) restarts the exited daemon itself.
+// Where none does, the daemon starts itself again in place first
+// (execDaemonInPlace, watchBinaryAndExit).
 func respawnDaemonAfterUpgrade(exe string) {}
+
+// execDaemonInPlace re-execs the daemon onto exe, the binary now on disk, with
+// its own arguments and environment: the same process, and so the same pid in
+// daemon.pid. Never returns on success.
+func execDaemonInPlace(exe string) error {
+	return syscall.Exec(exe, os.Args, os.Environ())
+}

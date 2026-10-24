@@ -54,6 +54,15 @@ func installService(exe string, u *user.User) error {
 		_ = out
 	}
 	if out, err := userSystemctl(u, amRoot, "enable", "--now", daemonUnit).CombinedOutput(); err != nil {
+		// Never enabled (no user manager to ask: a container, a minimal
+		// server): nothing will ever run this unit, at login or otherwise, so
+		// it is taken out again rather than left looking installed — a
+		// machine that took it for a service waited on a daemon that never
+		// came (serviceInstalled). Enabled but not started: the manager has
+		// it, and starts it again (Restart=always).
+		if !unitEnabled(u) {
+			_ = os.Remove(unitPath)
+		}
 		return fmt.Errorf("systemctl --user enable --now: %v: %s", err, out)
 	}
 	return nil
@@ -70,9 +79,24 @@ func uninstallService(u *user.User) error {
 	return nil
 }
 
-// serviceInstalled reports whether the systemd --user unit exists for u.
+// serviceInstalled reports whether the systemd --user unit is installed for
+// u: its file in place and enabled, as `systemctl --user enable` leaves it
+// (its default.target.wants link) — what makes a manager run it. A unit file
+// alone is not a service: one written where enabling it failed is run by
+// nothing, and a machine that took it for one left its machine channel to a
+// daemon that, once gone (as when an upgrade swaps its binary), never came
+// back.
 func serviceInstalled(u *user.User) bool {
-	_, err := os.Stat(filepath.Join(u.HomeDir, ".config", "systemd", "user", daemonUnit))
+	if _, err := os.Stat(filepath.Join(u.HomeDir, ".config", "systemd", "user", daemonUnit)); err != nil {
+		return false
+	}
+	return unitEnabled(u)
+}
+
+// unitEnabled reports whether u's unit is enabled: the link `enable` makes
+// for its WantedBy=default.target (systemdUnit).
+func unitEnabled(u *user.User) bool {
+	_, err := os.Lstat(filepath.Join(u.HomeDir, ".config", "systemd", "user", "default.target.wants", daemonUnit))
 	return err == nil
 }
 

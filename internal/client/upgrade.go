@@ -60,12 +60,20 @@ func (a *Agent) handleChangelog(conn *websocket.Conn) {
 //
 // Guarded by upgrading so two viewers cannot race the same install.
 // daemonServiceManaged reports whether an OS service manager automatically
-// restarts the background daemon when it exits: launchd's KeepAlive on macOS and
-// systemd's Restart=always on Linux both do. Windows' HKCU Run key has no
+// restarts the background daemon when it exits: launchd's KeepAlive on macOS,
+// and systemd's Restart=always on Linux where its unit is installed — enabled
+// (serviceInstalled). A Linux machine with no user manager has none: its
+// daemon was started by hand or by nothing. Windows' HKCU Run key has no
 // keepalive (it fires only at logon), and the other platforms have no service
 // integration at all — there the daemon must NOT exit expecting a restart.
 func daemonServiceManaged() bool {
-	return runtime.GOOS == "darwin" || runtime.GOOS == "linux"
+	switch runtime.GOOS {
+	case "darwin":
+		return true
+	case "linux":
+		return DaemonServiceInstalled()
+	}
+	return false
 }
 
 func (a *Agent) handleUpgrade(conn *websocket.Conn, data string) {
