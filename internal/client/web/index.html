@@ -103,14 +103,17 @@
       font-weight: 500;
       padding: 6px 14px;
     }
-    /* Hover looks are for a mouse. A tap leaves :hover on what was tapped
-       until something else is, so on a touch screen a control that opts out
-       of the green with one class (which this rule outranks) stayed solid
-       green after a tap. And background-color, not the shorthand, here and
-       for :disabled: the shorthand resets another rule's background image,
+    /* The primary green's hover, for a button of the plain kind only, and
+       only where there is a mouse. :where() adds nothing to the selector's
+       weight, so a button whose one class sets its own background keeps it
+       under the pointer; as button:hover it outranked that class and painted
+       such controls green. A tap on a touch screen leaves :hover on what was
+       tapped, so there it stayed green after a tap: hover looks are for a
+       mouse. And background-color, not the shorthand, here and for
+       :disabled: the shorthand resets another rule's background image,
        repeat, position and size. */
     @media (hover: hover) {
-      button:hover { background-color: #2ea043; }
+      :where(button):hover { background-color: #2ea043; }
       button.danger:hover { background-color: #f85149; }
     }
     button:disabled { background-color: #21262d; color: #484f58; cursor: not-allowed; }

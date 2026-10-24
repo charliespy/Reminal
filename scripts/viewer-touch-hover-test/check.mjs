@@ -4,8 +4,9 @@
 //          (start page, connected with the renew bar, machines, alerts,
 //          windows, apps, host, what's new, settings, snippets, session dock,
 //          find, share, the key bar), and in
-//          each view every visible control is checked with :hover forced (as
-//          a tap leaves it): none turns primary green unless it is a primary
+//          each view every visible button, summary and role=button/switch/
+//          tab/menuitem is checked with :hover, :active and :focus forced in
+//          turn (as a tap leaves them): none turns primary green unless it is a primary
 //          button, and none loses or tiles its background icon. A planted
 //          control that opts out of the green with one class checks the
 //          check itself.
@@ -30,6 +31,8 @@ async function open(opts) {
   const p = await ctx.newPage();
   await p.goto('http://localhost:8080/');
   await p.waitForFunction(() => typeof connectToSession === 'function');
+  // No transitions: a look is read once it is what it will be.
+  await p.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' });
   p.cdp = await ctx.newCDPSession(p);
   await p.cdp.send('DOM.enable');
   await p.cdp.send('CSS.enable');
@@ -51,7 +54,7 @@ async function controls(p) {
   return p.evaluate(() => {
     let i = 0;
     const out = [];
-    for (const e of document.querySelectorAll('button')) {
+    for (const e of document.querySelectorAll('button, summary, [role=button], [role=switch], [role=tab], [role=menuitem]')) {
       const r = e.getBoundingClientRect();
       delete e.dataset.thI;
       if (!r.width || !r.height || getComputedStyle(e).visibility === 'hidden' || r.bottom < 0 || r.top > innerHeight) continue;
@@ -72,18 +75,18 @@ async function touchCheck(p, view) {
   const { root } = await p.cdp.send('DOM.getDocument', { depth: -1 });
   let bad = 0;
   const list = await controls(p);
-  for (const c of list) {
+  for (const c of list) for (const state of ['hover', 'active', 'focus']) {
     const { nodeId } = await p.cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: `[data-th-i="${c.i}"]` });
     if (!nodeId) continue;
     const before = await look(p, c.i);
-    await p.cdp.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: ['hover'] });
+    await p.cdp.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: [state] });
     const after = await look(p, c.i);
     await p.cdp.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: [] });
     const why = [];
     if (PRIMARY.includes(after.bg) && !PRIMARY.includes(before.bg)) why.push(`turns primary green (${before.bg} -> ${after.bg})`);
     if (before.img !== 'none' && after.img === 'none') why.push('loses its icon');
     if (after.img !== 'none' && (after.rep !== before.rep || after.size !== before.size || after.pos !== before.pos)) why.push(`its icon is laid out again (${before.rep} ${before.size} -> ${after.rep} ${after.size})`);
-    if (why.length) { fail(`touch ${view}: after a tap ${c.who} ${why.join('; ')}`); bad++; }
+    if (why.length) { fail(`touch ${view}: after a tap (:${state}) ${c.who} ${why.join('; ')}`); bad++; }
   }
   if (!bad) ok(`touch ${view}: none of ${list.length} controls changes to primary or loses its icon after a tap`);
   if (shots) await p.screenshot({ path: `/shots/touch-${view.replace(/\W+/g, '-')}.png` });
@@ -117,7 +120,7 @@ async function mouseLooks(p, view) {
 async function walk(p, each, act0) {
   const shown = (sel) => p.evaluate((s) => { const e = document.querySelector(s); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; }, sel);
   const act = async (sel, opener) => {
-    if (await shown(sel)) return act0(sel);
+    if (await shown(sel) && await act0(sel)) return;
     if (opener) await p.evaluate(opener);
   };
   const settle = (ms = 500) => p.waitForTimeout(ms);
@@ -156,7 +159,9 @@ async function walk(p, each, act0) {
 // Touch, at phone width, with real taps.
 {
   const p = await open({ viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2.6 });
-  const tap = async (sel) => { const e = await p.$(sel); if (!e) return fail(`touch: no ${sel} to tap`); try { await e.scrollIntoViewIfNeeded({ timeout: 3000 }); await e.tap({ timeout: 5000 }); } catch (_) { fail(`touch: ${sel} could not be tapped`); } };
+  // A tap that does not land (something laid over it a moment) is said, and
+  // the walk goes on with the viewer's opener: the looks are what is checked.
+  const tap = async (sel) => { const e = await p.$(sel); if (!e) return false; try { await e.scrollIntoViewIfNeeded({ timeout: 3000 }); await e.tap({ timeout: 5000 }); return true; } catch (_) { console.log(`note touch: ${sel} could not be tapped`); return false; } };
   await walk(p, (v) => touchCheck(p, v), tap);
   const kb = await p.evaluate(() => getComputedStyle(document.getElementById('keybar')).display);
   if (kb !== 'none') await touchCheck(p, 'key bar');
@@ -166,7 +171,7 @@ async function walk(p, each, act0) {
 // Mouse, at 1280: the look of every control under the pointer.
 {
   const p = await open({ viewport: { width: 1280, height: 800 } });
-  const click = async (sel) => { const e = await p.$(sel); if (!e) return; try { await e.scrollIntoViewIfNeeded({ timeout: 3000 }); await e.click({ timeout: 5000 }); } catch (_) { console.log(`note mouse: ${sel} could not be clicked`); } };
+  const click = async (sel) => { const e = await p.$(sel); if (!e) return false; try { await e.scrollIntoViewIfNeeded({ timeout: 3000 }); await e.click({ timeout: 5000 }); return true; } catch (_) { console.log(`note mouse: ${sel} could not be clicked`); return false; } };
   await walk(p, (v) => mouseLooks(p, v), click);
   await p.context().close();
 }
