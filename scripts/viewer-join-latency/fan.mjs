@@ -5,7 +5,7 @@
 // times before and after. With nobody joining every echo must be within
 // ECHO_MS; with a join it is measured only — a joiner's snapshot parts reach
 // every viewer on the session, so a slow one waits behind them (as before the
-// paced join; a follow-up). By Innovator 1, from typing.mjs.
+// paced join; a follow-up). Built from typing.mjs.
 import { chromium } from 'playwright';
 const [ID, PIN] = process.argv.slice(2);
 const THROTTLE = Number(process.env.THROTTLE || 4);

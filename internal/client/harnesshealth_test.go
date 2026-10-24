@@ -193,7 +193,7 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 
 // A lead relaying what it saw on a report's screen quotes the notice word
 // for word, mid-sentence. That is not the lead being logged out — read as one,
-// it marked a working lead logged out and held its mail (seen on the demo org,
+// it marked a working lead logged out and held its mail (seen in a test run,
 // 2026-09-24; both screens below are as they were).
 func TestAQuotedLoginNoticeIsNotTheAgents(t *testing.T) {
 	lead := `● This confirms it: frontend2's Claude Code session shows "Login expired · Please run /login" — it
@@ -534,9 +534,9 @@ func TestAnOpenCodeKeyItWasGivenAndRefusedIsSaidAsSo(t *testing.T) {
 
 // "The provided API key is invalid" from anything but Cursor CLI — a curl to
 // some API, a script — at a plain shell's prompt says nothing about an
-// agent's login: the seat stays up, however often it is read. Only Cursor CLI
+// agent's login: the agent stays up, however often it is read. Only Cursor CLI
 // in front, or in front just before the shell, makes those words its own.
-func TestAKeyRefusedPhraseAtAPlainShellLeavesTheSeatUp(t *testing.T) {
+func TestAKeyRefusedPhraseAtAPlainShellLeavesTheAgentUp(t *testing.T) {
 	screen := "Warning: The provided API key is invalid.\n" +
 		"user@host:~/work$ "
 	for _, c := range []struct {
@@ -555,7 +555,7 @@ func TestAKeyRefusedPhraseAtAPlainShellLeavesTheSeatUp(t *testing.T) {
 			a.noteHarnessHealth(screen, "bash", false)
 		}
 		if a.harnessDown() || a.harnessKeyRefused() != "" {
-			t.Errorf("%s: down %v, refused %q; want the seat up", c.name, a.harnessDown(), a.harnessKeyRefused())
+			t.Errorf("%s: down %v, refused %q; want the agent up", c.name, a.harnessDown(), a.harnessKeyRefused())
 		}
 	}
 	// Control: the same screen just after Cursor CLI exited is its refusal.

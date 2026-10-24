@@ -15,7 +15,7 @@ import (
 
 // A session id is served by one agent at a time. A restore that brings back a
 // session still running makes a second shell and a second copy of its agent on
-// the same conversation, and the two take the session's record and seat from
+// the same conversation, and the two take the session's record and place from
 // each other until one is stopped.
 //
 // So every agent holds a lock named for its session (live/<ID>.lock) for as

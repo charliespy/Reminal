@@ -169,8 +169,8 @@ async function settlesOn(want: string): Promise<string> {
 
 // agent_end does not report the end, it proposes it. On a pi that has
 // agent_settled too, agent_end fires BEFORE a retry or a queued continuation, so
-// reporting there would say "your turn" mid-run — and a seat reading done gets
-// its org mail typed in, so that is not merely cosmetic.
+// reporting there would say "your turn" mid-run — and a session reading done gets
+// its queued mail typed in, so that is not merely cosmetic.
 await b.emit("turn_start", { type: "turn_start" }); // a run under way
 fs.rmSync(statePath, { force: true });
 await b.emit("agent_end", { type: "agent_end" });
@@ -237,7 +237,7 @@ for (let round = 0; round < 12; round++) {
 	await b.emit("turn_start", { type: "turn_start" });
 	await b.emit("turn_end", { type: "turn_end" });
 	// pi 0.74 ends a run with agent_end alone; older pi followed it with
-	// agent_settled. Either way the seat must read done.
+	// agent_settled. Either way the session must read done.
 	await b.emit("agent_end", { type: "agent_end" });
 	if (round % 2 === 0) await b.emit("agent_settled", { type: "agent_settled" });
 	// On an odd round there is no agent_settled, so the end arrives after

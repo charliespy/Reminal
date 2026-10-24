@@ -902,34 +902,34 @@ func TestReview_RestoreKeyOverwritesForeignEntry(t *testing.T) {
 // would look gone — and be quarantined, though nothing is wrong with it.
 func TestABlobOpensWithTheKeyOfTheDirItWasSealedIn(t *testing.T) {
 	dirA := isolate(t)
-	if _, err := Seal("org-member", "warm", []byte("make A's key")); err != nil {
+	if _, err := Seal("member", "warm", []byte("make A's key")); err != nil {
 		t.Fatal(err)
 	}
 	homeB := t.TempDir()
 	t.Setenv("HOME", homeB)
 	t.Setenv("USERPROFILE", homeB)
-	if _, err := Seal("org-member", "warm", []byte("make B's key")); err != nil {
+	if _, err := Seal("member", "warm", []byte("make B's key")); err != nil {
 		t.Fatal(err)
 	}
 
 	// HOME is B; the file is A's.
-	blob, err := SealIn(dirA, "org-member", "SEAT0001", []byte("seat secret"))
+	blob, err := SealIn(dirA, "member", "ID0001", []byte("a secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open("org-member", "SEAT0001", blob); err == nil {
+	if _, err := Open("member", "ID0001", blob); err == nil {
 		t.Fatal("A's blob opened with B's key: the two keys are the same, and this test shows nothing")
 	}
-	pt, err := OpenIn(dirA, "org-member", "SEAT0001", blob)
-	if err != nil || string(pt) != "seat secret" {
+	pt, err := OpenIn(dirA, "member", "ID0001", blob)
+	if err != nil || string(pt) != "a secret" {
 		t.Fatalf("A's blob with A's key: %q, %v", pt, err)
 	}
 	// And Open is OpenIn with HOME's directory, as before.
-	own, err := Seal("org-member", "SEAT0002", []byte("B's own"))
+	own, err := Seal("member", "ID0002", []byte("B's own"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pt, err := OpenIn(filepath.Join(homeB, ".reminal"), "org-member", "SEAT0002", own); err != nil || string(pt) != "B's own" {
+	if pt, err := OpenIn(filepath.Join(homeB, ".reminal"), "member", "ID0002", own); err != nil || string(pt) != "B's own" {
 		t.Fatalf("B's blob with B's directory: %q, %v", pt, err)
 	}
 }

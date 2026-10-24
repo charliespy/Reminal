@@ -728,7 +728,7 @@ func TestShingleIndexIsTheJoinedOne(t *testing.T) {
 	}
 }
 
-// Two different histories that historyKey might name alike (Innovator 4,
+// Two different histories that historyKey might name alike (from the
 // review of #213) — the same length, first line and last line, and, after the
 // first is erased and collected, a newest row allocated where an old one was.
 func TestJoinHistoryKeyNotReused(t *testing.T) {
@@ -780,8 +780,8 @@ func TestJoinHistoryKeyNotReused(t *testing.T) {
 	t.Logf("collisions: %d of %d", found, attempts)
 }
 
-// Random sequences of what a session writes and how it is resized (Innovator
-// 4, review of #213): after each step a join, plain and in parts, must be byte
+// Random sequences of what a session writes and how it is resized (from the
+// review of #213): after each step a join, plain and in parts, must be byte
 // for byte the old path's.
 func TestJoinRandomMatchesOldPath(t *testing.T) {
 	ops := []func(a *Agent, r int) string{

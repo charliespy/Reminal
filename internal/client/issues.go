@@ -21,8 +21,7 @@ import (
 //
 // Reports are files under ~/.reminal/issues/, nothing more: nothing is sent
 // anywhere. `reminal issues` lists them and exports them as text for a bug
-// report the person chooses to file. In an org the fact of a report, and its
-// title, also go on the org's timeline so its owner sees it.
+// report the person chooses to file.
 
 // Issue is one report.
 type Issue struct {

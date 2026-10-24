@@ -124,7 +124,7 @@
       const marginFloor = 40;
       // The column a line's text starts at, past its indent and any
       // markers: a bullet, a numbered item, and the glyph an agent puts
-      // before its first line ("\u25cf - Pro release: https://…"). The rest
+      // before its first line ("\u25cf - Release notes: https://…"). The rest
       // of a URL the program broke is indented to that column.
       function contentIndent(text) {
         return text.match(/^\s*(?:[^\w\s"'(\[{]{1,2}\s+)*(?:\d+[.)]\s+)?/)[0].length;
