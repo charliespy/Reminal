@@ -433,6 +433,7 @@ Sessions resolve by **exact id, exact name, unique id prefix, or unique substrin
 | `REMINAL_LOCAL` | — | Set to `1` to point everything at `localhost` |
 | `REMINAL_OWNERS_DIR` | `/etc/reminal` (`%ProgramData%\reminal` on Windows) | Where the machine's owner list lives (the admin-gated trust store) — override for tests or unusual layouts |
 | `REMINAL_NO_KEEP_AWAKE` | — | Set to `1` to let the host sleep while reminal runs (defaults to keeping it awake via `caffeinate` / `systemd-inhibit` / `SetThreadExecutionState`) |
+| `REMINAL_SHELL_CGROUP` | — | Linux only: the absolute path of a cgroup v2 directory to start each session's shell in, so everything it runs is under that cgroup's limits (reminal itself stays where it is). If the shell can't be started there, it starts the usual way and the session's log says why |
 | `REMINAL_TURN` / `REMINAL_TURN_USER` / `REMINAL_TURN_PASS` | — | Optional TURN server for P2P window mirroring behind hostile NATs (or `REMINAL_TURN_CF_KEY` + `REMINAL_TURN_CF_TOKEN` for Cloudflare TURN). Without one, un-punchable viewers stay on the relay fallback |
 | `REMINAL_NO_CAPTURE_HELPER` | — | Set to `1` to force the screenshot capture path (skip the native ScreenCaptureKit helper) |
 | `REMINAL_DEBUG` | — | Set to `1` to append the raw error string to status lines, for diagnosing connection problems |

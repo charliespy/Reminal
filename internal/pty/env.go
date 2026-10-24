@@ -31,6 +31,9 @@ func shellEnv(extra []string) []string {
 		if strings.HasPrefix(kv, hookProbeEnv+"=") {
 			continue // a probe's mark (session.HookProbeEnv) never enters a session
 		}
+		if strings.HasPrefix(kv, ShellCgroupEnv+"=") {
+			continue // the shell's cgroup is where it runs, not something for it to read
+		}
 		out = append(out, kv)
 	}
 	out = append(out, "TERM=xterm-256color", "SHELL_SESSIONS_DISABLE=1")

@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"reminal/internal/pty"
 )
 
 // spawnHandshakeTimeout bounds how long `reminal new` will wait for the
@@ -32,6 +34,9 @@ type SpawnedSession struct {
 	// Phases is how its start went, in parts (ms: StartMark), from an agent
 	// that says it; none from one from before.
 	Phases map[string]int64 `json:"phases,omitempty"`
+	// ShellCgroup is how starting its shell in pty.ShellCgroupEnv's cgroup
+	// went, when that was asked for.
+	ShellCgroup *pty.ShellCgroup `json:"shell_cgroup,omitempty"`
 	// Error, from a port forward, is why it couldn't reach the relay; it has
 	// ended, and the other fields are empty.
 	Error string `json:"error,omitempty"`

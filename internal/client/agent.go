@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -125,6 +126,9 @@ type Agent struct {
 
 	buf  *scrollback
 	term *pty.Session
+	// shellCgroup is how starting the shell in pty.ShellCgroupEnv's cgroup went
+	// (nil: not asked for); said in the startup handshake.
+	shellCgroup *pty.ShellCgroup
 	// restoring: this agent is bringing a session back after its machine
 	// restarted — its identity is the old one, its shell is new. restoreRun
 	// resumes the agent that was running; restoreSeq is the scrollback last
@@ -917,6 +921,12 @@ func (a *Agent) Run() error {
 		defer term.Close()
 		defer a.stopAttention() // runs before the PTY closes: no probe polls a closed file
 		a.term = term
+		if cg := term.ShellCgroup(); cg != nil {
+			a.shellCgroup = cg
+			if !cg.OK {
+				log.Printf("shell not started in %s: %s", cg.Dir, cg.Error)
+			}
+		}
 	} else {
 		// term was set in NewAgentWith from ResumeState.PTY.
 		defer a.term.Close()
@@ -1438,6 +1448,9 @@ func (a *Agent) writeHandshake() {
 		"open_url": fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID),
 		"pid":      os.Getpid(),
 		"phases":   startPhasesNow(), // its start in parts (startphases.go)
+	}
+	if a.shellCgroup != nil {
+		payload["shell_cgroup"] = a.shellCgroup
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

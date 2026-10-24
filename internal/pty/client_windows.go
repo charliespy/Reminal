@@ -277,6 +277,9 @@ func (s *Session) Wait() error {
 	return s.waitErr
 }
 
+// ShellCgroup: ShellCgroupEnv is Linux's; never asked for here.
+func (s *Session) ShellCgroup() *ShellCgroup { return nil }
+
 // Close ends the SESSION: ask the holder to kill the shell, then drop the
 // connection. (A hot restart must NOT call this — the old agent just exits
 // and lets the socket drop; the holder keeps serving the successor.)

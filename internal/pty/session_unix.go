@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 )
 
@@ -26,9 +25,21 @@ type Session struct {
 	// child, the exec kept the pid, and the old image passed it along.
 	// 0 when it wasn't passed (restarted by an older binary).
 	shell int
+	// cgroup is how starting the shell in ShellCgroupEnv's directory went
+	// (nil: not asked for).
+	cgroup *ShellCgroup
 }
 
 func Start(shell string, env ...string) (*Session, error) {
+	ptmx, cmd, cg, err := startShell(func() *exec.Cmd { return shellCommand(shell, env) })
+	if err != nil {
+		return nil, err
+	}
+	return &Session{ptmx: ptmx, cmd: cmd, cgroup: cg}, nil
+}
+
+// shellCommand is the session's shell, as Start runs it.
+func shellCommand(shell string, env []string) *exec.Cmd {
 	cmd := exec.Command(shell)
 	// Run it as a LOGIN shell — the mechanism login(1) and Terminal.app use:
 	// argv[0] prefixed with "-". A login shell sources the full profile chain
@@ -41,14 +52,12 @@ func Start(shell string, env ...string) (*Session, error) {
 	// like a real terminal at all.
 	cmd.Args[0] = "-" + filepath.Base(shell)
 	cmd.Env = shellEnv(env)
-
-	ptmx, err := pty.Start(cmd)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Session{ptmx: ptmx, cmd: cmd}, nil
+	return cmd
 }
+
+// ShellCgroup is how starting the shell in ShellCgroupEnv's cgroup went, or
+// nil when it was not asked for (or the shell was taken over, not started).
+func (s *Session) ShellCgroup() *ShellCgroup { return s.cgroup }
 
 // Attach wraps an already-open PTY master fd as a Session. Used by the
 // hot-restart path (syscall.Exec into a new binary) to take over the
