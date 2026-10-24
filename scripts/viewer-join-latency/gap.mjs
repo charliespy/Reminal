@@ -6,7 +6,7 @@
 // the end, nothing doubled). CASE: control (nothing changed), region (a
 // scroll region — the one that once kept the history inside its rows),
 // insert, charset, sgr, resize (both pages 760x600), alt (the alternate
-// screen). By Innovator 1, from typing.mjs.
+// screen). Built from typing.mjs.
 import { chromium } from 'playwright';
 const [ID, PIN] = process.argv.slice(2);
 const THROTTLE = Number(process.env.THROTTLE || 4);

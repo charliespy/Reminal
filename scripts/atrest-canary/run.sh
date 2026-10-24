@@ -16,11 +16,11 @@ docker run --rm -v "$ROOT":/src:ro \
     -e GOFLAGS=-buildvcs=false -e CGO_ENABLED=0 -w /src \
     golang:1.26-bookworm sh -c '
 set -e
-H=$HOME/.reminal; mkdir -p $H/restore $H/org-rooms
+H=$HOME/.reminal; mkdir -p $H/restore $H/rooms
 printf "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n" > $H/atrest.key
 printf "{\"v\":1,\"source\":\"file\",\"id\":\"canary0canary0ca\"}" > $H/atrest.json
 printf "canary" > $H/restore/CANARY01.sealed
-printf "canary" > $H/org-rooms/canary.json
+printf "canary" > $H/rooms/canary.json
 printf "canary" > $H/device_ed25519
 snapshot() { (cd $H && find . -type f | sort | xargs -r sha256sum; find . | sort | wc -l); }
 snapshot > /tmp/before

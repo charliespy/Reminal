@@ -144,12 +144,12 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 	// agent_settled is the one that means it — it fires once nothing is left to
 	// come, retry, compaction and queued follow-up included. pi 0.74 does not
 	// have it at all, so a session there read "working" for good after its first
-	// turn, and in an org nothing queued for that seat was ever delivered.
+	// turn, and nothing queued for that session was ever delivered.
 	//
 	// agent_end is in every version, but on one that has both it fires EARLIER —
 	// before a retry, a compaction, or a queued continuation. Reporting done
 	// there would say "your turn" while the turn is still going, and something
-	// acts on that: a seat reading done gets its org mail typed in, so mail
+	// acts on that: a session reading done gets its queued mail typed in, so mail
 	// would arrive mid-run. Deduplicating the second report does not help; the
 	// problem is the first one being early, not repeated.
 	//

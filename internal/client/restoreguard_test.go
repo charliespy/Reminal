@@ -50,11 +50,11 @@ func saveRecord(t *testing.T, id string) {
 // A restored agent's REMINAL_RESTORE named its own session, and its shell —
 // with everything run there — inherited it: a `reminal new` in a restored
 // session started a second agent for THAT session (a second shell, the same
-// conversation resumed twice, the two taking the session's record and seat
+// conversation resumed twice, the two taking the session's record and place
 // from each other). The id is taken out as it is read, and never handed on.
 func TestARestoredSessionDoesNotHandItsIDOn(t *testing.T) {
 	t.Setenv(envRestore, "9FT4RXH2")
-	t.Setenv(envNewName, "Innovator 2")
+	t.Setenv(envNewName, "helper 2")
 	if id := RestoreEnvID(); id != "9FT4RXH2" {
 		t.Fatalf("read %q", id)
 	}

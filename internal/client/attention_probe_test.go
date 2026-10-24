@@ -348,7 +348,7 @@ func TestPromptsAreSeenThroughStylingAndSpacing(t *testing.T) {
 // Claude Code's footer says "esc to interrupt" only while a turn is running.
 // Its Stop hook can fire the moment its words end, before a tool it called
 // has finished, and a quiet tool call draws nothing for the screen to go on:
-// a message typed into that seat then cut the tool call short.
+// a message typed into that session then cut the tool call short.
 func TestBusyFooterKeepsATurnWorking(t *testing.T) {
 	running := "  ⎿  Running… (1m 48s · timeout 5m)\n✶ Drizzling… (1m 50s · ↓ 131 tokens)\n❯ \n" +
 		"  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for ag…"
@@ -592,7 +592,7 @@ func TestAHookOutlivesARestartOfReminalButNotOfTheHarness(t *testing.T) {
 // connects or resizes, a footer swapping "new task? /clear …" for "Update
 // installed · Restart to update" — and each such move used to read
 // "working", then "done": a turn nobody took, filed under While you were
-// away. Seen on idle seats, their hook's "done" hours old.
+// away. Seen on idle sessions, their hook's "done" hours old.
 func TestARestingHarnessThatReportsItsTurnsIgnoresItsOwnRepaint(t *testing.T) {
 	now := time.Now()
 	done := &session.HookState{State: "done", TS: now.Add(-3 * time.Hour)}
