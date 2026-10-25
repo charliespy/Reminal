@@ -31,6 +31,10 @@ import (
 // no-op while the machine is unowned (runDirectoryHost re-checks periodically),
 // so it's harmless to leave running after every owner is revoked.
 func RunDaemon(version string) error {
+	// The directory-host lock, held still, when this is a daemon re-exec'd in
+	// place onto a new binary (execDaemonInPlace): taken first, before any
+	// child is started.
+	adoptDirHostLock()
 	// Same reason as Agent.Run: the daemon outlives every session it spawns, so
 	// it is the other process that can carry a backlog across a restart.
 	reapInherited()
@@ -111,19 +115,45 @@ func writeDaemonPID() {
 // process — the "is anyone actually home?" check behind the directory-host
 // deferral. Missing or unparsable pid file counts as dead.
 func daemonAlive() bool {
+	pid := daemonPIDRecorded()
+	return pid > 0 && proc.Alive(pid)
+}
+
+// daemonPIDRecorded is the pid daemon.pid names, or 0.
+func daemonPIDRecorded() int {
 	path, err := daemonPIDPath()
 	if err != nil {
-		return false
+		return 0
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return 0
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
 	if err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
+}
+
+// daemonRunning is daemonAlive, and — where the system says (Linux) — the
+// process daemon.pid names a daemon still: a file left by one that crashed,
+// its pid since another program's, never stands for one. A session that
+// took it for one would leave the machine served by nobody.
+func daemonRunning() bool {
+	pid := daemonPIDRecorded()
+	if pid <= 0 || !proc.Alive(pid) {
 		return false
 	}
-	return proc.Alive(pid)
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	if err != nil {
+		return false
+	}
+	args := strings.Split(string(b), "\x00")
+	return len(args) > 1 && args[1] == "daemon"
 }
 
 func clearDaemonPID() {
@@ -177,8 +207,9 @@ func watchBinaryAndExit(stop <-chan struct{}) {
 				// Where no service manager would (a Linux machine with no user
 				// manager, whose daemon was started by hand; another Unix), it
 				// starts itself on the new binary, in place: the same process, its
-				// locks and sockets let go by the exec and taken again by the new
-				// image. Exited, it would never have come back.
+				// sockets let go by the exec and taken again by the new image, and
+				// the directory-host lock handed to it, held (execDaemonInPlace).
+				// Exited, it would never have come back.
 				if runtime.GOOS != "windows" && !daemonServiceManaged() {
 					runDaemonExitHooks()
 					_ = execDaemonInPlace(exe) // returns only when it could not

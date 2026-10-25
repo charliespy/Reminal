@@ -53,6 +53,24 @@ func respawnDaemonAfterUpgrade(exe string) {}
 // execDaemonInPlace re-execs the daemon onto exe, the binary now on disk, with
 // its own arguments and environment: the same process, and so the same pid in
 // daemon.pid. Never returns on success.
+//
+// The directory-host lock goes with it, held (dirHostHandoff), when exe
+// takes it: let go by the exec, a session standing by would take it before
+// the new image could, and keep it. Its fd is open across the exec only
+// with forks held off, so no child started meanwhile has it.
 func execDaemonInPlace(exe string) error {
-	return syscall.Exec(exe, os.Args, os.Environ())
+	env, fd := dirHostHandoff(exe)
+	syscall.ForkLock.Lock()
+	defer syscall.ForkLock.Unlock()
+	if fd >= 0 {
+		if _, _, e := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETFD, 0); e != 0 {
+			fd = -1
+			env = withoutDirHostLockFD(env)
+		}
+	}
+	err := syscall.Exec(exe, os.Args, env)
+	if fd >= 0 {
+		syscall.CloseOnExec(fd) // not exec'd: the lock this process's again
+	}
+	return err
 }

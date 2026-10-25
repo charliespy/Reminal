@@ -70,6 +70,15 @@ func runDirectoryHost(stop <-chan struct{}, isDaemon bool, version string) {
 			}
 			continue
 		}
+		// A daemon runs here, no service manager behind it: it serves the
+		// machine, or is about to (re-exec'd in place, the same pid). A
+		// session never takes the channel from under it.
+		if !isDaemon && daemonRunning() {
+			if sleepOrStop(stop, dirHostLockPoll) {
+				return
+			}
+			continue
+		}
 		if of, err := loadOwners(); noOwners(of, err) {
 			if sleepOrStop(stop, dirHostOwnerRecheck) {
 				return
@@ -124,7 +133,9 @@ func serveDirectoryLocked(stop <-chan struct{}, isDaemon bool, version string) {
 		if sleepOrStop(stop, dirHostOwnerRecheck) {
 			return
 		}
-		if !isDaemon && DaemonServiceInstalled() {
+		// A daemon here now (installed, or started by hand since): it serves
+		// the machine, this session no longer.
+		if !isDaemon && (DaemonServiceInstalled() || daemonRunning()) {
 			return
 		}
 		of, err := loadOwners()
