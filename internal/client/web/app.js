@@ -3301,6 +3301,9 @@
     // Upload IDs THIS viewer originated — used to filter the agent's
     // upload_ack broadcast so only the originator auto-pastes the path.
     const pendingUploadIDs = new Set();
+    // An upload waiting on its ack, by upload_id: given the saved path (the
+    // upload toast's "Saving…" turns to where it landed).
+    const uploadAckWaiters = new Map();
 
     function humanBytes(n) {
       if (n < 1000) return n + ' B';
@@ -7788,6 +7791,8 @@
             const payload = JSON.parse(new TextDecoder().decode(bytes));
             if (!payload.upload_id || !pendingUploadIDs.has(payload.upload_id)) break;
             pendingUploadIDs.delete(payload.upload_id);
+            const waiter = uploadAckWaiters.get(payload.upload_id);
+            if (waiter) { uploadAckWaiters.delete(payload.upload_id); waiter(payload.path || ''); }
             const path = payload.path || '';
             if (!path) break;
             // Quote the path if it contains shell-meaningful chars so
@@ -9186,23 +9191,113 @@
         fastReconnect();
       });
     }
+    // The toast at the foot of the terminal while files upload: one for a
+    // whole batch. A spinner and a bar while the bytes go out, "Saving" until
+    // the machine says it wrote the file, then where it landed. Done fades
+    // after 4 s, a stopped upload after 6 s; a file refused for itself (too
+    // large) stays until dismissed.
+    function uploadToast(count) {
+      const box = document.getElementById('upload-toasts');
+      const el = document.createElement('div');
+      el.className = 'up-toast';
+      el.setAttribute('role', 'status');
+      el.innerHTML = '<div class="up-ico"><div class="up-spin"></div></div>' +
+        '<div class="up-head"><span class="up-title"></span><span class="up-count"></span></div>' +
+        '<div class="up-bar"><div class="up-fill"></div></div><div class="up-meta"></div>';
+      if (box) box.replaceChildren(el);
+      const q = s => el.querySelector(s);
+      const of = i => (count > 1 ? (i + 1) + ' of ' + count : '');
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        el.classList.add('gone');
+        setTimeout(() => el.remove(), 400);
+      };
+      // pct null: a moving bar, for a step with no measure of its own.
+      const set = (title, n, meta, pct) => {
+        q('.up-title').textContent = title;
+        q('.up-count').textContent = n;
+        q('.up-meta').textContent = meta;
+        const fill = q('.up-fill');
+        fill.classList.toggle('wait', pct === null);
+        if (pct !== null) fill.style.width = Math.min(100, pct).toFixed(1) + '%';
+      };
+      const end = (kind, title, meta) => {
+        el.classList.add(kind);
+        const s = q('.up-skip'); if (s) s.remove(); // the last word says what was skipped
+        q('.up-ico').innerHTML = kind === 'ok'
+          ? '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7.5" fill="#238636"/><path d="M4.5 8.2l2.3 2.3 4.7-4.9" stroke="#fff" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+          : '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7.5" fill="#da3633"/><path d="M8 4.3v4.6M8 11.2v.2" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>';
+        set(title, '', meta, 100);
+      };
+      return {
+        reading(name, i) { set('Reading ' + name, of(i), 'preparing…', null); },
+        sending(name, i, sent, size, secsLeft) {
+          set('Uploading ' + name, of(i),
+            humanBytes(sent) + ' of ' + humanBytes(size) + ' · ' + Math.floor(100 * sent / size) + '%' +
+              (secsLeft > 1 ? ' · ' + secsLeft + ' s left' : ''),
+            100 * sent / size);
+        },
+        saving(what) { set('Saving ' + what + ' on the machine', '', 'sent · waiting for the machine', null); },
+        // A file refused for itself mid-batch, said at once and kept in
+        // view while the rest go on.
+        skip(text) {
+          let s = q('.up-skip');
+          if (!s) { s = document.createElement('div'); s.className = 'up-skip'; el.appendChild(s); }
+          s.textContent = 'Skipped: ' + text;
+        },
+        done(title, meta) { end('ok', title, meta); setTimeout(close, 4000); },
+        failed(title, meta, stays) {
+          end('err', title, meta);
+          if (!stays) { setTimeout(close, 6000); return; }
+          const x = document.createElement('button');
+          x.type = 'button';
+          x.className = 'up-dismiss';
+          x.textContent = 'Dismiss';
+          x.addEventListener('click', close);
+          el.appendChild(x);
+        },
+      };
+    }
+    // Where an upload landed, said once the batch is done: the file's path,
+    // or for several their folder.
+    function uploadLanded(paths, count, extra) {
+      const dir = p => p.replace(/[\\/][^\\/]*$/, '/');
+      const where = paths.length === 1 ? paths[0] : (paths.length ? dir(paths[0]) : '');
+      return (where ? 'Saved to ' + where + ' · ' : '') +
+        (count === 1 ? 'path' : 'paths') + ' typed at the cursor' + (extra || '');
+    }
     // uploadFile sends file to the session of link (the current one when
     // none is given). false: none sent, nor will any more be — that session
     // left, not connected, or a send failed; a batch stops there. A file
     // refused for itself (too large) is said, and the rest go on.
-    async function uploadFile(file, ttlSeconds, link) {
+    //
+    // ui is the batch's toast ({ toast, i, skipped, paths }); without one the
+    // file gets a toast of its own and says it is done itself.
+    async function uploadFile(file, ttlSeconds, link, ui) {
       link = link || uploadLink();
       if (!link) {
         alert('Not connected — connect to a session first.');
         return false;
       }
+      const solo = !ui;
+      if (solo) ui = { toast: uploadToast(1), i: 0, skipped: [], paths: [], acks: [], link };
+      const toast = ui.toast;
       if (file.size > UPLOAD_MAX_BYTES) {
-        alert(file.name + ' is too large (' + humanBytes(file.size) +
-          '). Uploads are capped at ' + humanBytes(UPLOAD_MAX_BYTES) + ' per file.');
+        const why = humanBytes(file.size) + '; uploads are capped at ' + humanBytes(UPLOAD_MAX_BYTES) + ' per file.';
+        ui.skipped.push(file.name + ' is too large (' + why.replace(/\.$/, '') + ')');
+        if (solo) toast.failed(file.name + ' is too large', why, true);
+        else toast.skip(ui.skipped.join('; ') + '.');
         return;
       }
+      toast.reading(file.name, ui.i);
       const buf = new Uint8Array(await file.arrayBuffer());
-      if (!uploadLinkLive(link)) { viewerNote('upload of ' + file.name + ' not sent: the session it was for was left'); return false; }
+      const stopped = (sent, total) => {
+        const rest = (sent ? ' stopped after ' + sent + ' of ' + total + ' chunk' + (total === 1 ? '' : 's') : ' not sent');
+        toast.failed('Upload stopped: you left the session', file.name + rest + '. Reconnect and upload again.');
+      };
+      if (!uploadLinkLive(link)) { stopped(0, 0); return false; }
       const total = Math.max(1, Math.ceil(buf.length / UPLOAD_CHUNK_BYTES));
       const uploadId =
         (self.crypto && self.crypto.randomUUID && self.crypto.randomUUID()) ||
@@ -9216,8 +9311,33 @@
       // number of failed uploads. Stale-clean after 5 min — well
       // past any legitimate round-trip even on a slow connection.
       setTimeout(() => pendingUploadIDs.delete(uploadId), 5 * 60 * 1000);
-      viewerNote('uploading ' + file.name + ' (' +
-        humanBytes(file.size) + ', ' + total + ' chunk' + (total === 1 ? '' : 's') + ')…');
+      // The machine says it wrote the file (upload_ack): listened for from
+      // before the first chunk (a quick machine answers before the last
+      // bytes have drained here) and heard in the background, so a batch
+      // goes on sending as it always has. null: the session was left, the
+      // send failed, or two minutes passed after the last byte.
+      let sentAt = 0, watch = 0;
+      const landed = new Promise(res => {
+        const finish = p => { clearInterval(watch); uploadAckWaiters.delete(uploadId); res(p); };
+        uploadAckWaiters.set(uploadId, finish);
+        watch = setInterval(() => {
+          if (!uploadLinkLive(link) || (sentAt && performance.now() - sentAt > 120000)) finish(null);
+        }, 500);
+      });
+      const dropAck = () => { const f = uploadAckWaiters.get(uploadId); if (f) f(null); };
+      // Progress is what has left the browser: the frames handed to the
+      // socket less what it still holds (bufferedAmount), not the chunks
+      // queued, which would read 100% at once on a slow link.
+      const sock = link.sock, held = () => sock.bufferedAmount || 0, held0 = held(), t0 = performance.now();
+      let handed = 0, perChunk = 0;
+      const showSent = () => {
+        if (!perChunk) return;
+        const out = Math.max(0, handed - Math.max(0, held() - held0));
+        const sent = Math.min(file.size, file.size * out / (perChunk * total));
+        const rate = sent / Math.max(0.05, (performance.now() - t0) / 1000);
+        toast.sending(file.name, ui.i, sent, Math.max(1, file.size), rate > 0 ? Math.round((file.size - sent) / rate) : 0);
+      };
+      const ticker = setInterval(showSent, 150);
       try {
         for (let i = 0; i < total; i++) {
           const start = i * UPLOAD_CHUNK_BYTES;
@@ -9233,26 +9353,62 @@
           });
           const ct = await encrypt(link.key, new TextEncoder().encode(payload));
           if (!uploadLinkLive(link)) {
-            pendingUploadIDs.delete(uploadId);
-            viewerNote('upload of ' + file.name + ' stopped after ' + i + ' of ' + total + ' chunk' + (total === 1 ? '' : 's') + ': the session it was for was left');
+            pendingUploadIDs.delete(uploadId); dropAck();
+            stopped(i, total);
             return false;
           }
           const frame = JSON.stringify({ type: 'upload', data: ct });
           link.sock.send(frame);
+          handed += frame.length;
+          if (!perChunk) perChunk = frame.length;
+          showSent();
           // Yield to the event loop between chunks so the UI stays
           // responsive and the WS send buffer can drain.
           if (total > 1 && i < total - 1) await new Promise(r => setTimeout(r, 0));
         }
+        // The last bytes out of the socket before "Saving".
+        while (uploadLinkLive(link) && held() > held0) await new Promise(r => setTimeout(r, 100));
       } catch (e) {
         // Drop the pending entry: we know the upload won't complete,
         // and waiting for the 5-min stale-clean would leak the slot
         // for that whole window. The auto-paste won't fire anyway —
         // an upload_ack racing in afterwards lands on an empty set.
-        pendingUploadIDs.delete(uploadId);
-        viewerNote('upload failed at send: ' + e);
+        pendingUploadIDs.delete(uploadId); dropAck();
+        toast.failed('Upload failed: ' + file.name, 'It could not be sent (' + e + '). Try again.');
         return false;
+      } finally {
+        clearInterval(ticker);
       }
+      if (!uploadLinkLive(link)) { pendingUploadIDs.delete(uploadId); dropAck(); stopped(total, total); return false; }
+      sentAt = performance.now();
+      ui.acks.push({ name: file.name, landed });
+      if (solo) uploadBatchDone(ui, 1);
       return true;
+    }
+    // A batch's last word on its toast, once the machine has said where each
+    // file landed (or not): what landed, what was refused, what it never
+    // confirmed.
+    async function uploadBatchDone(ui, count, extra) {
+      const acks = ui.acks;
+      if (acks.length) ui.toast.saving(acks.length === 1 ? acks[0].name : acks.length + ' files');
+      const paths = await Promise.all(acks.map(a => a.landed));
+      ui.paths = paths.filter(Boolean);
+      const unconfirmed = paths.filter(p => p === null).length;
+      const sent = count - ui.skipped.length;
+      if (unconfirmed && !uploadLinkLive(ui.link)) {
+        ui.toast.failed('Upload stopped: you left the session',
+          (unconfirmed === 1 ? 'A file was' : unconfirmed + ' files were') + ' sent, but the machine had not said it saved ' +
+            (unconfirmed === 1 ? 'it' : 'them') + '. Reconnect and check ~/Downloads/reminal/.', ui.skipped.length > 0);
+      } else if (ui.skipped.length || unconfirmed) {
+        const said = ui.skipped.slice();
+        if (unconfirmed) said.push((unconfirmed === 1 ? 'one file was' : unconfirmed + ' files were') + ' sent but not confirmed: check ~/Downloads/reminal/ on the machine');
+        const title = ui.skipped.length ? (sent ? sent + ' of ' + count + ' files uploaded' : 'Nothing uploaded') : 'Not confirmed by the machine';
+        ui.toast.failed(title, said.join('; ') + '.', ui.skipped.length > 0);
+      } else if (count === 1) {
+        ui.toast.done('Uploaded ' + acks[0].name, uploadLanded(ui.paths, 1, extra));
+      } else {
+        ui.toast.done(count + ' files uploaded', uploadLanded(ui.paths, count, extra));
+      }
     }
     // Prompt once per upload batch — same TTL applies to every selected file.
     async function uploadBatch(files) {
@@ -9276,7 +9432,12 @@
         else alert('Not connected — connect to a session first.');
         return;
       }
-      for (const f of files) if ((await uploadFile(f, ttl, link)) === false) return;
+      const ui = { toast: uploadToast(files.length), i: 0, skipped: [], paths: [], acks: [], link };
+      for (const f of files) {
+        if ((await uploadFile(f, ttl, link, ui)) === false) return;
+        ui.i++;
+      }
+      uploadBatchDone(ui, files.length);
     }
     const uploadInput = document.getElementById('upload-input');
     document.getElementById('upload-btn').addEventListener('click', () => uploadInput.click());
@@ -9316,6 +9477,7 @@
       const DEFAULT_PASTE_TTL = 3600; // 1h — phone-pasted screenshots are mostly ephemeral
       const link = uploadLink(); // every image to the session it was pasted into
       if (!link) { viewerNote('pasted image not uploaded: not connected to the session'); return; }
+      const ui = { toast: uploadToast(imageFiles.length), i: 0, skipped: [], paths: [], acks: [], link };
       for (const f of imageFiles) {
         // Phone clipboard images often come in as "image.png" with no
         // useful name. Stamp a timestamp so concurrent pastes don't collide.
@@ -9323,10 +9485,10 @@
           ? f.name
           : 'paste-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
         const renamed = new File([f], stamped, { type: f.type });
-        if ((await uploadFile(renamed, DEFAULT_PASTE_TTL, link)) === false) return;
+        if ((await uploadFile(renamed, DEFAULT_PASTE_TTL, link, ui)) === false) return;
+        ui.i++;
       }
-      viewerNote('pasted ' + imageFiles.length + ' image' +
-        (imageFiles.length === 1 ? '' : 's') + ' (auto-delete in 1h)');
+      uploadBatchDone(ui, imageFiles.length, ' · auto-delete in 1h');
     });
 
     // ---- Viewport / layout sizing (single source of truth) ----

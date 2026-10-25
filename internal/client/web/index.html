@@ -235,6 +235,31 @@
     #held-chip button[hidden] { display: none; }
     .viewer-note { background: rgba(22, 27, 34, 0.94); border: 1px solid #30363d; color: #c9d1d9; font-size: 12.5px; line-height: 1.35; padding: 6px 12px; border-radius: 6px; text-align: center; overflow-wrap: anywhere; transition: opacity .4s; }
     .viewer-note.gone { opacity: 0; }
+    /* Upload toast (uploadToast in app.js): at the foot of the terminal while
+       files upload, a spinner and a bar of what has left the browser, then
+       "Saving" until the machine says it wrote the file, then where it landed. */
+    #upload-toasts { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(420px, calc(100% - 28px)); display: flex; flex-direction: column; gap: 6px; pointer-events: none; z-index: 6; }
+    .up-toast { pointer-events: auto; background: rgba(22, 27, 34, 0.97); border: 1px solid #30363d; border-radius: 8px; padding: 9px 12px 10px; box-shadow: 0 6px 24px rgba(0, 0, 0, .45);
+      font-size: 12.5px; color: #c9d1d9; display: grid; grid-template-columns: 18px minmax(0, 1fr); column-gap: 10px; row-gap: 6px; align-items: center; transition: opacity .35s, transform .35s; }
+    .up-toast.gone { opacity: 0; transform: translateY(8px); }
+    .up-ico { width: 16px; height: 16px; display: grid; place-items: center; }
+    .up-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(88, 166, 255, .25); border-top-color: #58a6ff; animation: up-spin .8s linear infinite; }
+    @keyframes up-spin { to { transform: rotate(360deg); } }
+    .up-head { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+    .up-title { color: #e6edf3; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .up-count { margin-left: auto; color: #8b949e; font-size: 11.5px; flex: none; font-variant-numeric: tabular-nums; }
+    .up-bar { grid-column: 2; height: 4px; background: #21262d; border-radius: 2px; overflow: hidden; }
+    .up-fill { height: 100%; width: 0; background: #58a6ff; border-radius: 2px; transition: width .15s linear; }
+    .up-fill.wait { width: 100% !important; background: linear-gradient(90deg, #21262d 0%, #58a6ff 50%, #21262d 100%); background-size: 200% 100%; animation: up-slide 1.1s linear infinite; }
+    @keyframes up-slide { from { background-position: 200% 0; } to { background-position: 0 0; } }
+    .up-meta { grid-column: 2; color: #8b949e; font-size: 11.5px; font-family: Menlo, Monaco, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .up-toast.ok .up-fill { background: #3fb950; }
+    .up-toast.err .up-fill { background: #f85149; }
+    .up-toast.err .up-title { color: #ffa198; }
+    .up-toast.err .up-meta { white-space: normal; overflow-wrap: anywhere; }
+    .up-skip { grid-column: 2; color: #d29922; font-size: 11.5px; overflow-wrap: anywhere; }
+    .up-dismiss { grid-column: 2; justify-self: start; font: inherit; font-size: 12px; color: #e6edf3; background: #21262d; border: 1px solid #30363d; border-radius: 5px; padding: 3px 10px; cursor: pointer; }
+    @media (prefers-reduced-motion: reduce) { .up-spin, .up-fill.wait { animation: none; } .up-toast { transition: none; } }
     #overlay span { background: #161b22; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; }
 
     /* ---- Mobile text-selection handles + copy bar ----
@@ -2021,6 +2046,7 @@
     <div id="terminal"></div>
     <div id="overlay"><span id="overlay-text">Connecting…</span></div>
     <div id="viewer-notes" aria-live="polite"></div>
+    <div id="upload-toasts" aria-live="polite"></div>
     <div id="held-chip" hidden role="status"><span id="held-chip-text"></span><button id="held-discard">Discard</button></div>
     <button id="jump-bottom" title="Jump to bottom">↓ Jump to bottom</button>
     <div id="findbar">

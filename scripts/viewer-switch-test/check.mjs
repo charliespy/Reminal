@@ -99,13 +99,14 @@ const left = await page.evaluate(async () => {
   await uploadFile(file('big.bin', 3 * UPLOAD_CHUNK_BYTES + 1), 0);
   await uploadBatch([file('one.bin', 10), file('two.bin', 10)]);
   r.stayed = kinds(p.a).filter(t => t === 'upload').length;
-  // A file too large for an upload, mid-batch: said, and the rest still sent.
+  // A file too large for an upload, mid-batch: said (an alert before, the
+  // upload toast now), and the rest still sent.
   const alerts = []; window.alert = (m) => alerts.push(String(m));
   p = pair(1000);
   const mb = new Uint8Array(1 << 20);
   const huge = new File(Array.from({ length: (UPLOAD_MAX_BYTES >> 20) + 1 }, () => mb), 'huge.bin');
   await uploadBatch([file('one.bin', 10), huge, file('three.bin', 10)]);
-  r.afterHuge = kinds(p.a).filter(t => t === 'upload').length; r.hugeSaid = alerts.some(m => /too large/.test(m));
+  r.afterHuge = kinds(p.a).filter(t => t === 'upload').length; r.hugeSaid = alerts.some(m => /too large/.test(m)) || /too large/.test((document.getElementById('upload-toasts') || {}).textContent || '');
   p = pair(1);
   await uploadFile(file('big.bin', 3 * UPLOAD_CHUNK_BYTES + 1), 0);
   r.fileOnA = kinds(p.a).length; r.fileOnB = kinds(p.b).filter(t => t === 'upload').length;
