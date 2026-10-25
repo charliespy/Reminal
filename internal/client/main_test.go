@@ -6,6 +6,7 @@ package client
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 // TestMain points HOME at a scratch directory for the whole package, so no
@@ -14,6 +15,19 @@ import (
 // real home is the key the person's daemon then adopts (2026-10-04). The
 // atrest guard refuses such writes too; this keeps them from being tried.
 func TestMain(m *testing.M) {
+	// A process that only stands for a daemon (its args "reminal daemon"),
+	// until it is killed: what daemon.pid names in a test.
+	if os.Getenv("REMINAL_TEST_STAND_IN") != "" {
+		time.Sleep(time.Hour)
+		os.Exit(0)
+	}
+	// A test's machine in a process of its own (REMINAL_TEST_HOME: this
+	// binary run by a test, as that machine) keeps the home it was given.
+	if h := os.Getenv("REMINAL_TEST_HOME"); h != "" {
+		os.Setenv("HOME", h)
+		os.Setenv("REMINAL_KEYSTORE", "file")
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "reminal-test-home-*")
 	if err != nil {
 		panic(err)

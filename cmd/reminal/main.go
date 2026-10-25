@@ -145,6 +145,9 @@ func main() {
 					"version": version, "channel": updater.ChannelName(),
 					"commit": commit, "built": buildDate,
 					"os": runtime.GOOS, "arch": runtime.GOARCH,
+					// What a daemon re-exec'd onto this build may hand it
+					// (client.execDaemonInPlace).
+					"handover": "dirhost-lock-fd",
 				})
 				fmt.Println(string(out))
 			} else if len(os.Args) > 2 && (os.Args[2] == "--verbose" || os.Args[2] == "-v") {
