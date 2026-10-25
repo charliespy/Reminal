@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -196,5 +197,33 @@ func TestTheDirHostLockIsHandedOnlyToABinaryThatTakesIt(t *testing.T) {
 	}
 	if dirHostHandoverOK(filepath.Join(dir, "missing")) {
 		t.Error("a binary that is not there: handed")
+	}
+}
+
+// A handed fd that is not the lock file (replaced since, or a stray
+// variable) is not taken, and is close-on-exec from then on: no shell a
+// session starts inherits it.
+func TestAHandedFDNotTakenIsNotInherited(t *testing.T) {
+	home := isolateHome(t)
+	other := filepath.Join(home, "not-the-lock")
+	fd, err := syscall.Open(other, syscall.O_RDWR|syscall.O_CREAT, 0o600) // no O_CLOEXEC, as handed
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(fd)
+	t.Setenv(dirHostLockFDEnv, strconv.Itoa(fd))
+	adoptDirHostLock()
+	dirHostMu.Lock()
+	adopted := dirHostAdopted
+	dirHostMu.Unlock()
+	if adopted != nil {
+		t.Fatal("took a file that is not the lock")
+	}
+	flags, _, e := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
+	if e != 0 {
+		t.Fatal(e)
+	}
+	if flags&syscall.FD_CLOEXEC == 0 {
+		t.Error("left open across exec: a session's shell would inherit it")
 	}
 }

@@ -78,15 +78,21 @@ func adoptDirHostLock() {
 	if err != nil || fd < 3 {
 		return
 	}
+	var got, want syscall.Stat_t
+	if syscall.Fstat(fd, &got) != nil {
+		return
+	}
+	// Close-on-exec at once, whatever comes next: a handed fd that turns out
+	// not to be taken is never inherited by a session's shell, which would
+	// hold the lock for as long as it lived.
+	syscall.CloseOnExec(fd)
 	path, err := lockFilePath(dirHostLockName)
 	if err != nil {
 		return
 	}
-	var got, want syscall.Stat_t
-	if syscall.Fstat(fd, &got) != nil || syscall.Stat(path, &want) != nil || got.Dev != want.Dev || got.Ino != want.Ino {
+	if syscall.Stat(path, &want) != nil || got.Dev != want.Dev || got.Ino != want.Ino {
 		return
 	}
-	syscall.CloseOnExec(fd)
 	f := os.NewFile(uintptr(fd), path)
 	// Already this file description's: taking it again only says so.
 	if syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) != nil {
