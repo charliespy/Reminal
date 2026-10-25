@@ -44,6 +44,11 @@ const out = await page.evaluate(async () => {
   const file = (n, size) => new File([new Uint8Array(size)], n);
   window.prompt = () => '1h';
   window.alert = () => {};
+  // A page that asks the lifetime in a dialog of its own (uiDialog) is
+  // answered here too, and one that uploads only within a session is given
+  // one; where neither applies, these do nothing that matters.
+  if (typeof uiDialog === 'function') uiDialog = async () => ({ ttl: '1h' });
+  if (typeof sessionId !== 'undefined' && !sessionId) sessionId = 'TOAST001';
   const res = {};
 
   // A: one file of three chunks on a slow link.
