@@ -10978,7 +10978,7 @@
       search.autocomplete = 'off';
       search.spellcheck = false;
       const rows = document.createElement('div');
-      rows.className = 'panel-rows';
+      rows.className = 'panel-rows' + (opts.rowsClass ? ' ' + opts.rowsClass : '');
       root.appendChild(search);
       root.appendChild(rows);
       const draw = () => {
@@ -11087,20 +11087,20 @@
       buildFilterList(appsListRoot, {
         placeholder: 'Search apps…',
         items: appList,
+        // A grid of tiles, three across, like the tour shows it.
+        rowsClass: 'app-grid',
         // The launcher is something you open in order to type, so take focus.
         focus: true,
         empty: 'No app matches that.',
         haystack: a => a.name || '',
         row: a => {
           const row = document.createElement('div');
-          row.className = 'recents-row';
-          row.title = 'Launch on the host';
+          row.className = 'app-tile';
+          row.title = 'Launch ' + (a.name || 'this app') + ' on the host';
           row.appendChild(appListIcon(a));
-          const label = document.createElement('div'); label.className = 'label';
           const nameEl = document.createElement('div'); nameEl.className = 'name';
           nameEl.textContent = a.name || 'App';
-          label.appendChild(nameEl);
-          row.appendChild(label);
+          row.appendChild(nameEl);
           row.addEventListener('click', () => launchApp(a));
           return row;
         },
