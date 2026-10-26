@@ -552,6 +552,30 @@ func applyBundleChecked(tr *tar.Reader, appRoot string, accept func(bin string) 
 	defer os.RemoveAll(staging)
 
 	const root = "reminal.app"
+	// Where staging is on disk, its links followed (a temp folder may be
+	// under one, /var on macOS): what each entry is checked against.
+	realStaging, err := filepath.EvalSymlinks(staging)
+	if err != nil {
+		return fmt.Errorf("staging dir: %w", err)
+	}
+	within := func(p string) bool {
+		return p == realStaging || strings.HasPrefix(p, realStaging+string(filepath.Separator))
+	}
+	// realDir is where an entry's folder is on disk, the links written so
+	// far followed: an entry is put only where that is inside staging —
+	// links that each stay inside, read one at a time, can lead out when
+	// one is followed through another.
+	realDir := func(target string) (string, bool) {
+		dir := filepath.Dir(target)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", false
+		}
+		real, err := filepath.EvalSymlinks(dir)
+		if err != nil || !within(real) {
+			return "", false
+		}
+		return real, true
+	}
 	seen := false
 	for {
 		hdr, err := tr.Next()
@@ -569,7 +593,11 @@ func applyBundleChecked(tr *tar.Reader, appRoot string, accept func(bin string) 
 		target := filepath.Join(staging, name)
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			dir, ok := realDir(target)
+			if !ok {
+				continue // its folder leads out of staging — drop it
+			}
+			if err := os.MkdirAll(filepath.Join(dir, filepath.Base(target)), 0o755); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
@@ -579,26 +607,31 @@ func applyBundleChecked(tr *tar.Reader, appRoot string, accept func(bin string) 
 			// through it to an arbitrary path (symlink-based tar slip). Legit
 			// macOS .app bundles only carry relative, in-bundle symlinks, so this
 			// never rejects a genuine release.
-			resolved := hdr.Linkname
-			if !filepath.IsAbs(resolved) {
-				resolved = filepath.Join(filepath.Dir(target), resolved)
+			// The link's target as read from where it is put on disk, not
+			// from its name in the archive (whose folders may be links).
+			dir, ok := realDir(target)
+			if !ok || filepath.IsAbs(hdr.Linkname) {
+				continue // its folder, or the link, points outside staging — drop it
 			}
-			resolved = filepath.Clean(resolved)
-			if resolved != staging && !strings.HasPrefix(resolved, staging+string(filepath.Separator)) {
+			if !within(filepath.Clean(filepath.Join(dir, hdr.Linkname))) {
 				continue // link points outside staging — drop it
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			_ = os.Remove(target)
-			if err := os.Symlink(hdr.Linkname, target); err != nil {
+			at := filepath.Join(dir, filepath.Base(target))
+			_ = os.Remove(at)
+			if err := os.Symlink(hdr.Linkname, at); err != nil {
 				return err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
+			dir, ok := realDir(target)
+			if !ok {
+				continue // its folder leads out of staging — drop it
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode&0o777))
+			at := filepath.Join(dir, filepath.Base(target))
+			// Never through a link already there: a file is written as a file.
+			if fi, err := os.Lstat(at); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+				continue
+			}
+			f, err := os.OpenFile(at, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode&0o777))
 			if err != nil {
 				return err
 			}
