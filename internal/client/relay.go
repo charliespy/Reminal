@@ -198,6 +198,9 @@ func relayMux() *http.ServeMux {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Content-Security-Policy", viewerCSP)
+		// A page this one opens on another origin (a forwarded app) gets no
+		// handle back on it (the Worker's _headers says the same).
+		h.Set("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
 		// Dev relay: never let a browser cache the page across rebuilds —
 		// the embedded HTML changes on every `go build`, and a stale cached
 		// copy silently masks fixes during local testing.

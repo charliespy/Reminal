@@ -5542,6 +5542,9 @@
     // A window.open() after it reads as unprompted and gets swallowed.
     async function openPortOnMachine(b64, id, port) {
       const tab = window.open('', '_blank');
+      // The forwarded app is someone's own page: it gets no handle on this
+      // one (window.opener), as a link opened with noopener would not.
+      if (tab) { try { tab.opener = null; } catch (_) {} }
       try {
         const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { open: id });
         if (r.open_error) throw new Error(r.open_error);

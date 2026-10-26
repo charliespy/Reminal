@@ -32,6 +32,13 @@ func TestApplyLocalOpen(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A --public port: no gate, so no PIN to open it with.
+	if err := session.WriteActive(session.Active{
+		ID: "PUBL4321", Kind: "port", Port: 5000, PID: pid, Public: true,
+		PIN: "135791", OpenURL: "https://port-publ4321.reminal.app/",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// An exposed port whose link was never recorded — an older tunnel, or one
 	// that died before it registered.
 	if err := session.WriteActive(session.Active{
@@ -51,6 +58,19 @@ func TestApplyLocalOpen(t *testing.T) {
 		}
 		if resp.OpenPIN != "246810" {
 			t.Errorf("OpenPIN = %q", resp.OpenPIN)
+		}
+	})
+
+	// A port with no gate hands back its link alone: a PIN on it would ride
+	// into the forwarded app's own address, for its page to read.
+	t.Run("a public port hands back its link and no PIN", func(t *testing.T) {
+		var resp protocol.DirResponse
+		applyLocalOpen(&resp, "PUBL4321")
+		if resp.OpenError != "" || resp.OpenURL != "https://port-publ4321.reminal.app/" {
+			t.Fatalf("url=%q err=%q", resp.OpenURL, resp.OpenError)
+		}
+		if resp.OpenPIN != "" {
+			t.Fatalf("a port with no gate handed back a PIN: %q", resp.OpenPIN)
 		}
 	})
 
