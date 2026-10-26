@@ -68,9 +68,12 @@ type cacheEntry struct {
 // it never returns a fatal error — network/cache/permission problems are
 // silently swallowed so they can't break the user's primary action.
 func CheckAndPromptOnStart(currentVersion string) {
-	if !shouldCheck(currentVersion) {
+	if justUpgraded() || !shouldCheck(currentVersion) {
 		return
 	}
+	// Where the new version will be, read before the upgrade: on Windows the
+	// running binary is moved aside, and this path is where the new one lands.
+	self, _ := os.Executable()
 
 	latestTag, build, critical, err := check(currentVersion, httpTimeoutBackground)
 	if errors.Is(err, errNoAssetForPlatform) {
@@ -92,8 +95,7 @@ func CheckAndPromptOnStart(currentVersion string) {
 			fmt.Fprintf(os.Stderr, "Critical upgrade failed: %v — run `reminal upgrade` manually.\n", err)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "Upgraded to %s. Restart reminal to use it.\n", latestTag)
-		os.Exit(0)
+		startNew(self, latestTag)
 	}
 
 	if !isInteractive() {
@@ -112,7 +114,17 @@ func CheckAndPromptOnStart(currentVersion string) {
 		fmt.Fprintf(os.Stderr, "Upgrade failed: %v\n", err)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Upgraded to %s. Restart reminal to use the new version.\n", latestTag)
+	startNew(self, latestTag)
+}
+
+// startNew goes on with the version just installed, in this terminal. If it
+// can't be started, it says to start it, and exits: this binary is no longer
+// the installed one.
+func startNew(self, latestTag string) {
+	fmt.Fprintf(os.Stderr, "Upgraded to %s. Starting it...\n", latestTag)
+	if err := startUpgraded(self); err != nil {
+		fmt.Fprintf(os.Stderr, "Couldn't start it (%v). Run reminal again to use the new version.\n", err)
+	}
 	os.Exit(0)
 }
 
