@@ -967,7 +967,7 @@ export class SessionRoom {
     if (!meta) {
       return new Response(notFoundPage(), {
         status: 404,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
+        headers: pageHeaders(),
       });
     }
 
@@ -1004,7 +1004,7 @@ export class SessionRoom {
         }
         return new Response(pinGatePage(sessionId, wantTo, "", authAction), {
           status: 200,
-          headers: { "Content-Type": "text/html; charset=utf-8" },
+          headers: pageHeaders(),
         });
       }
       // The visitor holds the cookie, but the browser sent it on a request
@@ -1334,7 +1334,7 @@ export class SessionRoom {
     if (Number.isFinite(authLen) && authLen > MAX_AUTH_BODY_BYTES) {
       return new Response(pinGatePage(sessionId, root, "Incorrect PIN.", authAction), {
         status: 401,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
+        headers: pageHeaders(),
       });
     }
     // formData() REJECTS on a body it cannot parse as a form — a JSON, XML,
@@ -1351,7 +1351,7 @@ export class SessionRoom {
     } catch {
       return new Response(pinGatePage(sessionId, root, "Incorrect PIN.", authAction), {
         status: 401,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
+        headers: pageHeaders(),
       });
     }
     const pin = String(form.get("pin") ?? "");
@@ -1382,7 +1382,7 @@ export class SessionRoom {
       if (wait > 0) {
         gateResponse = new Response(pinGatePage(sessionId, to, `Too many failed attempts. Try again in ${waitText(wait)}.`, authAction), {
           status: 429,
-          headers: { "Content-Type": "text/html; charset=utf-8", "Retry-After": String(Math.ceil(wait / 1000)) },
+          headers: pageHeaders({ "Retry-After": String(Math.ceil(wait / 1000)) }),
         });
       } else {
         const { compare } = await import("bcryptjs");
@@ -1391,7 +1391,7 @@ export class SessionRoom {
           await this.state.storage.put({ gateSources: w.sources, gateTunnel: w.tunnel });
           gateResponse = new Response(pinGatePage(sessionId, to, "Incorrect PIN.", authAction), {
             status: 401,
-            headers: { "Content-Type": "text/html; charset=utf-8" },
+            headers: pageHeaders(),
           });
         } else {
           const r = gateRight(g, src, now);
@@ -1841,6 +1841,21 @@ function stripAuthCookie(header: string, sessionId: string): string {
 }
 
 // ---- HTML pages ----
+
+// pageHeaders are the headers of a page the relay itself builds for a tunnel
+// (its PIN gate, its not-found page) — never of the forwarded app's own
+// responses. The page is not to be shown inside another site's frame, where a
+// visitor could be led to type the PIN into it unawares, and it sends no
+// referrer, so the tunnel's address goes nowhere a link on it leads.
+function pageHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    ...extra,
+  };
+}
 
 function pinGatePage(sessionId: string, to: string, errorMsg: string, authAction: string): string {
   const escTo = escapeHtml(to);
