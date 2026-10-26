@@ -8,25 +8,37 @@
 #
 # The installed ("old") version is built from this tree, or from OLD_REF
 # (e.g. origin/main, the control); the release it upgrades to is this tree
-# at version 9.9.9, served from inside the container. Needs docker.
+# at version 9.9.9, served from inside the container. Needs docker; builds
+# run in a golang container too.
+# A heavy run: waits for one of the machine's slots first (scripts/README-gates.md).
+[ -n "${REMINAL_GATE_HELD:-}" ] || [ ! -f "$(dirname -- "$0")/../gatelock.py" ] || ! command -v python3 >/dev/null || exec python3 "$(dirname -- "$0")/../gatelock.py" -- bash "$0" "$@"
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$(cd ../.. && pwd)
 ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+# Docker volumes are named from REMINAL_VOLUME_PREFIX (default reminal), so a
+# run can keep its caches apart from other checkouts on the machine.
+V=${REMINAL_VOLUME_PREFIX:-reminal}
 W=$(mktemp -d)
-trap 'rm -rf "${W:?}"' EXIT
+trap '"$ROOT/scripts/rm-tmp.sh" "$W"' EXIT
 mkdir -p "$W/old" "$W/new"
 if [ -n "${1:-}" ]; then
   git -C "$ROOT" worktree add -q --detach "$W/src" "$1"
-  trap 'git -C "$ROOT" worktree remove --force "$W/src"; rm -rf "${W:?}"' EXIT
+  trap 'git -C "$ROOT" worktree remove --force "$W/src"; "$ROOT/scripts/rm-tmp.sh" "$W"' EXIT
   OLDSRC=$W/src
 else OLDSRC=$ROOT; fi
-GOOS=linux GOARCH=$ARCH go build -C "$OLDSRC" -ldflags "-X main.version=3.0.0" -o "$W/old/reminal" ./cmd/reminal
+# build SRC VERSION OUT: reminal from SRC, saying it is VERSION, at OUT (under $W).
+build() {
+  docker run --rm -v "$1":/src:ro -v "$W":/out -v "$V-gomod":/go/pkg/mod -v "$V-gocache":/root/.cache/go-build \
+    -e GOFLAGS=-buildvcs=false -e CGO_ENABLED=0 -e GOARCH="$ARCH" -w /src golang:1.26-bookworm \
+    go build -ldflags "-X main.version=$2" -o "/out/$3" ./cmd/reminal
+}
+build "$OLDSRC" 3.0.0 old/reminal
 cp inside.sh "$W/"
 # release VERSION: the release v9.9.9, its build saying it is VERSION, offered
 # to the old version and accepted. Prints what inside.sh saw.
 release() {
-  GOOS=linux GOARCH=$ARCH go build -C "$ROOT" -ldflags "-X main.version=$1" -o "$W/new/reminal" ./cmd/reminal
+  build "$ROOT" "$1" new/reminal
   tar -C "$W/new" -czf "$W/reminal_9.9.9_linux_$ARCH.tar.gz" reminal
   docker run --rm -e ARCH="$ARCH" -v "$W:/t:ro" python:3.12-slim sh /t/inside.sh
 }
