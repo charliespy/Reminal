@@ -63,12 +63,15 @@ func TestTunnelOriginRouting(t *testing.T) {
 		{"reminal-relay-staging.futuristic.workers.dev", "", ""},
 		{"localhost", "", ""},
 		{"127.0.0.1:8787", "", ""},
-		// A suffix is set, but this host is not under it. A lookalike domain
-		// must not be treated as ours.
-		{"example.com", "reminal.app", ""},
-		{"reminal.app.evil.com", "reminal.app", ""},
-		{"notreminal.app", "reminal.app", ""},
-		{"", "reminal.app", ""},
+		// A suffix is set, but this host is not under it (the workers.dev
+		// hostname the Worker still answers on, a lookalike domain): it is not
+		// the forward's own origin either, so the forward is sent there.
+		{"reminal-relay.x.workers.dev", "reminal.app", "https://port-abc12345.reminal.app"},
+		{"example.com", "reminal.app", "https://port-abc12345.reminal.app"},
+		{"reminal.app.evil.com", "reminal.app", "https://port-abc12345.reminal.app"},
+		{"notreminal.app", "reminal.app", "https://port-abc12345.reminal.app"},
+		{"port-abc12345.example.com", "reminal.app", "https://port-abc12345.reminal.app"},
+		{"", "reminal.app", "https://port-abc12345.reminal.app"},
 	}
 
 	var b strings.Builder

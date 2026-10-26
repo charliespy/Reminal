@@ -18,8 +18,9 @@ export interface Env extends PushEnv, LimiterEnv {
   // TUNNEL_SUFFIX is the base domain whose `port-<id>.` subdomains reach this
   // Worker. Set it only where those subdomains actually route here (production
   // has *.reminal.app), because it makes a forwarded app reachable ONLY on its
-  // own origin: a request for /p/<id>/ arriving on any other host under the
-  // suffix is redirected there rather than served.
+  // own origin: a request for /p/<id>/ arriving on any other host — under the
+  // suffix or not, such as the workers.dev hostname the Worker also answers
+  // on — is redirected there rather than served.
   //
   // Why that matters: the viewer keeps this origin's remembered sessions and
   // its owner key in localStorage and IndexedDB, and anything served from the
@@ -107,7 +108,9 @@ function tooMany(): Response {
 // A forwarded app is somebody's arbitrary HTML. Served at /p/<id>/ on the
 // relay's own host it would share an origin with the viewer, which is where
 // this browser keeps its remembered sessions and its owner key — so it is sent
-// to an origin of its own instead. Exported for the tests.
+// to an origin of its own instead. That holds for every host the Worker
+// answers on, not only those under the suffix: the workers.dev hostname
+// serves the viewer too. Exported for the tests.
 export function tunnelOrigin(
   hostHeader: string,
   suffixVar: string | undefined,
@@ -116,12 +119,12 @@ export function tunnelOrigin(
   const suffix = (suffixVar || "").trim().toLowerCase();
   if (!suffix) return ""; // no wildcard subdomains here (staging, wrangler dev)
   const host = (hostHeader || "").trim().toLowerCase().split(":")[0];
-  if (!host) return "";
-  if (host !== suffix && !host.endsWith("." + suffix)) return ""; // not our domain
+  const own = `https://port-${sessionId.toLowerCase()}.${suffix}`;
+  if (!host.endsWith("." + suffix)) return own; // the suffix itself, or another host
   if (/^port-[a-z0-9]+$/i.test(host.slice(0, host.length - suffix.length - 1))) {
     return ""; // already on the forward's own origin
   }
-  return `https://port-${sessionId.toLowerCase()}.${suffix}`;
+  return own;
 }
 
 export default {
