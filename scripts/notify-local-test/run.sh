@@ -13,13 +13,16 @@
 #   scripts/notify-local-test/run.sh            # this tree
 #   TREE=<tree> scripts/notify-local-test/run.sh
 # A heavy run: waits for one of the machine's slots first (scripts/README-gates.md).
-[ -n "${REMINAL_GATE_HELD:-}" ] || ! command -v python3 >/dev/null || [ ! -f "$(dirname -- "$0")/../gatelock.py" ] || exec python3 "$(dirname -- "$0")/../gatelock.py" -- sh "$0" "$@"
+[ -n "${REMINAL_GATE_HELD:-}" ] || [ ! -f "$(dirname -- "$0")/../gatelock.py" ] || ! command -v python3 >/dev/null || exec python3 "$(dirname -- "$0")/../gatelock.py" -- sh "$0" "$@"
 set -e
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TREE=${TREE:-$(CDPATH= cd -- "$DIR/../.." && pwd)}
+# Docker volumes are named from REMINAL_VOLUME_PREFIX (default reminal), so a
+# run can keep its caches apart from other checkouts on the machine.
+V=${REMINAL_VOLUME_PREFIX:-reminal}
 B=$(mktemp -d)
 trap '"$DIR/../rm-tmp.sh" "$B"' EXIT
-docker run --rm -v "$TREE":/src:ro -v "$B":/out -v reminal-gomod:/go/pkg/mod -v reminal-gocache:/root/.cache/go-build \
+docker run --rm -v "$TREE":/src:ro -v "$B":/out -v "$V-gomod":/go/pkg/mod -v "$V-gocache":/root/.cache/go-build \
   -e GOFLAGS=-buildvcs=false -e CGO_ENABLED=0 -w /src golang:1.26-bookworm go build -o /out/reminal ./cmd/reminal
 cat > "$B/inside.sh" <<'INSIDE'
 set -u
