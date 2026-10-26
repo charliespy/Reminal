@@ -1,6 +1,7 @@
 import { closeBack } from "./closeback";
 import type { Attachment, TunnelMeta } from "./types";
 import { ALARM_ARMS, armAlarm, type AlarmArms } from "./alarm";
+import { BodyBudget, readBody } from "./body";
 import {
   NO_SOURCE, VISITOR_MAX_AGE_S, gateRight, gateWait, gateWrong, legacyCookie, normalizePIN, timingSafeEqual, toHex,
   visitorCookie, visitorCookieOK, type GateState, type Strikes,
@@ -69,8 +70,8 @@ const MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024;
 const MAX_AUTH_TO_BYTES = 4096;
 
 // Ceiling on the whole /__auth request body. The endpoint is UNAUTHENTICATED and
-// calls request.formData(), which buffers the entire body into memory before we
-// can look at it — so without this any stranger could POST a multi-MB body at a
+// parses a form, which needs the entire body in memory before we can look at
+// it — so without this any stranger could POST a multi-MB body at a
 // gated tunnel and pile pressure on the DO's ~128 MB budget. A real login form is
 // tiny (a PIN plus a `to` capped at MAX_AUTH_TO_BYTES), so 64 KiB is orders of
 // magnitude of headroom and only ever rejects abuse. Same intent as the main
@@ -102,6 +103,10 @@ export class SessionRoom {
   // with no compare. Instance memory, like pendingTunnelReqs — a fresh DO resets
   // it to resolved, which is correct (no attempt is in flight).
   private authGate: Promise<void> = Promise.resolve();
+  // What uploads being read at once hold together (body.ts): each is under
+  // MAX_REQUEST_BODY_BYTES, and so are all of them — two at the ceiling
+  // would not fit the room's memory.
+  private uploads = new BodyBudget(MAX_REQUEST_BODY_BYTES);
   // pendingTunnelReqs lives in DO instance memory; a request keeps the
   // DO awake until it resolves or times out, so the map never has to
   // survive hibernation.
@@ -1038,14 +1043,23 @@ export class SessionRoom {
       });
     }
     const reqID = crypto.randomUUID();
-    const bodyBytes = await request.arrayBuffer();
-    if (bodyBytes.byteLength > MAX_REQUEST_BODY_BYTES) {
-      // Missing or wrong Content-Length (chunked upload) — catch it after the fact.
+    // Missing or wrong Content-Length (chunked upload): read no further than
+    // the ceiling, and no more than the uploads already being read leave.
+    const bodyArr = await readBody(request.body, MAX_REQUEST_BODY_BYTES, this.uploads);
+    if (bodyArr === "large") {
       return new Response("reminal: request body too large\n", {
         status: 413,
         headers: { "Content-Type": "text/plain" },
       });
     }
+    if (bodyArr === "busy") {
+      return new Response("reminal: too many uploads at once, try again in a moment\n", {
+        status: 503,
+        headers: { "Content-Type": "text/plain", "Retry-After": "5" },
+      });
+    }
+    // Held until it is sent on (or refused below): then the next may be read.
+    const sent = () => this.uploads.give(bodyArr.byteLength);
     const headers: Record<string, string> = {};
     request.headers.forEach((v, k) => {
       const lk = k.toLowerCase();
@@ -1091,7 +1105,6 @@ export class SessionRoom {
     // Send the head tunnel_req with the first chunk; if there's more, mark
     // body_more and stream the rest as tunnel_req_body chunks. 700 KiB raw →
     // ~933 KiB base64.
-    const bodyArr = new Uint8Array(bodyBytes);
     const REQ_BODY_CHUNK = 700 * 1024;
     // The head tunnel_req co-locates method+url+HEADERS with the first body
     // chunk. Request headers are not tiny — a big Cookie or many forwarded
@@ -1117,6 +1130,7 @@ export class SessionRoom {
     if (headOverhead >= MAX_TUNNEL_MSG) {
       // Headers alone exceed the per-message cap: no body split can make the head
       // fit, and sending it would drop the tunnel. Fail just this request.
+      sent();
       return new Response(
         "reminal: request headers too large to relay\n",
         { status: 431, headers: { "Content-Type": "text/plain" } },
@@ -1134,6 +1148,7 @@ export class SessionRoom {
       // Agent predates chunked request bodies: it would ignore the follow-on
       // tunnel_req_body messages and hand the backend a TRUNCATED body — a
       // silently corrupted upload. Refuse instead, and say why.
+      sent();
       return new Response(
         "reminal: this upload is too large for the reminal version running on the target machine.\nRun `reminal upgrade` there, then retry.\n",
         { status: 413, headers: { "Content-Type": "text/plain" } },
@@ -1170,7 +1185,9 @@ export class SessionRoom {
           }));
         }
       }
+      sent();
     } catch {
+      sent();
       const pending = this.pendingTunnelReqs.get(reqID);
       if (pending) {
         clearTimeout(pending.timeout);
@@ -1327,9 +1344,8 @@ export class SessionRoom {
     // Reject an oversized body BEFORE formData() buffers it. This endpoint is
     // unauthenticated, so without this a stranger could POST megabytes at a gated
     // tunnel and lean on the DO's memory. A declared length over the cap can only
-    // be abuse — a real login form is well under it. (A chunked body with no
-    // Content-Length still buffers, exactly as on the main path; the platform's
-    // own request-body limit bounds that case.)
+    // be abuse — a real login form is well under it. A chunked body with no
+    // Content-Length is read no further than the cap either (readBody below).
     const authLen = Number(request.headers.get("content-length") ?? "");
     if (Number.isFinite(authLen) && authLen > MAX_AUTH_BODY_BYTES) {
       return new Response(pinGatePage(sessionId, root, "Incorrect PIN.", authAction), {
@@ -1347,7 +1363,9 @@ export class SessionRoom {
     // that body was, it did not carry a usable one.
     let form: FormData;
     try {
-      form = await request.formData();
+      const read = await readBody(request.body, MAX_AUTH_BODY_BYTES);
+      if (typeof read === "string") throw new Error(read);
+      form = await new Response(read, { headers: { "Content-Type": request.headers.get("content-type") ?? "" } }).formData();
     } catch {
       return new Response(pinGatePage(sessionId, root, "Incorrect PIN.", authAction), {
         status: 401,
