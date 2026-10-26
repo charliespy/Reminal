@@ -268,3 +268,34 @@ console.log(out.join("\n"));
 		}
 	}
 }
+
+// An alert, or a token ask, sent without its length is held no further than
+// what one may be: refused as too large before it is parsed (a body read
+// whole first is held whole, and parsed, and decoded, whatever is refused
+// after).
+func TestPushRequestsAreHeldNoFurtherThanTheirSize(t *testing.T) {
+	got := runWorkerTS(t, `
+import { handlePush, handlePushToken } from "SRC/push.ts";
+const env = { VAPID_PUBLIC: "x", VAPID_PRIVATE_JWK: "{}", PUSH_TOKEN_KEY: "k".repeat(48) };
+globalThis.fetch = async () => new Response(null, { status: 201 });
+const out = [];
+const enc = new TextEncoder();
+for (const [path, handle] of [["/push", handlePush], ["/push/token", handlePushToken]]) {
+  let pulled = 0;
+  const chunk = enc.encode("A".repeat(64 << 10));
+  const body = new ReadableStream({ pull(c) {
+    if (pulled === 0) c.enqueue(enc.encode('{"endpoint":"https://fcm.googleapis.com/x","machine":"m","payload":"'));
+    else if (pulled < 65) c.enqueue(chunk);
+    else if (pulled === 65) c.enqueue(enc.encode('"}'));
+    else c.close();
+    pulled++;
+  } });
+  const r = await handle(new Request("https://live.reminal.app" + path, { method: "POST", body, duplex: "half", headers: { "cf-connecting-ip": "203.0.113.9" } }), env);
+  out.push(path + " " + r.status);
+}
+console.log(out.join("\n"));
+`)
+	if want := "/push 413\n/push/token 413"; strings.TrimSpace(got) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
