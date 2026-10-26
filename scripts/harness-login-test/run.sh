@@ -9,14 +9,17 @@
 # screens were captured from them), in Docker. Cursor's CLI comes from its
 # install script, which installs its current build only.
 # A heavy run: waits for one of the machine's slots first (scripts/README-gates.md).
-[ -n "${REMINAL_GATE_HELD:-}" ] || ! command -v python3 >/dev/null || [ ! -f "$(dirname -- "$0")/../gatelock.py" ] || exec python3 "$(dirname -- "$0")/../gatelock.py" -- sh "$0" "$@"
+[ -n "${REMINAL_GATE_HELD:-}" ] || [ ! -f "$(dirname -- "$0")/../gatelock.py" ] || ! command -v python3 >/dev/null || exec python3 "$(dirname -- "$0")/../gatelock.py" -- sh "$0" "$@"
 set -e
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$DIR/../.." && pwd)
+# Docker volumes are named from REMINAL_VOLUME_PREFIX (default reminal), so a
+# run can keep its caches apart from other checkouts on the machine.
+V=${REMINAL_VOLUME_PREFIX:-reminal}
 B=$(mktemp -d)
 IMG=reminal-harness-login-$$
 trap 'docker rmi -f "$IMG" >/dev/null 2>&1 || true; "$ROOT/scripts/rm-tmp.sh" "$B"' EXIT
-docker run --rm -v "$ROOT":/src:ro -v "$B":/out -v reminal-away-gocache:/root/.cache/go-build -v reminal-away-gomod:/go/pkg/mod \
+docker run --rm -v "$ROOT":/src:ro -v "$B":/out -v "$V-away-gocache":/root/.cache/go-build -v "$V-away-gomod":/go/pkg/mod \
     -e GOFLAGS=-buildvcs=false -e CGO_ENABLED=0 -w /src golang:1.26-bookworm \
     go build -o /out/reminal ./cmd/reminal
 cp "$DIR/check.mjs" "$B/"
