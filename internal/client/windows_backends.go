@@ -279,10 +279,7 @@ func (darwinWindows) listApps() ([]appInfo, error) {
 	// Scan the standard app folders, plus one level into subfolders (some apps
 	// live in e.g. /Applications/Adobe.../Foo.app). ID is the bundle path — an
 	// unambiguous handle for `open`; Name is the display label. Dedupe by name.
-	dirs := []string{"/Applications", "/System/Applications", "/System/Applications/Utilities"}
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, "Applications"))
-	}
+	dirs := darwinAppDirs()
 	seen := map[string]bool{}
 	var apps []appInfo
 	add := func(dir, name string) {
@@ -350,7 +347,43 @@ func (darwinWindows) listApps() ([]appInfo, error) {
 	return apps, nil
 }
 
+// darwinAppDirs are the folders listApps scans for .app bundles (and one
+// folder below each).
+func darwinAppDirs() []string {
+	dirs := []string{"/Applications", "/System/Applications", "/System/Applications/Utilities"}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "Applications"))
+	}
+	return dirs
+}
+
+// darwinAppIDOK is whether id is one listApps could have offered: an
+// existing .app bundle in one of dirs, or one folder below one. The viewer
+// echoes ids back, so nothing else is opened — as on Windows (a Start Menu
+// shortcut only).
+func darwinAppIDOK(id string, dirs []string) bool {
+	if !filepath.IsAbs(id) || filepath.Clean(id) != id || !strings.HasSuffix(id, ".app") {
+		return false
+	}
+	parent := filepath.Dir(id)
+	in := false
+	for _, d := range dirs {
+		if parent == d || filepath.Dir(parent) == d {
+			in = true
+			break
+		}
+	}
+	if !in {
+		return false
+	}
+	fi, err := os.Stat(id)
+	return err == nil && fi.IsDir()
+}
+
 func (darwinWindows) openApp(id string) error {
+	if !darwinAppIDOK(id, darwinAppDirs()) {
+		return fmt.Errorf("not an app the list offers")
+	}
 	// `open <bundle path>` launches the app, or foregrounds it (and opens a
 	// window if it has none) when already running.
 	_, err := run("open", id)
@@ -1178,19 +1211,7 @@ func (linuxWindows) listApps() ([]appInfo, error) {
 	// and snap). ID is the .desktop path; Name is its display label. Skip
 	// NoDisplay/Hidden and non-Application entries. Dedupe by desktop-file name
 	// so a user override shadows the system copy.
-	dirs := []string{
-		"/usr/share/applications", "/usr/local/share/applications",
-		"/var/lib/flatpak/exports/share/applications",
-		"/var/lib/snapd/desktop/applications",
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs,
-			filepath.Join(home, ".local/share/applications"),
-			filepath.Join(home, ".local/share/flatpak/exports/share/applications"))
-	}
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
-		dirs = append(dirs, filepath.Join(xdg, "applications"))
-	}
+	dirs := linuxAppDirs()
 	seen := map[string]bool{}
 	var apps []appInfo
 	for _, d := range dirs {
@@ -1224,7 +1245,50 @@ func (linuxWindows) listApps() ([]appInfo, error) {
 	return apps, nil
 }
 
+// linuxAppDirs are the folders listApps reads .desktop entries from.
+func linuxAppDirs() []string {
+	dirs := []string{
+		"/usr/share/applications", "/usr/local/share/applications",
+		"/var/lib/flatpak/exports/share/applications",
+		"/var/lib/snapd/desktop/applications",
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs,
+			filepath.Join(home, ".local/share/applications"),
+			filepath.Join(home, ".local/share/flatpak/exports/share/applications"))
+	}
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		dirs = append(dirs, filepath.Join(xdg, "applications"))
+	}
+	return dirs
+}
+
+// linuxAppIDOK is whether id is one listApps could have offered: an existing
+// .desktop file directly in one of dirs. The viewer echoes ids back, so
+// nothing else is read for an Exec line to run — as on Windows.
+func linuxAppIDOK(id string, dirs []string) bool {
+	if !filepath.IsAbs(id) || filepath.Clean(id) != id || !strings.HasSuffix(id, ".desktop") {
+		return false
+	}
+	parent := filepath.Dir(id)
+	in := false
+	for _, d := range dirs {
+		if parent == filepath.Clean(d) {
+			in = true
+			break
+		}
+	}
+	if !in {
+		return false
+	}
+	fi, err := os.Stat(id)
+	return err == nil && fi.Mode().IsRegular()
+}
+
 func (linuxWindows) openApp(id string) error {
+	if !linuxAppIDOK(id, linuxAppDirs()) {
+		return fmt.Errorf("not an app the list offers")
+	}
 	// Prefer gtk-launch (honours the .desktop's StartupNotify, Terminal, etc.);
 	// fall back to running the entry's Exec line detached. Either way we don't
 	// wait on the GUI app, which would block the winOps worker for its lifetime.
