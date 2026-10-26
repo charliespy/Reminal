@@ -2184,8 +2184,6 @@ func copyToClipboard(text string) bool {
 	return false
 }
 
-// uniquePath returns the first non-existing variant of p — appends -2, -3,
-// etc. before the extension if the file already exists.
 // writeUnique saves raw as a new file at p, or at the first free name
 // after it as uniquePath names them, and returns where. Each name is
 // created exclusively (O_EXCL): one already there — a link to somewhere
@@ -2219,6 +2217,8 @@ func writeUnique(p string, raw []byte, perm os.FileMode) (string, error) {
 	return "", fmt.Errorf("no free name for %s", filepath.Base(p))
 }
 
+// uniquePath returns the first non-existing variant of p — appends -2, -3,
+// etc. before the extension if the file already exists.
 func uniquePath(p string) string {
 	if _, err := os.Stat(p); err != nil {
 		return p
