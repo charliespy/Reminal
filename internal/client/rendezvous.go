@@ -438,11 +438,14 @@ func writeRendezvousFile(dest, name string, raw []byte) (string, error) {
 		dest = "."
 	}
 	target := dest
-	// If dest is an existing directory (or "."), drop the source filename in it.
+	// If dest is an existing directory (or "."), drop the source filename in
+	// it, as a new file (writeUnique): never through a link already there.
 	if info, err := os.Stat(dest); err == nil && info.IsDir() {
-		target = uniquePath(filepath.Join(dest, name))
-	}
-	if err := os.WriteFile(target, raw, 0o644); err != nil {
+		var err error
+		if target, err = writeUnique(filepath.Join(dest, name), raw, 0o644); err != nil {
+			return "", err
+		}
+	} else if err := os.WriteFile(target, raw, 0o644); err != nil {
 		return "", err
 	}
 	abs, err := filepath.Abs(target)
