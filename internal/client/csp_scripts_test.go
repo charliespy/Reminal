@@ -30,9 +30,9 @@ func TestCSPNamesEveryCDNScriptThePageLoads(t *testing.T) {
 		}
 	}
 	var named []string
-	for _, f := range strings.Fields(viewerCSP[strings.Index(viewerCSP, "script-src"):]) {
+	for _, f := range cspDirectives(t, viewerCSP)["script-src"] {
 		if strings.HasPrefix(f, "https://") {
-			named = append(named, strings.TrimSuffix(f, ";"))
+			named = append(named, f)
 		}
 	}
 	sort.Strings(used)
@@ -72,4 +72,40 @@ func viewerText(t *testing.T, _ string) string {
 		b.Write(js)
 	}
 	return b.String()
+}
+
+// The CSP names each CDN stylesheet and font by its exact URL: every one the
+// page loads is in style-src or font-src, and nothing else from a CDN is.
+func TestCSPNamesEveryCDNStylesheetAndFontThePageLoads(t *testing.T) {
+	b, err := os.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(b)
+	for _, c := range []struct {
+		directive string
+		used      *regexp.Regexp
+	}{
+		{"style-src", regexp.MustCompile(`<link rel="stylesheet" href="(https://[^"]+)"`)},
+		{"font-src", regexp.MustCompile(`url\((https://[^)]+\.woff2)\)`)},
+	} {
+		var used []string
+		for _, m := range c.used.FindAllStringSubmatch(page, -1) {
+			used = append(used, m[1])
+		}
+		if len(used) == 0 {
+			t.Fatalf("found nothing for %s in the page — the pattern has stopped matching it", c.directive)
+		}
+		var named []string
+		for _, s := range cspDirectives(t, viewerCSP)[c.directive] {
+			if strings.HasPrefix(s, "https://") {
+				named = append(named, s)
+			}
+		}
+		sort.Strings(used)
+		sort.Strings(named)
+		if strings.Join(used, " ") != strings.Join(named, " ") {
+			t.Errorf("%s and the page differ:\n page: %v\n CSP:  %v", c.directive, used, named)
+		}
+	}
 }

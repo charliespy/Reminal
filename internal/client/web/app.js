@@ -11110,8 +11110,11 @@
       });
     }
 
+    // An app's icon is the image its machine sent with it (a data: image).
+    // The page's policy loads images from nowhere else, so an icon named
+    // anywhere else is never asked for: the app shows its letter instead.
     function appListIcon(item) {
-      if (item && item.icon) {
+      if (item && typeof item.icon === 'string' && /^data:image\//i.test(item.icon)) {
         const img = document.createElement('img');
         img.className = 'app-list-icon'; img.src = item.icon; img.alt = '';
         img.draggable = false;
