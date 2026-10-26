@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/url"
 	"os"
@@ -2045,8 +2046,8 @@ func (a *Agent) finalizeUpload(uploadID, safe string, raw []byte, ttlSeconds int
 		a.broadcastNotice(fmt.Sprintf("upload failed: mkdir: %v", err))
 		return
 	}
-	path := uniquePath(filepath.Join(dir, safe))
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
+	path, err := writeUnique(filepath.Join(dir, safe), raw, 0o644)
+	if err != nil {
 		a.broadcastNotice(fmt.Sprintf("upload failed: write: %v", err))
 		return
 	}
@@ -2185,6 +2186,39 @@ func copyToClipboard(text string) bool {
 
 // uniquePath returns the first non-existing variant of p — appends -2, -3,
 // etc. before the extension if the file already exists.
+// writeUnique saves raw as a new file at p, or at the first free name
+// after it as uniquePath names them, and returns where. Each name is
+// created exclusively (O_EXCL): one already there — a link to somewhere
+// else among them, even one pointing at nothing yet — is never written
+// through, and neither is one made between the look and the write.
+func writeUnique(p string, raw []byte, perm os.FileMode) (string, error) {
+	ext := filepath.Ext(p)
+	base := strings.TrimSuffix(p, ext)
+	for i := 1; i <= 10000; i++ {
+		cand := p
+		if i > 1 {
+			cand = fmt.Sprintf("%s-%d%s", base, i, ext)
+		}
+		f, err := os.OpenFile(cand, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		_, err = f.Write(raw)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			_ = os.Remove(cand)
+			return "", err
+		}
+		return cand, nil
+	}
+	return "", fmt.Errorf("no free name for %s", filepath.Base(p))
+}
+
 func uniquePath(p string) string {
 	if _, err := os.Stat(p); err != nil {
 		return p

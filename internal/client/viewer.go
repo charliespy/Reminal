@@ -1204,8 +1204,8 @@ func (v *Viewer) writeIncoming(safe string, raw []byte) {
 		v.notify(fmt.Sprintf("download failed: mkdir: %v", err))
 		return
 	}
-	path := uniquePath(filepath.Join(dir, safe))
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
+	path, err := writeUnique(filepath.Join(dir, safe), raw, 0o644)
+	if err != nil {
 		v.notify(fmt.Sprintf("download failed: write: %v", err))
 		return
 	}
