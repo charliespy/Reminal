@@ -11,6 +11,7 @@
 
 import { allow, inIsolate, type LimiterEnv } from "./limiter";
 import { addressGroup } from "./session";
+import { readBody } from "./body";
 
 export interface PushEnv extends LimiterEnv {
   // Base64url of the uncompressed P-256 public key (65 bytes). Handed to the
@@ -41,6 +42,11 @@ const PER_TOKEN_ASK = { calls: 3, period: 600 };
 // An alert's signature is good this many seconds either side of the
 // relay's clock, and only once.
 const SIG_FRESH = 120;
+// The most of a request read: an alert is at most 4096 bytes sealed (about
+// 5.5 KB as base64) beside a few short fields, a token ask well under 1 KB.
+// A body sent without its length is not known to be too big until it is
+// read; read whole first, it is held whole, whatever is refused after.
+const MAX_REQUEST = 16 << 10;
 const tokenAsks = new Map<string, number[]>();
 const sigsSeen = new Map<string, number[]>();
 
@@ -231,6 +237,21 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+// readJSON is a request's JSON object, read no further than MAX_REQUEST:
+// "large" past it, null when it is not a JSON object.
+async function readJSON(request: Request): Promise<Record<string, unknown> | "large" | null> {
+  const len = Number(request.headers.get("content-length") || 0);
+  if (len > MAX_REQUEST) return "large";
+  const read = await readBody(request.body, MAX_REQUEST);
+  if (read === "large" || read === "busy") return "large";
+  try {
+    const v = JSON.parse(new TextDecoder().decode(read));
+    return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 // GET /push/key — the public half, for the page's subscribe call.
 export function handlePushKey(env: PushEnv): Response {
   if (!env.VAPID_PUBLIC || !env.VAPID_PRIVATE_JWK) return json({ error: "alerts are not set up on this relay" }, 501);
@@ -245,11 +266,10 @@ export async function handlePushToken(request: Request, env: PushEnv): Promise<R
   if (request.method !== "POST") return json({ error: "POST only" }, 405);
   if (!env.VAPID_PUBLIC || !env.VAPID_PRIVATE_JWK || !env.PUSH_TOKEN_KEY) return json({ error: "alerts are not set up on this relay" }, 501);
   let req: { endpoint?: unknown; p256dh?: unknown; auth?: unknown; machine?: unknown };
-  try {
-    req = await request.json();
-  } catch {
-    return json({ error: "bad request" }, 400);
-  }
+  const body = await readJSON(request);
+  if (body === "large") return json({ error: "too large" }, 413);
+  if (!body) return json({ error: "bad request" }, 400);
+  req = body;
   const ep = allowedEndpoint(req.endpoint);
   if (!ep) return json({ error: "not a known push service" }, 400);
   const machine = machineKey(req.machine);
@@ -317,11 +337,10 @@ export async function handlePush(request: Request, env: PushEnv, nowMs = Date.no
   if (request.method !== "POST") return json({ error: "POST only" }, 405);
   if (!env.VAPID_PUBLIC || !env.VAPID_PRIVATE_JWK) return json({ error: "alerts are not set up on this relay" }, 501);
   let req: { endpoint?: unknown; payload?: unknown; ttl?: unknown; urgency?: unknown; token?: unknown; machine?: unknown; ts?: unknown; sig?: unknown };
-  try {
-    req = await request.json();
-  } catch {
-    return json({ error: "bad request" }, 400);
-  }
+  const body = await readJSON(request);
+  if (body === "large") return json({ error: "too large" }, 413);
+  if (!body) return json({ error: "bad request" }, 400);
+  req = body;
   const ep = allowedEndpoint(req.endpoint);
   if (!ep) return json({ error: "not a known push service" }, 400);
   if (typeof req.payload !== "string") return json({ error: "missing payload" }, 400);
