@@ -316,9 +316,9 @@ func (tb *tokenBucket) refund() {
 // and the PIN its gate asks for. Ports only — a shell session's PIN stays out of
 // the directory channel, which is the promise protocol.DirSession makes.
 //
-// A --public tunnel has no gate, and the PIN recorded for it is simply never
-// asked for; the extra fragment on the link is ignored, so there is nothing to
-// special-case here.
+// A --public tunnel has no gate: its link alone. Its PIN opens nothing, and
+// on the link (the viewer puts it in the fragment for the gate) it would
+// stay in the forwarded app's own address, for its page to read.
 func applyLocalOpen(resp *protocol.DirResponse, sessionID string) {
 	if resp == nil {
 		return
@@ -341,7 +341,10 @@ func applyLocalOpen(resp *protocol.DirResponse, sessionID string) {
 			resp.OpenError = "session " + id + " has no public link"
 			return
 		}
-		resp.OpenURL, resp.OpenPIN = a.OpenURL, a.PIN
+		resp.OpenURL = a.OpenURL
+		if !a.Public {
+			resp.OpenPIN = a.PIN
+		}
 		return
 	}
 	resp.OpenError = "no session " + id + " on this machine"

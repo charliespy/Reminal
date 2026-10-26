@@ -458,6 +458,7 @@ func (t *Tunnel) activeRecord() session.Active {
 		PidIdent:     session.SelfIdentity(),
 		PIN:          t.pin,
 		OpenURL:      t.PublicURL(),
+		Public:       t.public, // no gate: its PIN is never handed out with its link (applyLocalOpen)
 		PID:          os.Getpid(),
 		StartedAt:    t.startedAt,
 		Kind:         session.KindPort,

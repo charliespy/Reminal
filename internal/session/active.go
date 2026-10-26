@@ -32,8 +32,11 @@ type Active struct {
 	PIN string `json:"pin"`
 	// PinSealed is the PIN as it is kept on disk (see atrest); PIN is
 	// filled from it on read and left empty in the file.
-	PinSealed []byte    `json:"pin_sealed,omitempty"`
-	OpenURL   string    `json:"open_url"`
+	PinSealed []byte `json:"pin_sealed,omitempty"`
+	OpenURL   string `json:"open_url"`
+	// Public: a port forward with no PIN gate (`reminal expose --public`).
+	// Its PIN opens nothing, so it is never handed out with its link.
+	Public    bool      `json:"public,omitempty"`
 	PID       int       `json:"pid"`
 	StartedAt time.Time `json:"started_at"`
 	// PidStartedAt is when the process currently identified by PID began — the

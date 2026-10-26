@@ -83,6 +83,7 @@ func TestViewerHeaders(t *testing.T) {
 		"Referrer-Policy: no-referrer",
 		"Strict-Transport-Security: max-age=",
 		"Content-Security-Policy: " + viewerCSP,
+		"Cross-Origin-Opener-Policy: same-origin-allow-popups",
 	} {
 		if !strings.Contains(headers, want) {
 			t.Errorf("cloudflare/public/_headers is missing %q", want)

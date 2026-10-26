@@ -42,3 +42,14 @@ func TestTunnelNameIsSanitised(t *testing.T) {
 		t.Fatalf("sanitised name = %q, want it trimmed and readable", got)
 	}
 }
+
+// A --public forward says so in its record: what is asked of it from afar
+// (applyLocalOpen) hands no gate PIN for a port with no gate.
+func TestTunnelRecordSaysWhetherItIsPublic(t *testing.T) {
+	if !(&Tunnel{sessionID: "PORT1234", port: 8080, public: true}).activeRecord().Public {
+		t.Fatal("a public forward's record does not say it is public")
+	}
+	if (&Tunnel{sessionID: "PORT1234", port: 8080}).activeRecord().Public {
+		t.Fatal("a gated forward's record says it is public")
+	}
+}
