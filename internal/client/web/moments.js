@@ -16,7 +16,7 @@
     // ---------------------------------------------------------------- scrub
     function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
     function hostName() {
-      try { return (lastHostInfo && lastHostInfo.hostname || '').replace(/\.local$/, ''); } catch (_) { return ''; }
+      try { return (n => n.length >= 3 ? n : '')((lastHostInfo && lastHostInfo.hostname || '').replace(/\.local$/, '')); } catch (_) { return ''; }
     }
     // scrub hides what must not leave the device. keep: the result is exactly as
     // long as the input, for text laid out in a terminal grid.
@@ -125,11 +125,12 @@
       { kind: 'right', re: /you'?re absolutely right|you are absolutely right|you'?re right!/i, top: "ME: THAT'S NOT IT", bottom: "IT: YOU'RE ABSOLUTELY RIGHT", title: "Told I'm absolutely right" },
       { kind: 'sorry', re: /\bI apologi[sz]e\b|my apologies|sorry (about|for) (that|the)/i, top: 'IT BROKE THE BUILD', bottom: 'I APOLOGIZE FOR THE CONFUSION', title: 'Received a heartfelt apology' },
       { kind: 'see', re: /I see the (issue|problem)|found the (issue|bug|problem)|I see what'?s happening/i, top: '47 MINUTES IN', bottom: 'I SEE THE ISSUE NOW', title: 'The agent saw the issue' },
+      // Before "perfect": "Perfect! All 142 tests pass" is a win, not a joke on it.
+      { kind: 'green', re: /all (\d+ )?tests pass|tests? (are )?(now )?passing/i, top: 'AFTER THREE HOURS', bottom: 'ALL TESTS PASS', title: 'All green' },
       { kind: 'perfect', re: /^\s*[⏺●•]?\s*(Perfect|Excellent|Great)!/, top: 'TESTS STILL RED', bottom: 'PERFECT! EVERYTHING WORKS', title: 'Everything is perfect (allegedly)' },
       { kind: 'should', re: /should (now )?work|this (should|will) fix|that should do it/i, top: 'ATTEMPT #6', bottom: 'THIS SHOULD FIX IT', title: 'Attempt number six' },
       { kind: 'again', re: /different approach|let me try (again|another|a simpler)/i, top: 'PLAN A FAILED', bottom: 'LET ME TRY A DIFFERENT APPROACH', title: 'Plan B unlocked' },
       { kind: 'tests', re: /\b(remov|delet|skipp?)\w* (the |that )?(failing |flaky )?tests?\b/i, top: 'TESTS FAILING', bottom: 'NOT ANYMORE', title: 'Fixed the tests (by removing them)' },
-      { kind: 'green', re: /all (\d+ )?tests pass|tests? (are )?(now )?passing/i, top: 'AFTER THREE HOURS', bottom: 'ALL TESTS PASS', title: 'All green' },
     ];
 
     function agentFrom(line) {
@@ -264,7 +265,7 @@
     function plainRun(r) {
       return { start: r.start, end: r.end, agent: r.agent || '', host: r.host || '', filesRead: r.filesRead.size,
                filesChanged: r.filesChanged.size, cmds: r.cmds.size, commits: r.commits.size,
-               commitMsgs: [...r.commits.values()].slice(-3), passFirst: r.passFirst, passLast: r.passLast,
+               passFirst: r.passFirst, passLast: r.passLast,
                failLast: r.failLast, okPkgs: r.okPkgs.size, waits: r.waits, approvals: r.approvals, away: r.away,
                joinedLate: !!r.joinedLate, waited: r.waited || 0 };
     }
@@ -515,8 +516,7 @@
       L.push(['AGENT', (r.agent || opts.agent || 'My agent').toUpperCase()]);
       L.push(['MACHINE', opts.showHost && r.host ? r.host.toUpperCase() : 'MY MACHINE']);
       L.push(['DATE', day(r.start).toUpperCase()]);
-      L.push(['STARTED', clock(r.start)]);
-      L.push([r.live ? 'STILL GOING AT' : 'FINISHED', clock(r.end)]);
+      // No clock times: with them, the card reads like a timesheet entry.
       L.push(['-']);
       if (r.filesRead) L.push(['FILES READ', String(r.filesRead)]);
       if (r.filesChanged) L.push(['FILES CHANGED', String(r.filesChanged)]);
@@ -525,13 +525,13 @@
       if (r.passLast != null) L.push(['TESTS PASSING', (r.passFirst != null && r.passFirst !== r.passLast ? r.passFirst + ' → ' : '') + r.passLast]);
       else if (r.okPkgs) L.push(['TEST PACKAGES OK', String(r.okPkgs)]);
       if (r.failLast) L.push(['TESTS FAILING', String(r.failLast)]);
-      L.push(['ASKED FOR YOU', plural(r.waits || 0, 'time')]);
+      if (r.waits) L.push(['ASKED FOR YOU', plural(r.waits, 'time')]);
       if (approvals.length) {
         const ph = approvals.filter(a => a.phone).length;
         L.push(['YOU SAID YES' + (ph ? ' FROM PHONE' : ''), String(ph || approvals.length)]);
       }
       L.push(['-']);
-      L.push(['AGENT TIME', dur(Math.max(0, total - (r.waited || 0))).toUpperCase(), 'big']);
+      L.push([r.live ? 'AGENT TIME SO FAR' : 'AGENT TIME', dur(Math.max(0, total - (r.waited || 0))).toUpperCase(), 'big']);
       if ((r.waited || 0) > 60000) L.push(['WAITED ON YOU', dur(r.waited).toUpperCase()]);
       if (r.away > 60000) L.push(['WHILE YOU WERE AWAY', dur(r.away).toUpperCase()]);
       if (r.joinedLate) L.push(['', '(IT STARTED BEFORE YOU LOOKED)']);
@@ -545,9 +545,9 @@
       m.font = 'italic ' + px + 'px ' + MONO;
       // A note can't put a price on the card: amounts of money are blanked out.
       // So are the words a bill is made of.
-      const CUR = 'usd|eur|gbp|inr|cad|aud|jpy|cny|chf|rs\\.?|dollars?|bucks|euros?|pounds?|rupees?|yen';
-      const MONEY = new RegExp('[$€£¥₹]\\s?\\d[\\d,.]*|\\b(' + CUR + ')\\s?\\d[\\d,.]*|\\d[\\d,.]*\\s?(' + CUR + ')\\b', 'gi');
-      const BILL = /\b(paid|payment|invoice|receipt|total|subtotal|amount( due)?|balance|billed?|charged?|refund(ed)?|tax|vat|gst)\b(\s*[:#]?\s*\d[\d,.]*)?/gi;
+      const CUR = 'usd|eur|gbp|inr|cad|aud|jpy|cny|chf|krw|thb|sgd|rs\\.?|dollars?|bucks|euros?|pounds?|rupees?|yen';
+      const MONEY = new RegExp('[$€£¥₹₩฿]\\s?\\d[\\d,.]*|\\b(' + CUR + ')\\s?\\d[\\d,.]*|\\d[\\d,.]*\\s?(' + CUR + ')\\b', 'gi');
+      const BILL = /\b(paid|payment|invoices?|inv|receipt|total|subtotal|amount( due)?|balance|bill(ed|able)?|charged?|refund(ed)?|txn|transaction|tax|vat|gst)\b(\s*[:#.]?\s*\d[\d,.]*)?|\b\d[\d,.]*\s*(hours?|hrs?|h)\b/gi;
       if (opts.note) noteLines.push(...wrap(m, scrub('"' + opts.note + '"').replace(MONEY, '•••').replace(BILL, '•••'), PW - 96).slice(0, 3));
       const lastOk = (r.approvals || [])[(r.approvals || []).length - 1];
       const stamp = lastOk ? (lastOk.phone ? 'I SAID YES FROM MY PHONE' : 'I SAID YES') + ' · ' + clock(lastOk.at) : '';
@@ -575,8 +575,8 @@
       ctx.save();
       ctx.clip();
       ctx.translate(W / 2, py0 + PH / 2); ctx.rotate(-0.5);
-      ctx.font = '700 22px ' + SANS; ctx.fillStyle = 'rgba(31,111,235,.13)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      const motto = 'AI AGENT LOG  ·  NOT A RECEIPT  ·  NO PAYMENT  ·  ';
+      ctx.font = '700 22px ' + SANS; ctx.fillStyle = 'rgba(31,111,235,.15)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const motto = 'AI AGENT LOG  ·  NOT A RECEIPT  ·  NOT A TIMESHEET  ·  NO PAYMENT  ·  ';
       const span = Math.hypot(PW, PH);
       for (let i = 0, yy = -span / 2; yy < span / 2; yy += 58, i++) ctx.fillText(motto.repeat(6), (i % 2) * 120, yy);
       ctx.restore();
@@ -723,17 +723,19 @@
     // `cols` the way the viewer on a phone shows them (a wide desktop terminal
     // would otherwise be unreadably small in a phone frame).
     const RULE_ONLY = /^[\s─━═╭╮╰╯│┌┐└┘├┤┬┴┼-]*$/;
-    function phoneRows(cols, want) {
-      const buf = term.buffer.active, W = term.cols;
+    // t: the terminal read (the page's own, or a clip's offscreen one).
+    function phoneRows(cols, want, t) {
+      t = t || term;
+      const buf = t.buffer.active, W = t.cols;
       const text = y => { const l = buf.getLine(y); return l ? l.translateToString(true) : ''; };
-      let y = buf.viewportY + term.rows - 1;
+      let y = buf.viewportY + t.rows - 1;
       while (y > buf.viewportY && !text(y).trim()) y--;
       const out = [];
       while (y >= 0 && out.length < want) {
         let y0 = y;
         while (y0 > 0 && buf.getLine(y0) && buf.getLine(y0).isWrapped) y0--;
         const cells = [];
-        snapRows(term, y0, y - y0 + 1).forEach((runs, i, all) => {
+        snapRows(t, y0, y - y0 + 1).forEach((runs, i, all) => {
           const row = [];
           for (const r of runs) for (const ch of r.text) row.push({ ch, fg: r.fg, bg: r.bg, bold: r.bold, dim: r.dim });
           if (i < all.length - 1) while (row.length < W) row.push({ ch: ' ' });
@@ -1017,10 +1019,13 @@
         const realMs = t1 - t0;
         const speed = Math.max(1, Math.round(realMs / (o.seconds * 1000)));
         const avail = H - 520;
-        const visCols = Math.min(cols, Math.max(40, widest + 1));
+        // A wide terminal's lines are rewrapped to a phone's width, as the phone
+        // shot does: 170 columns in a 9:16 frame would be a grey smear.
+        const WRAP = 64, rewrapped = widest + 1 > 80;
+        const visCols = rewrapped ? WRAP : Math.min(cols, Math.max(40, widest + 1));
         const pxW = Math.floor((W - 90) / (visCols * 0.602));
-        const fpx = Math.max(8, Math.min(30, pxW, Math.floor(avail / (rows * 1.32))));
-        const showRows = Math.min(rows, Math.floor(avail / Math.round(fpx * 1.32)));
+        const fpx = rewrapped ? Math.max(8, Math.min(30, pxW)) : Math.max(8, Math.min(30, pxW, Math.floor(avail / (rows * 1.32))));
+        const showRows = rewrapped ? Math.floor(avail / Math.round(fpx * 1.32)) : Math.min(rows, Math.floor(avail / Math.round(fpx * 1.32)));
         const stream = canvas.captureStream(FPS);
         const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8e6 });
         const chunks = [];
@@ -1051,7 +1056,8 @@
           const b = ht.buffer.active;
           ctx.save();
           rr(ctx, 30, ty, W - 60, showRows * Math.round(fpx * 1.32) + 40, 24); ctx.clip();
-          drawRows(ctx, snapRows(ht, b.baseY + rows - showRows, showRows), 45, ty + 20, fpx, { cols: visCols });
+          const shown = rewrapped ? phoneRows(WRAP, showRows, ht) : snapRows(ht, b.baseY + rows - showRows, showRows);
+          drawRows(ctx, shown, 45, ty + 20, fpx, { cols: visCols });
           ctx.restore();
           const pct = Math.min(1, vnow / Math.max(1, vt));
           rr(ctx, 60, H - 190, W - 120, 10, 5); ctx.fillStyle = '#30363d'; ctx.fill();
@@ -1098,6 +1104,9 @@
           k = Math.max(k + 1, Math.floor((performance.now() - startAt) / frameMs));
           await new Promise(r => setTimeout(r, Math.max(0, startAt + k * frameMs - performance.now())));
         }
+        // The last frame of work, before the end card, is the clip's poster.
+        frame(vt, false);
+        if (o.poster) o.poster.getContext('2d').drawImage(canvas, 0, 0);
         const endAt = performance.now();
         while (performance.now() - endAt < END) { frame(vt, true); await new Promise(r => setTimeout(r, frameMs)); }
         rec.stop();
@@ -1177,7 +1186,9 @@
       document.body.appendChild(back);
       document.body.appendChild(sheet);
       document.addEventListener('keydown', e => {
-        if (e.key !== 'Escape' || !sheet.classList.contains('open') || lapseBusy) return;
+        if (e.key !== 'Escape' || !sheet.classList.contains('open')) return;
+        e.preventDefault(); e.stopPropagation();
+        if (lapseBusy) return;
         if (state.tab !== 'home') { state.tab = 'home'; render(); } else close();
       });
     }
@@ -1280,10 +1291,13 @@
       }
       const list = el('div', { class: 'mo-list' });
       const ran = runChoices().length > 0;
+      // Wrapped with one short run in it is no brag: it says so until there's more.
+      const week = loadRuns().filter(r => Date.now() - r.start < 7 * 864e5);
+      const thin = week.length < 3 && week.reduce((t, r) => t + (r.end - r.start), 0) < 30 * 60e3;
       for (const [k, label, sub] of MAKERS) {
         list.appendChild(el('button', { type: 'button', class: 'mo-row', onclick: () => { state.tab = k; render(); } }, [
           icon(k),
-          el('span', { class: 'mo-row-txt' }, [el('span', { class: 'mo-row-t', text: label }), el('span', { class: 'mo-row-s', text: k === 'receipt' && !ran ? 'After your agent’s next run' : sub })]),
+          el('span', { class: 'mo-row-txt' }, [el('span', { class: 'mo-row-t', text: label }), el('span', { class: 'mo-row-s', text: k === 'receipt' && !ran ? 'After your agent’s next run' : k === 'wrapped' && thin ? 'Comes alive after a few runs' : sub })]),
           el('span', { class: 'mo-row-go', text: '›' }),
         ]));
       }
@@ -1413,11 +1427,11 @@
       if (state.spanIdx == null || state.spanIdx >= spans.length) state.spanIdx = 0;
       if (!state.secs) state.secs = 15;
       const status = el('span', { class: 'mo-said' });
-      const go = el('button', { type: 'button', class: 'mo-btn' + (state.lapseFile ? '' : ' primary'), text: state.lapseFile ? 'Make it again' : 'Make the clip' });
+      const go = el('button', { type: 'button', class: 'mo-btn' + (state.lapseFile ? '' : ' primary'), text: state.lapseFile ? 'Remake' : 'Make the clip' });
       if (state.lapseFile) actions(async () => state.lapseFile, 'video', go);
       else foot.appendChild(el('div', { class: 'mo-actions' }, [status, go]));
       const ctl = controls(body);
-      ctl.appendChild(group('What', chips(spans.map((x, i) => ({ label: x.label, on: i === state.spanIdx })), (x, i) => { state.spanIdx = i; state.lapseFile = null; state.lapseLast = null; render(); })));
+      ctl.appendChild(group('What', chips(spans.map((x, i) => ({ label: x.label, on: i === state.spanIdx })), (x, i) => { state.spanIdx = i; state.lapseFile = null; state.lapseLast = null; render(); }, 'wrapchips')));
       ctl.appendChild(group('Length', chips([10, 15, 30].map(n => ({ label: n + ' s', n, on: n === state.secs })), x => { state.secs = x.n; render(); })));
       const title = el('input', { type: 'text', maxlength: '48', placeholder: (s && s.agent || 'My agent') + ' at work', value: state.lapseTitle || '' });
       title.addEventListener('change', () => { state.lapseTitle = title.value; });
@@ -1430,10 +1444,11 @@
         if (!status.isConnected) go.parentNode.insertBefore(status, go);
         try {
           const sp = spans[state.spanIdx];
-          const blob = await makeTimelapse(c, { from: sp.from, to: sp.to, seconds: state.secs, title: state.lapseTitle }, p => { status.textContent = 'Recording… ' + Math.round(p * 100) + '%'; });
+          const poster = mk(1080, 1920);
+          const blob = await makeTimelapse(c, { from: sp.from, to: sp.to, seconds: state.secs, title: state.lapseTitle, poster }, p => { status.textContent = 'Recording… ' + Math.round(p * 100) + '%'; });
           const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
           state.lapseFile = new File([blob], stampName('timelapse', ext), { type: blob.type });
-          const keep = mk(1080, 1920); keep.getContext('2d').drawImage(c, 0, 0); state.lapseLast = keep;
+          state.lapseLast = poster;
           lapseBusy = false; sheet.classList.remove('busy');
           render();
         } catch (e) {
@@ -1572,8 +1587,11 @@
     }
     function offerMoment(s, k, text) {
       try { if (!sessionId || s.id !== sessionId.toUpperCase()) return; } catch (_) { return; }
+      // One meme offer a run, at most: the pill is a nudge, not a feed.
+      if (s.run && s.run.memeOffered) return;
       if (Date.now() - lastOffer < 90000) return;
       lastOffer = Date.now();
+      if (s.run) s.run.memeOffered = true;
       offer('Meme moment: “' + scrub(text).slice(0, 34) + (text.length > 34 ? '…' : '') + '”', () => open('meme', { memeQuote: text, memeTop: k.top, memeBottom: k.bottom, memeAt: Date.now(), memeTpl: 'caption' }));
     }
 
@@ -1591,5 +1609,6 @@
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
-    window.reminalMoments = { output, attn, input, open, scrub };
+    const isOpen = () => !!(sheet && sheet.classList.contains('open'));
+    window.reminalMoments = { output, attn, input, open, isOpen, scrub };
   })();

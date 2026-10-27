@@ -2031,9 +2031,9 @@
       .tour-done-check .arc, .tour-done-check path { stroke-dashoffset: 0; }
     }
     /* Share sheet (moments.js): the invite, and pictures and clips made from the session. */
-    .mo-back { position: fixed; inset: 0; background: rgba(1,4,9,.62); z-index: 70; display: none; }
+    .mo-back { position: fixed; inset: 0; background: rgba(1,4,9,.62); z-index: 100; display: none; }
     .mo-back.open { display: block; }
-    .mo-sheet { position: fixed; z-index: 71; left: 50%; top: 50%; transform: translate(-50%,-50%); width: min(480px, calc(100vw - 48px)); max-height: calc(100dvh - 48px);
+    .mo-sheet { position: fixed; z-index: 101; left: 50%; top: 50%; transform: translate(-50%,-50%); width: min(480px, calc(100vw - 48px)); max-height: calc(100dvh - 48px);
       display: none; flex-direction: column; background: #0d1117; border: 1px solid #30363d; border-radius: 16px; box-shadow: 0 24px 80px rgba(0,0,0,.6); color: #e6edf3; overflow: hidden; }
     .mo-sheet.editing { width: min(1000px, calc(100vw - 48px)); height: min(860px, calc(100dvh - 48px)); }
     .mo-sheet.open { display: flex; }
@@ -2073,19 +2073,14 @@
     .mo-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 11px 14px; background: none; border: 0; border-bottom: 1px solid #21262d; color: inherit; font: inherit; text-align: left; cursor: pointer; }
     .mo-row:last-child { border-bottom: 0; }
     .mo-row:hover, .mo-row:focus-visible { background: #161b22; outline: none; }
-    .mo-ico { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; }
-    .mo-ico-receipt { background: rgba(88,166,255,.14); color: #79c0ff; }
-    .mo-ico-lapse { background: rgba(63,185,80,.14); color: #56d364; }
-    .mo-ico-meme { background: rgba(210,153,34,.16); color: #e3b341; }
-    .mo-ico-phone { background: rgba(219,97,162,.15); color: #f778ba; }
-    .mo-ico-wrapped { background: rgba(163,113,247,.16); color: #bc8cff; }
+    .mo-ico { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; background: #21262d; color: #c9d1d9; }
     .mo-row-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
     .mo-row-t { font-size: 14.5px; font-weight: 600; color: #e6edf3; }
     .mo-row-s { font-size: 12.5px; color: #8b949e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .mo-row-go { color: #6e7681; font-size: 22px; line-height: 1; }
     .mo-privacy { font-size: 11.5px; color: #6e7681; line-height: 1.45; padding: 0 2px; }
     /* A maker: the picture, its settings, and the buttons in the footer */
-    .mo-sheet.editing .mo-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; padding: 20px 22px; align-items: start; }
+    .mo-sheet.editing .mo-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; padding: 20px 22px; align-items: start; align-content: start; }
     .mo-preview { display: flex; justify-content: center; align-items: flex-start; position: sticky; top: 0; }
     .mo-canvas { display: block; max-width: 100%; max-height: calc(min(860px, 100dvh - 48px) - 56px - 70px - 40px); width: auto; height: auto; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.45); background: #161b22; }
     .mo-preview.tappable .mo-canvas { cursor: pointer; }
@@ -2115,7 +2110,7 @@
     .mo-btn.primary { background: #238636; border-color: #2ea043; color: #fff; }
     .mo-btn.primary:hover { background: #2ea043; }
     .mo-btn:disabled { opacity: .55; cursor: default; }
-    .mo-offer { position: absolute; right: 14px; bottom: 14px; z-index: 6; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 28px);
+    .mo-offer { position: absolute; right: 14px; bottom: 48px; z-index: 6; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 28px);
       font: inherit; font-size: 13px; color: #e6edf3; background: linear-gradient(90deg, #1f2b47, #2a1f47); border: 1px solid #3d4f7a; border-radius: 999px; padding: 8px 14px; cursor: pointer;
       box-shadow: 0 6px 20px rgba(0,0,0,.45); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .4s; animation: mo-in .35s ease-out; }
     .mo-offer.gone { opacity: 0; }
@@ -2130,6 +2125,8 @@
       .mo-body { padding: 14px 14px 18px; }
       .mo-invite { grid-template-columns: 100px minmax(0, 1fr); gap: 12px 14px; }
       .mo-sheet.editing .mo-body { grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 16px; }
+      /* The home holds one height for Invite and Post, so the switch doesn't jump. */
+      .mo-sheet:not(.editing) .mo-body { min-height: min(440px, calc(100dvh - 120px)); }
       .mo-preview { position: static; }
       .mo-canvas { max-height: 46dvh; }
       .mo-field input, .mo-field textarea { font-size: 16px; }

@@ -13684,7 +13684,7 @@
         const el = document.activeElement;
         const busy = document.querySelector('details[open]') ||
           ($('share-modal') && getComputedStyle($('share-modal')).display !== 'none') ||
-          document.querySelector('.mo-sheet.open') ||
+          (window.reminalMoments && reminalMoments.isOpen()) ||
           Date.now() - lastTermKeyAt < TOUR_TYPING_PAUSE_MS ||
           (!connected() && isField(el) && !isTermKeys(el) && el.value !== '');
         const ready = !waitForSession || connected() || Date.now() - t0 > 6000;
