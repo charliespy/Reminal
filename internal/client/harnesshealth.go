@@ -114,10 +114,18 @@ var harnessLoginScreens = map[string][]loginRow{
 		`signinrequired`,
 	)),
 	// Gemini CLI: no way to sign in chosen yet; its Google sign-in waiting
-	// for the code; its API key dialog; and a key it cannot use (the
-	// service's own words, in the error it prints for the turn — wrapped at
-	// the terminal's width, so by their start); and no key at all.
-	"gemini": loginAll(loginOpen(`howwouldyouliketoauthenticate|noauthenticationmethodselected|^[^a-z0-9]*(pleasevisitthefollowingurltoauthorizetheapplication|entertheauthorizationcode|entergeminiapikey)[^a-z0-9]*$|apikeynotvalid\.pleasepass`), loginRows(
+	// for the code; its API key dialog; no key at all; and a key it cannot
+	// use. That last is the service's own words, inside the JSON of the
+	// error it prints for the turn ("✕ [API Error: {…\"message\": \"API key
+	// not valid. Please pass a valid API key.\" …"), wrapped at the
+	// terminal's width wherever the width falls: by that JSON's key and the
+	// words' start, not a row of its own.
+	"gemini": loginAll(loginOpen(`message[\\"]*:[\\"]*apikeynotvalid\.please`), loginRows(
+		`howwouldyouliketoauthenticateforthisproject\?`,
+		`noauthenticationmethodselected`,
+		`pleasevisitthefollowingurltoauthorizetheapplication`,
+		`entertheauthorizationcode`,
+		`entergeminiapikey`,
 		`geminiapikeyismissingornotconfigured`,
 	)),
 	// Amp: its question before it signs in, and what it says of a login it
@@ -135,37 +143,48 @@ var harnessLoginScreens = map[string][]loginRow{
 	// Codex: its sign-in menu (its heading, and its items by their numbers:
 	// "› 1. Sign in with ChatGPT"), signing in through the browser, and a
 	// login it can no longer refresh.
-	"codex": loginAll(loginOpen(`^[^a-z0-9]*finishsigninginviayourbrowser[^a-z0-9]*$`), loginRows(
+	"codex": loginRows(
+		`finishsigninginviayourbrowser`,
 		`signinwithchatgpttousecodexaspartofyourpaidplan`,
 		`\d\.signinwithchatgpt`,
 		`\d\.provideyourownapikey`,
 		`youraccesstokencouldnotberefreshedbecause(?:youhavesinceloggedoutorsignedintoanotheraccount|yourrefreshtoken(?:hasexpired|wasalreadyused|wasrevoked))\.please(?:logoutand)?signinagain`,
 		`yoursessionhasexpired\.pleasereauthenticate`,
-	)),
+	),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), the steps of
 	// setting one up, and a login that lapsed.
-	"qwen": loginAll(loginOpen(`alibabamodelstudio.{0,3}accessmethod|finishprovidersetup|^[^a-z0-9]*(connectaprovider|manuallyconnectalocalserver,proxy,orunsupportedprovider)[^a-z0-9]*$|^[^a-z0-9]*noauthtypeisselected\.pleaseconfigureanauthtype`), loginRows(
+	"qwen": loginRows(
+		`alibabamodelstudio.{0,3}accessmethod`,
+		`finishprovidersetup`,
+		`connectaprovider`,
+		`manuallyconnectalocalserver,proxy,orunsupportedprovider`,
+		`noauthtypeisselected\.pleaseconfigureanauthtype\(e\.g\.viasettingsor.?--auth-type.?\)beforerunninginnon-interactivemode`,
 		`connectwithanexistingmodelstudioapikey`,
 		`noapikeyfound:setopenai_api_keyorsecurity\.auth\.apikey\.?`,
 		`qwenoauthcredentialsexpired\.pleaseuse/authtore-authenticatewithqwen-oauth`,
 		`refreshtokenexpiredorinvalid\.pleaseuse.?/auth.?tore-authenticate`,
-	)),
+	),
 	// goose 1.55 with no provider: "error: No provider configured. Run
 	// 'goose configure' first." (it exits); a provider whose key the service
 	// refused; and its Muse Code sign-in lapsed.
-	"goose": loginAll(loginOpen(`^[^a-z0-9]*(error:)?(noproviderconfigured\.run.?gooseconfigure|providerisnotconfigured\.run.?gooseconfigure)`), loginRows(
+	"goose": loginRows(
+		`(?:error:)?noproviderconfigured\.run.?gooseconfigure.?first`,
+		`(?:error:)?providerisnotconfigured\.run.?gooseconfigure.?tosetitup`,
 		`(?:(?:error|ranintothiserror):)?authenticationfailed—checkyourapikey\.run.?gooseconfigure.?toupdateit`,
 		`(?:(?:error|ranintothiserror):)?musecodeapikeyismissing\.signinagain`,
 		`(?:(?:error|ranintothiserror):)?metasessionexpired\.signintomusecodeagain`,
-	)),
+	),
 	// Crush 0.98 with no provider: its first screen ("To start, let's choose
 	// a provider and model."), signing in to Hyper, and `crush run`'s error;
 	// and a platform's login gone.
-	"crush": loginAll(loginOpen(`^[^a-z0-9]*(tostart,let.?schooseaproviderandmodel|let.?sauthenticatewithhyper|noprovidersconfigured-pleaserun.?crush)`), loginRows(
+	"crush": loginRows(
+		`tostart,let.?schooseaproviderandmodel`,
+		`let.?sauthenticatewithhyper`,
+		`(?:error:)?noprovidersconfigured-pleaserun.?crush.?tosetupaproviderinteractively`,
 		`pleasesigninto[a-z0-9.\-]+again\.youcanalsorun"crushlogin[a-z0-9.\-]+--force"`,
 		`youarenotloggedintoanyplatform`,
-	)),
+	),
 	// OpenCode runs on a free built-in model with no login at all; a
 	// provider it was set up for and has no key for says so ("Anthropic API
 	// key is missing. Pass it using the 'apiKey' parameter or the
@@ -198,11 +217,12 @@ var harnessLoginScreens = map[string][]loginRow{
 	// above its editor, out of the rows read, and stays there after a
 	// /login, so it is not used. A login its provider refuses is read apart
 	// (harnessKeyRefusals).
-	"pi": loginAll(loginOpen(`^\d+(\.\d+)?%/0(\([a-z]+\))?unknown$`), loginRows(
+	"pi": loginRows(
+		`\d+(?:\.\d+)?%/0(?:\([a-z]+\))?unknown`,
 		`error:noapikeyfoundfor(?:"[a-z0-9.\-_/]{1,48}"|theselectedmodel|[a-z0-9]+(?:-[a-z0-9]+)*)`,
 		`(?:error:)?authenticationfailedfor"[a-z0-9.\-_/]{1,48}"\.credentialsmayhaveexpiredornetworkisunavailable\.run'/login[a-z0-9.\-_/]{1,48}'tore-authenticate`,
 		`(?:error:)?yoursessionhasexpired\.pleasereauthenticate`,
-	)),
+	),
 	// Claude Code's own login menu (a fresh machine shows it before anything
 	// else), and its sign-in step once a way is picked: "Opening browser to
 	// sign in…" under a spinner first, then the link. Its own rows, from
@@ -212,13 +232,17 @@ var harnessLoginScreens = map[string][]loginRow{
 	// Not seen during the spinner, a logged-out Claude Code was read as at
 	// work, then done. And the notices it turns a message away with that are
 	// not harnessLoginNotice's shape.
-	"claude": loginAll(loginOpen(`^[^a-z0-9]*(\d\.)?(selectloginmethod:?$|claudeaccountwithsubscription·|anthropicconsoleaccount·apiusagebilling|pastecodehereifprompted)`), loginRows(
+	"claude": loginRows(
+		`selectloginmethod`,
+		`(?:\d\.)?claudeaccountwithsubscription·pro,max,team,orenterprise`,
+		`(?:\d\.)?anthropicconsoleaccount·apiusagebilling`,
+		`pastecodehereifprompted`,
 		`openingbrowsertosignin`,
 		`browserdidn.?topen\?usetheurl(?:belowtosignin)?(?:\(c(?:to)?(?:copy)?\)?)?`,
 		`loginexpired·run/logintosigninagain,orre-authenticateyouranthropicprofile`,
 		`notsignedintoclaude\.run/loginfirst`,
 		`failedtoauthenticate:(?:oauthtokenrevoked\.pleaseloginagainorcontactyouradministrator|oauthsessionexpiredandcouldnotberefreshed)`,
-	)),
+	),
 }
 
 // cursorKeyRefused is Cursor CLI turning away the API key it was given, its
@@ -381,12 +405,20 @@ func harnessLoginScreenIn(rows []string, i int, prog string, bottom bool) bool {
 	return harnessLoginRowIn(rows, i, harnessLoginScreens[prog], bottom)
 }
 
-// harnessLoginLines are other CLIs' notices: they count only on a short row
-// that begins with them — a status line, not a sentence in an answer.
-var harnessLoginLines = []string{
-	"authenticationrequired", "pleaselogin", "pleasesignin", "loginrequired",
-	"waitingforauth", "pleasesetanauthmethod", "loginexpired", "notloggedin",
-}
+// harnessLoginLines are other CLIs' notices, the same from any of them: only
+// a row of their own on the last few rows — a status line, not a sentence
+// in an answer — and only with what they end on ("Authentication required
+// for MCP Server: …" is a server's login, not the agent's).
+var harnessLoginLines = loginBottom(
+	`authenticationrequired(?:·signinagaintocontinue)?`,
+	`pleaselogin(?:tocontinue|withapermittedorganization:claudeauthlogin)?`,
+	`pleasesignin(?:tocontinue)?`,
+	`loginrequired(?:—run/login)?`,
+	`waitingforauth(?:entication(?:callback)?|orization(?:tocomplete)?)?[^a-z0-9]*(?:\((?:esctocancel|pressescorctrl\+ctocancel|\^ctocancel)\))?`,
+	`pleasesetanauthmethodinyour.{1,80}?orspecifyoneofthefollowingenvironmentvariablesbeforerunning:gemini_api_key,google_genai_use_vertexai,google_genai_use_gca`,
+	`loginexpired`,
+	`notloggedin`,
+)
 
 // harnessLineRows is where those notices count: the last few rows with
 // anything on them — a CLI's own status line and what sits right above its
@@ -397,9 +429,6 @@ var harnessLoginLines = []string{
 // sign-in screens and Claude Code's own notice are specific enough to be read
 // anywhere in the tail.
 const harnessLineRows = 3
-
-// harnessShortRow is how long (whitespace removed) such a row may be.
-const harnessShortRow = 48
 
 // harnessRows is how much of the bottom of the screen is read: the status
 // line and the notice above the prompt, not the conversation. Counted in
@@ -474,16 +503,8 @@ func harnessProblemIn(tail, prog string) bool {
 		if harnessLoginScreenIn(rows, i, prog, bottom) || ((prog == "" || prog == "claude") && harnessNoticeRow(flat, bottom)) {
 			return true
 		}
-		if !bottom {
-			continue // the conversation, not the CLI's own status
-		}
-		lead := strings.TrimLeftFunc(flat, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
-		if len(lead) <= harnessShortRow {
-			for _, p := range harnessLoginLines {
-				if strings.HasPrefix(lead, p) {
-					return true
-				}
-			}
+		if bottom && harnessLoginRowIn(rows, i, harnessLoginLines, bottom) {
+			return true // the CLI's own status, not the conversation
 		}
 	}
 	return false

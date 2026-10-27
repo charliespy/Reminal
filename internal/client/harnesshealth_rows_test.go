@@ -84,6 +84,43 @@ var loginRowCases = []loginRowCase{
 	{prog: "pi", row: " Error: No API key found for anthropic."},
 	{prog: "pi", row: ` Error: Authentication failed for "anthropic". Credentials may have expired or network is unavailable. Run '/login anthropic' to re-authenticate.`},
 	{prog: "pi", row: " Error: Your session has expired. Please reauthenticate."},
+
+	// Sign-in screens' rows (as captured in testdata/harness-screens, or as
+	// each CLI's release writes them).
+	{prog: "gemini", row: "│   How would you like to authenticate for this project?                       │"},
+	{prog: "gemini", row: "│   No authentication method selected.                                         │"},
+	{prog: "gemini", row: "Please visit the following URL to authorize the application:"},
+	{prog: "gemini", row: "Enter the authorization code:"},
+	{prog: "gemini", row: "│ Enter Gemini API Key                                                         │"},
+	{prog: "qwen", row: "  │ Alibaba ModelStudio · Access Method                                      │"},
+	{prog: "qwen", row: "  │ Connect a Provider                                                       │"},
+	{prog: "qwen", row: "  │   Manually connect a local server, proxy, or unsupported provider        │"},
+	{prog: "qwen", row: "  Finish provider setup"},
+	{prog: "qwen", row: "No auth type is selected. Please configure an auth type (e.g. via settings or `--auth-type`) before running in non-interactive mode."},
+	{prog: "claude", row: " Select login method:"},
+	{prog: "claude", row: " ❯ 1. Claude account with subscription · Pro, Max, Team, or Enterprise"},
+	{prog: "claude", row: "   2. Anthropic Console account · API usage billing"},
+	{prog: "claude", row: " Paste code here if prompted >"},
+	{prog: "goose", row: "error: No provider configured. Run 'goose configure' first."},
+	{prog: "goose", row: "Provider is not configured. Run `goose configure` to set it up."},
+	{prog: "crush", row: "  To start, let's choose a provider and model."},
+	{prog: "crush", row: "  Let's authenticate with Hyper"},
+	{prog: "crush", row: "Error: no providers configured - please run 'crush' to set up a provider interactively"},
+	{prog: "codex", row: "  Finish signing in via your browser"},
+	{prog: "pi", row: "0.0%/0 (auto)                           unknown"},
+
+	// What any CLI may say of its login on its own status rows.
+	{prog: "gemini", row: " Authentication required.", bottom: true},
+	{prog: "claude", row: "  Authentication required · Sign in again to continue", bottom: true},
+	{prog: "claude", row: " Please log in with a permitted organization: claude auth login", bottom: true},
+	{prog: "claude", row: "  login required — run /login", bottom: true},
+	{prog: "claude", row: " Login expired", bottom: true},
+	{prog: "claude", row: " Not logged in", bottom: true},
+	{prog: "claude", row: " Waiting for authorization… (^C to cancel)", bottom: true},
+	{prog: "qwen", row: " Waiting for auth... (Press ESC or CTRL+C to cancel)", bottom: true},
+	{prog: "gemini", row: " Waiting for authentication...", bottom: true},
+	{prog: "goose", row: "Waiting for authentication callback...", bottom: true},
+	{prog: "gemini", row: "Please set an Auth method in your ~/.gemini/settings.json or specify one of the following environment variables before running: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA", bottom: true},
 }
 
 // loginRowFrame is what sits under a row in these screens: an input box,
@@ -166,6 +203,13 @@ func TestLoginWordsInAnAgentsOwnTextAreNotALogin(t *testing.T) {
 			{"wrapped, from its middle", "● Earlier the tool printed " + first + "\n  " + second + " and then went on."},
 			{"wrapped, carrying on", lead + first + "\n  " + second + " and then went on."},
 		} {
+			// A row whose first half is itself a whole row a CLI draws
+			// ("Waiting for authentication" of "… callback...") reads as
+			// that row, wrapped or not: nothing on a screen tells them apart.
+			if s.what == "wrapped, carrying on" && loggedOutBy(harnessTail(c.screenWith(lead+first), harnessRows), c.prog) {
+				t.Logf("%s: %q alone is a whole row: its wrap is not told apart", c.prog, lead+first)
+				continue
+			}
 			tail := harnessTail(c.screenWith(s.rows), harnessRows)
 			for _, prog := range []string{c.prog, ""} {
 				if loggedOutBy(tail, prog) {
@@ -181,9 +225,32 @@ func TestLoginWordsInAnAgentsOwnTextAreNotALogin(t *testing.T) {
 		{"codex", "■ Couldn't load local sign-in. Sign in with ChatGPT and retry."},
 		{"codex", "  Sign in with ChatGPT"},
 		{"pi", " No API key found for the deploy step, so I set it in .env."},
+		// The service's words for a key Gemini CLI cannot use, in an
+		// answer: not in the JSON of its own error.
+		{"gemini", "● The service said: API key not valid. Please pass a valid API key."},
+		{"gemini", "  API key not valid. Please pass a valid API key."},
 	} {
 		if loggedOutBy(harnessTail("● Done.\n"+s.row+loginRowFrame, harnessRows), s.prog) {
 			t.Errorf("%s: read as logged out: %q", s.prog, s.row)
+		}
+	}
+}
+
+// On the CLI's own status rows, a server's login (an MCP server's, a
+// policy's) is not the agent's: a status line only with what it ends on.
+func TestAnotherLoginOnTheStatusRowsIsNotTheAgents(t *testing.T) {
+	for _, row := range []string{
+		" Authentication required for MCP Server: github",
+		" Authentication required for A2A agent: planner",
+		" Authentication required for policy limits",
+		" Please sign in to the dashboard first",
+		" Login required for the staging site",
+		" Waiting for authorization from the reviewer",
+	} {
+		for _, prog := range []string{"claude", "gemini", ""} {
+			if loggedOutBy(harnessTail("● Done.\n"+row+"\n❯", harnessRows), prog) {
+				t.Errorf("as %q: read as logged out: %q", prog, row)
+			}
 		}
 	}
 }
