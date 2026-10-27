@@ -115,6 +115,11 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		// Claude Code 2.1.312: rows that leave the agent working, and its
 		// notices quoted in answers that go on.
 		{"claude", "  ⎿  Fast mode disabled · Out of usage credits", "fast mode off, the session carries on"},
+		// Bare words at the start of a row with no ⎿ before them (review).
+		{"claude", "● It stopped because the review session had run\n  out of usage credits.", "an answer's wrapped last row"},
+		{"claude", "  ⎿  Fast mode disabled ·\n     Out of usage credits", "fast mode off, wrapped on a narrow screen"},
+		{"claude", "● It prints this:\n\n  Out of usage credits", "shown in an answer"},
+		{"claude", "● The banner it showed said its\n  usage limit reached.", "an answer's wrapped last row"},
 		{"claude", "  ⎿  Continue now at lower priority after reaching your 5-hour limit; run again to stop", "an option that keeps it going"},
 		{"claude", "● Out of usage credits is what it shows when the balance runs out.", "an answer quoting the notice"},
 		{"claude", "● You've hit your channel's monthly spend limit. That row is new in this version.", "an answer quoting the notice"},
