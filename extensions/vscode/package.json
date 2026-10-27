@@ -2,7 +2,7 @@
   "name": "reminal",
   "displayName": "reminal: Remote & Cloud Terminal",
   "description": "Take your terminal anywhere. Open it from your phone or any browser, share it with a teammate or an AI agent, and know the moment your coding agent needs you. Remote terminal access through the cloud, with no SSH or port forwarding to set up, plus remote desktop, localhost tunnels and file transfer.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "publisher": "reminal",
   "license": "AGPL-3.0-or-later",
   "icon": "media/icon.png",

@@ -51,10 +51,13 @@ func notices(res ...string) []limitNotice {
 }
 
 // wholeNotices are notices read as whole rows: each's words, then perhaps
-// when it resets ("· resets 3pm (America/Los_Angeles)", "resets at 1:30pm")
-// and "· progress saved", then the row's end.
+// when it resets ("· resets 3pm (America/Los_Angeles)", "resets at 1:30pm"),
+// "· progress saved", and the command it points to ("· /usage-credits to
+// keep using Claude", "· run /usage-credits to ask your admin for more"),
+// then the row's end. A row that goes on in words of its own is a sentence,
+// not the notice.
 func wholeNotices(res ...string) []limitNotice {
-	end := `(?:·?(?:limit)?resets?(?:at)?` + limitWhen + `)?(?:·progresssaved)?\.?$`
+	end := `(?:·?(?:limit)?resets?(?:at)?` + limitWhen + `)?(?:·progresssaved)?(?:·(?:run)?/[a-z][a-z0-9_-]*[^·]*)?\.?$`
 	out := make([]limitNotice, len(res))
 	for i, r := range res {
 		out[i] = limitNotice{re: regexp.MustCompile("^(?:" + r + ")" + end), whole: true}
@@ -82,7 +85,9 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// read here may be acted on, so a sentence that only starts with them is
 	// never one.
 	"claude": wholeNotices(
-		`you.?vehityour(?:session|weekly|opus|sonnet|fable|usagecredit|usage|monthlyspend|fast)?limit`,
+		// Later, also a daily or an individual spend limit, and the command
+		// to get more after it ("· /usage-credits to keep using Claude").
+		`you.?vehityour(?:session|weekly|daily|opus|sonnet|fable|usagecredit|usage|monthlyspend|individualspend|spend|fast)?limit`,
 		`you.?vehityour(?:team|org).?s(?:shared|monthly)[a-z]{0,16}(?:limit|budget)`,
 		`you.?reoutofusagecredits`,
 		`yourorgisoutofusage(?:credits)?`,

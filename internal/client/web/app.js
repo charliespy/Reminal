@@ -5019,6 +5019,7 @@
       // done, which also just means "online"). Offline/checking set above.
       const agg = machineAttn(list);
       if (agg === 'logged-out') { dot.className = 'machine-dot attn-input'; dot.title = 'its agent is logged out'; }
+      else if (agg === 'limited') { dot.className = 'machine-dot attn-input'; dot.title = 'its agent is at its usage limit'; }
       else if (agg === 'input') { dot.className = 'machine-dot attn-input'; dot.title = 'needs you'; }
       else if (agg === 'working') { dot.className = 'machine-dot attn-working'; dot.title = 'working'; }
       // Remember this snapshot so the NEXT time the panel opens it paints these
@@ -5146,7 +5147,7 @@
     }
 
     // Attention state → the word shown in the session's state chip.
-    const ATTN_LABELS = { input: 'needs you', working: 'working', done: 'done', 'logged-out': 'logged out' };
+    const ATTN_LABELS = { input: 'needs you', working: 'working', done: 'done', 'logged-out': 'logged out', limited: 'limited' };
 
     // attnChipEl builds the little state pill shown beside a session name in the
     // Recents dropdown and the mobile dock, or null for an idle/unknown state.
@@ -5424,19 +5425,22 @@
     }
 
     // machineAttn rolls a machine's sessions up to one dot state: 'logged-out'
-    // if an agent there cannot work at all, else 'input' if any session needs
+    // if an agent there cannot work at all, else 'limited' if one is held back
+    // by its usage limit, else 'input' if any session needs
     // you, else 'working' if any is working, else '' (idle / all done → the
     // plain online-green dot). Port forwards don't count. Reads through attnOf
     // so a live push colours the dot too.
     function machineAttn(list) {
-      let working = false, needs = false;
+      let working = false, needs = false, limited = false;
       for (const s of (list || [])) {
         if (s.kind === 'port') continue;
         const a = attnOf(s.id, s.attn);
         if (a === 'logged-out') return 'logged-out';
+        if (a === 'limited') limited = true;
         if (a === 'input') needs = true;
         if (a === 'working') working = true;
       }
+      if (limited) return 'limited';
       if (needs) return 'input';
       return working ? 'working' : '';
     }

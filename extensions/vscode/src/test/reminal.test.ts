@@ -107,6 +107,7 @@ test("findReminal only takes absolute paths", () => {
 test("statusOf maps attn to the viewer's three states and nothing else", () => {
   assert.equal(statusOf("input"), "needs");
   assert.equal(statusOf("logged-out"), "needs");
+  assert.equal(statusOf("limited"), "needs");
   assert.equal(statusOf("working"), "working");
   assert.equal(statusOf("done"), "done");
   // A bare shell, or a reminal too old to report attn: no state, no guess.
