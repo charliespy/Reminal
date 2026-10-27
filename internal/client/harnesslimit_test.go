@@ -38,6 +38,11 @@ var limitScreens = []struct {
 	{"claude", "  ⎿  Usage limit reached · limit resets 4pm\n❯ ", limitLA(2026, 10, 19, 16, 0)},
 	{"claude", "  ⎿  You've hit your org's monthly spend limit\n❯ ", time.Time{}},
 	{"claude", "  ⎿  You've hit your session limit · resets 3pm\n     (America/Los_Angeles)\n❯ ", limitLA(2026, 10, 19, 15, 0)},
+	// Seen on real screens, 2026-10-27: the command to get more after it, on
+	// one row or wrapped onto the next.
+	{"claude", "  ⎿  You've hit your individual spend limit · run /usage-credits to ask your admin for more\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You've hit your individual spend limit · run /usage-credits to ask y\n     our admin for more\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You've hit your weekly limit · resets 6am (America/Los_Angeles) · /usage-credits to keep using Claude\n❯ ", limitLA(2026, 10, 20, 6, 0)},
 	{"codex", "■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit\nhttps://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.\n\n› ", limitLA(2026, 10, 19, 15, 5)},
 	{"codex", "■ You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 21st, 2026 3:05 PM.\n› ", limitLA(2026, 10, 21, 15, 5)},
 	{"codex", "■ You’ve hit your usage limit. To get more access now, send a request to your admin or try again later.\n› ", time.Time{}},
@@ -714,6 +719,41 @@ func TestLimitEchoRowEndsOnlyAtAnAnswer(t *testing.T) {
 	} {
 		if got := limitEchoRow(c.below); got != c.echo {
 			t.Errorf("%q: echo %v, want %v", c.below, got, c.echo)
+		}
+	}
+}
+
+// Claude Code at an individual spend limit, as three sessions showed it
+// (2026-10-27): the notice, the command it points to on a row of its own,
+// the turn's time ("· done"), and the input box empty, with a draft, or with
+// an attachment chip. Each read as limited, though its turn ended with an
+// ordinary Stop and the screen looks done; with the message it answered in
+// view, and scrolled away.
+func TestHarnessLimitSpendScreens(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	notice := "  ⎿  You've hit your individual spend limit · run /usage-credits to ask your admin for a higher limit\n" +
+		"     /usage-credits to request more usage from your admin.\n\n" +
+		"✻ Churned for 1s · done 12:34 PM\n\n"
+	box := func(draft string) string {
+		return "────────────────────────────────\n❯ " + draft + "\n────────────────────────────────\n  ⏵⏵ bypass permissions on"
+	}
+	now := limitTestNow
+	defer func() { harnessNow = time.Now }()
+	harnessNow = func() time.Time { return now }
+	for _, echo := range []string{"❯ continue\n\n", ""} {
+		for _, draft := range []string{"", "c", "[⧉ In Untitled-1]"} {
+			screen := echo + notice + box(draft)
+			a := &Agent{}
+			turn, end := now.Add(-2*time.Second), now.Add(-time.Second)
+			a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+			a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+			now = now.Add(harnessUpFor)
+			a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+			if l, _ := a.harnessLimitedNow(); !l {
+				t.Errorf("not limited (echo %q, draft %q):\n%s", echo, draft, screen)
+			}
 		}
 	}
 }
