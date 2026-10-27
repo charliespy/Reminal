@@ -561,7 +561,8 @@
       const BILL = /\b(paid|payment|invoices?|inv|receipt|total|subtotal|amount( due)?|balance|bill(ed|able)?|charged?|refund(ed)?|txn|transaction|tax|vat|gst)\b(\s*[:#.]?\s*\d[\d,.]*)?|\b\d[\d,.]*\s*(hours?|hrs?|h)\b/gi;
       if (opts.note) noteLines.push(...wrap(m, scrub('"' + opts.note + '"').replace(MONEY, '•••').replace(BILL, '•••'), PW - 96).slice(0, 3));
       const lastOk = (r.approvals || [])[(r.approvals || []).length - 1];
-      const stamp = lastOk ? (lastOk.phone ? 'I SAID YES FROM MY PHONE' : 'I SAID YES') + ' · ' + clock(lastOk.at) : '';
+      // No time on it: the card carries no clock times at all.
+      const stamp = lastOk ? (lastOk.phone ? 'I SAID YES · FROM MY PHONE' : 'I SAID YES') : '';
       const PH = 250 + lines.length * lh + noteLines.length * lh + (noteLines.length ? 30 : 0) + 110 + (stamp ? 120 : 0);
       // 4:5 for a post, taller when the receipt is long: never under the watermark.
       const W = 1080, H = Math.max(1350, PH + 230), c = mk(W, H), ctx = c.getContext('2d');
@@ -633,7 +634,7 @@
         const sw = Math.max(...lines2.map(l => ctx.measureText(l).width)) + 44;
         rr(ctx, -sw / 2, -46, sw, 92, 46); ctx.stroke();
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(lines2[0], 0, -14); ctx.fillText(lines2[1] || '', 0, 20);
+        if (lines2.length > 1) { ctx.fillText(lines2[0], 0, -14); ctx.fillText(lines2[1], 0, 20); } else ctx.fillText(lines2[0], 0, 2);
         ctx.restore();
       }
       ctx.restore();
@@ -1029,7 +1030,8 @@
         const scale = Math.max(1, vt / playMs);
         const realMs = t1 - t0;
         const speed = Math.max(1, Math.round(realMs / (o.seconds * 1000)));
-        const avail = H - 520;
+        // From under the caption (330) to above the progress bar (H - 190), less the panel's padding.
+        const avail = H - 190 - 330 - 60;
         // A wide terminal's lines are rewrapped to a phone's width, as the phone
         // shot does: 170 columns in a 9:16 frame would be a grey smear.
         const WRAP = 64, rewrapped = widest + 1 > 80;
@@ -1196,12 +1198,13 @@
       sheet = el('div', { class: 'mo-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Share' });
       document.body.appendChild(back);
       document.body.appendChild(sheet);
+      // Capture, ahead of the page's own Escape handlers: the sheet takes it.
       document.addEventListener('keydown', e => {
         if (e.key !== 'Escape' || !sheet.classList.contains('open')) return;
-        e.preventDefault(); e.stopPropagation();
+        e.preventDefault(); e.stopImmediatePropagation();
         if (lapseBusy) return;
         if (state.tab !== 'home') { state.tab = 'home'; render(); } else close();
-      });
+      }, true);
     }
     function open(tab, extra) {
       ensureSheet();

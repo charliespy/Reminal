@@ -106,12 +106,12 @@ export function render(spec, index, src) {
 }
 
 // lineNames is a builds.txt line's script names, if it is build.json's
-// scripts in order, one build of each: all of them, or the first few, for a
-// build made before a script was added at the end (a page already open on it
-// loads only those).
+// scripts in order, one build of each: all of them, or all but the last, for
+// a build made before the last was added (a page already open on it loads
+// only those).
 function lineNames(spec, line) {
   const names = line.split(" ");
-  if (names.length < 1 || names.length > spec.scripts.length) return null;
+  if (names.length < spec.scripts.length - 1 || names.length > spec.scripts.length) return null;
   for (let i = 0; i < names.length; i++) {
     const m = /^([a-z]+)\.([0-9a-f]{16})\.js$/.exec(names[i]);
     if (!m || m[1] !== spec.scripts[i]) return null;
