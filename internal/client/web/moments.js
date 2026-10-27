@@ -1197,16 +1197,39 @@
     function ensureSheet() {
       if (sheet) return;
       back = el('div', { class: 'mo-back', onclick: close });
-      sheet = el('div', { class: 'mo-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Share' });
+      sheet = el('div', { class: 'mo-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Share', tabindex: '-1' });
       document.body.appendChild(back);
       document.body.appendChild(sheet);
-      // Capture, ahead of the page's own Escape handlers: the sheet takes it.
+      // Capture, ahead of the page's own handlers: while the sheet is open it
+      // takes Escape, and Tab goes round its own controls, never off it into
+      // the page behind the backdrop.
       document.addEventListener('keydown', e => {
-        if (e.key !== 'Escape' || !sheet.classList.contains('open')) return;
+        if (!sheet.classList.contains('open')) return;
+        if (e.key === 'Tab') { trapTab(e); return; }
+        if (e.key !== 'Escape') return;
         e.preventDefault(); e.stopImmediatePropagation();
         if (lapseBusy) return;
         if (state.tab !== 'home') { state.tab = 'home'; render(); } else close();
       }, true);
+    }
+    const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    function trapTab(e) {
+      const all = [...sheet.querySelectorAll(FOCUSABLE)].filter(n => n.getClientRects().length);
+      const at = document.activeElement;
+      if (!all.length) { e.preventDefault(); sheet.focus({ preventScroll: true }); return; }
+      const first = all[0], last = all[all.length - 1], inside = sheet.contains(at) && at !== sheet;
+      if (e.shiftKey && (!inside || at === first)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (!inside || at === last)) { e.preventDefault(); first.focus(); }
+    }
+    // Where focus goes back to on close: what had it when the sheet opened (the
+    // Share button, say), or Share itself. Never a text field on a phone,
+    // which would bring the keyboard up as the sheet goes.
+    let opener = null;
+    function returnFocus() {
+      const o = opener;
+      opener = null;
+      if (!o || !o.isConnected || (COARSE && /^(INPUT|TEXTAREA)$/.test(o.tagName))) return;
+      try { o.focus({ preventScroll: true }); } catch (_) {}
     }
     function open(tab, extra) {
       ensureSheet();
@@ -1219,14 +1242,21 @@
       state.tab = tab || 'home';
       Object.assign(state, extra || {});
       const was = sheet.classList.contains('open');
+      if (!was) {
+        const a = document.activeElement;
+        opener = a && a !== document.body && !sheet.contains(a) ? a : document.getElementById('share-btn');
+      }
       sheet.classList.add('open'); back.classList.add('open');
       if (!was) { sheet.classList.remove('rise'); void sheet.offsetWidth; sheet.classList.add('rise'); }
       render();
+      // Focus moves into the sheet, so the next Tab starts on its controls.
+      if (!was) sheet.focus({ preventScroll: true });
     }
     function close() {
       if (!sheet || lapseBusy) return;
       parkInvite();
       sheet.classList.remove('open'); back.classList.remove('open');
+      returnFocus();
     }
 
     // The invite's parts (QR, session, PIN, link, copy buttons) belong to the
