@@ -32,7 +32,7 @@
       // A bearer token, and the value after any name that sounds like a secret,
       // in any case and quoting: API_KEY=…, "apiKey": "…", --password=…
       s = s.replace(/\b(Bearer|Basic|Token)(\s+)([\w.~+\/=-]{6,})/gi, (m, k, sp, v) => k + sp + mask(v));
-      s = s.replace(/\b([\w.-]*?(?:api[_-]?key|access[_-]?key|private[_-]?key|secret|token|passw(?:or)?d|passphrase|pwd|pass|credentials?|auth(?:orization)?|key))(["']?\s*[=:]\s*["']?)([^\s"',;]+)/gi, (m, k, eq, v) => k + eq + mask(v));
+      s = s.replace(/\b([\w.-]{0,40}?(?:api[_-]?key|access[_-]?key|private[_-]?key|secret|token|passw(?:or)?d|passphrase|pwd|pass|credentials?|auth(?:orization)?|key))(["']?\s*[=:]\s*["']?)([^\s"',;]+)/gi, (m, k, eq, v) => k + eq + mask(v));
       // Base64 (a PEM body, a key file): mixed case and digits, / and + inside.
       // With a / it must be long, so a path like owner/Repo/pull/445 stays.
       // Both this and the e-mail rule start only at the start of a run (the
@@ -431,7 +431,9 @@
         }
         per.set(yy, cells);
       }
-      const raw = parts.join(''), clean = scrub(raw, true), out = new Map();
+      // A line longer than any screen of it (a minified file, a dump) is hidden
+      // whole: no rule is tried across tens of thousands of characters.
+      const raw = parts.join(''), clean = raw.length > 8000 ? raw.replace(/\S/g, '•') : scrub(raw, true), out = new Map();
       for (const [yy, cells] of per) out.set(yy, clean === raw ? null : cells.map(([o, n]) => clean.substr(o, n)));
       cache.set(y0, out);
       return out.get(y);
