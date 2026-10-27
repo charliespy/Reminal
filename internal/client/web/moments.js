@@ -35,11 +35,18 @@
       s = s.replace(/\b([\w.-]*?(?:api[_-]?key|access[_-]?key|private[_-]?key|secret|token|passw(?:or)?d|passphrase|pwd|pass|credentials?|auth(?:orization)?|key))(["']?\s*[=:]\s*["']?)([^\s"',;]+)/gi, (m, k, eq, v) => k + eq + mask(v));
       // Base64 (a PEM body, a key file): mixed case and digits, / and + inside.
       // With a / it must be long, so a path like owner/Repo/pull/445 stays.
-      s = s.replace(/(?=[A-Za-z0-9+\/]*\d)(?=[A-Za-z0-9+\/]*[A-Z])(?=[A-Za-z0-9+\/]*[a-z])[A-Za-z0-9+\/]{24,}={0,2}/g, m => m.includes('/') && m.length < 40 ? m : mask(m));
+      // Both this and the e-mail rule start only at the start of a run (the
+      // character before is taken as `pre`): tried at every place inside a long
+      // run, a hex dump, they would take seconds. Not a lookbehind, which an
+      // older Safari can't parse at all.
+      s = s.replace(/(^|[^A-Za-z0-9+\/])((?=[A-Za-z0-9+\/]*\d)(?=[A-Za-z0-9+\/]*[A-Z])(?=[A-Za-z0-9+\/]*[a-z])[A-Za-z0-9+\/]{24,}={0,2})/g, (m, pre, v) => pre + (v.includes('/') && v.length < 40 ? v : mask(v)));
       s = s.replace(/\b(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]{32,}\b/g, mask);
-      s = s.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, mask);
-      // A prompt's user@host: the user is a name.
-      s = s.replace(/(^|[\s(\[])([a-z_][\w.-]{1,31})@(?=[\w-]+[\s:~$%#)\]])/gi, (m, pre, u) => { learnUser(u); return pre + (keep ? '•'.repeat(u.length) : 'me') + '@'; });
+      s = s.replace(/(^|[^\w.+-])([\w.+-]+@[\w-]+\.[\w.-]+)/g, (m, pre, v) => pre + mask(v));
+      // A password given after a space: --password x, sshpass -p x, curl -u user:x.
+      s = s.replace(/(--(?:password|passwd|pass|token|api-key|apikey|secret)\s+|\bsshpass\s+-p\s*|\s-u\s+[^\s:]+:)([^\s"']+)/gi, (m, k, v) => k + mask(v));
+      // A prompt's user@host: the user is a name. The host is followed by a
+      // prompt's ":", "~", "$"..., so a package spec (react@latest my-app) isn't one.
+      s = s.replace(/(^|[\s(\[])([a-z_][\w.-]{1,31})@(?=[\w-]+(?::|\s*[~$%#>\/]|\s+[\w.-]+\]))/gi, (m, pre, u) => { learnUser(u); return pre + (keep ? '•'.repeat(u.length) : 'me') + '@'; });
       s = s.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, m => m === '127.0.0.1' ? m : mask(m));
       // IPv6 and MAC addresses: hex groups between colons, with a letter in them
       // (so a clock like 12:30:45 stays).
@@ -280,6 +287,8 @@
       p.session = s.id;
       s.runs.push(p);
       saveRun(p);
+      // Wrapped's ready-made set is out of date with this run in.
+      if (state) state.wrappedAll = null;
       offerReceipt(s, p);
     }
     function loadRuns() {
@@ -507,6 +516,8 @@
       const p = plainRun(s.run);
       p.end = Date.now();
       p.live = true;
+      // Waiting on you right now: that's not agent time either.
+      if (s.run.inputSince) p.waited += p.end - s.run.inputSince;
       return p;
     }
     function receiptLines(r, opts) {
