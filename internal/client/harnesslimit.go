@@ -50,14 +50,22 @@ func notices(res ...string) []limitNotice {
 	return out
 }
 
+// limitCommand is the command a notice may end on, as its row reads with
+// spaces gone and in lower case: "· /usage-credits to keep using Claude",
+// "· run /usage-credits to ask your admin for more" (or "for a higher
+// limit"), "· /usage-credits to request more usage from your admin".
+const limitCommand = `(?:·(?:run)?/usage-credits(?:tokeepusingclaude|toaskyouradminfor(?:more|ahigherlimit)|torequestmoreusagefromyouradmin)?)?`
+
 // wholeNotices are notices read as whole rows: each's words, then perhaps
 // when it resets ("· resets 3pm (America/Los_Angeles)", "resets at 1:30pm"),
 // "· progress saved", and the command it points to ("· /usage-credits to
 // keep using Claude", "· run /usage-credits to ask your admin for more"),
 // then the row's end. A row that goes on in words of its own is a sentence,
-// not the notice.
+// not the notice; so the command's words are only the ones the notice uses,
+// never any words after a command (an agent's answer that quotes the notice
+// and goes on is not the notice).
 func wholeNotices(res ...string) []limitNotice {
-	end := `(?:·?(?:limit)?resets?(?:at)?` + limitWhen + `)?(?:·progresssaved)?(?:·(?:run)?/[a-z][a-z0-9_-]*[^·]*)?\.?$`
+	end := `(?:·?(?:limit)?resets?(?:at)?` + limitWhen + `)?(?:·progresssaved)?` + limitCommand + `\.?$`
 	out := make([]limitNotice, len(res))
 	for i, r := range res {
 		out[i] = limitNotice{re: regexp.MustCompile("^(?:" + r + ")" + end), whole: true}

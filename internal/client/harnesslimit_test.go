@@ -108,6 +108,10 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		{"claude", "  - You've hit your session limit · resets 3pm", "a list item"},
 		{"claude", "  ## You've hit your session limit", "a heading"},
 		{"claude", "  | You've hit your session limit · resets 3pm |", "a table cell"},
+		// The notice and its command, quoted at the start of an answer that
+		// goes on (review).
+		{"claude", "● You've hit your weekly limit · /usage-credits to keep using Claude is the row I added a test for; all 40 tests pass.", "an answer quoting the notice and its command"},
+		{"claude", "● You've hit your individual spend limit · run /usage-credits to ask your admin for more, that is what it shows.", "an answer quoting the notice and its command"},
 		{"codex", "› You’ve hit your usage limit. Try again at 3:05 PM.", "typed at Codex's prompt"},
 		{"codex", "• Codex prints “You’ve hit your usage limit” when the plan runs out.", "an answer about it"},
 		{"gemini", "│ > Usage limit reached for gemini-2.5-pro. │", "typed at Gemini's prompt"},
@@ -736,24 +740,53 @@ func TestHarnessLimitSpendScreens(t *testing.T) {
 	notice := "  ⎿  You've hit your individual spend limit · run /usage-credits to ask your admin for a higher limit\n" +
 		"     /usage-credits to request more usage from your admin.\n\n" +
 		"✻ Churned for 1s · done 12:34 PM\n\n"
-	box := func(draft string) string {
-		return "────────────────────────────────\n❯ " + draft + "\n────────────────────────────────\n  ⏵⏵ bypass permissions on"
-	}
-	now := limitTestNow
-	defer func() { harnessNow = time.Now }()
-	harnessNow = func() time.Time { return now }
 	for _, echo := range []string{"❯ continue\n\n", ""} {
 		for _, draft := range []string{"", "c", "[⧉ In Untitled-1]"} {
-			screen := echo + notice + box(draft)
-			a := &Agent{}
-			turn, end := now.Add(-2*time.Second), now.Add(-time.Second)
-			a.noteHarnessLimit(screen, "claude", false, turn, end, "")
-			a.noteHarnessLimit(screen, "claude", false, turn, end, "")
-			now = now.Add(harnessUpFor)
-			a.noteHarnessLimit(screen, "claude", false, turn, end, "")
-			if l, _ := a.harnessLimitedNow(); !l {
+			screen := echo + notice + claudeBoxWith(draft)
+			if !limitedAfterTurn(t, screen) {
 				t.Errorf("not limited (echo %q, draft %q):\n%s", echo, draft, screen)
 			}
 		}
 	}
+}
+
+// An answer that quotes the notice and its command, then goes on, is the
+// agent talking, not the limit: its session is not limited (review).
+func TestHarnessLimitQuotedInAnAnswer(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	for _, row := range []string{
+		"● You've hit your weekly limit · /usage-credits to keep using Claude is the row I added a test for; all 40 tests pass.",
+		"● You've hit your individual spend limit · run /usage-credits to ask your admin for more, that is what it shows.",
+	} {
+		screen := "❯ what did you change?\n\n" + row + "\n\n✻ Churned for 3s · done\n\n" + claudeBoxWith("")
+		if limitedAfterTurn(t, screen) {
+			t.Errorf("read as limited:\n%s", screen)
+		}
+	}
+}
+
+// claudeBoxWith is Claude Code's input box holding draft, and the footer
+// under it (claudeBox, in attention_probe_test.go, is the box alone).
+func claudeBoxWith(draft string) string {
+	return "────────────────────────────────\n❯ " + draft + "\n────────────────────────────────\n  ⏵⏵ bypass permissions on"
+}
+
+// limitedAfterTurn is whether a Claude session whose turn ended with screen
+// on show reads as at its limit: the screen seen twice, then once more after
+// the notice has held for harnessUpFor.
+func limitedAfterTurn(t *testing.T, screen string) bool {
+	t.Helper()
+	now := limitTestNow
+	defer func() { harnessNow = time.Now }()
+	harnessNow = func() time.Time { return now }
+	a := &Agent{}
+	turn, end := now.Add(-2*time.Second), now.Add(-time.Second)
+	a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+	a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+	now = now.Add(harnessUpFor)
+	a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+	l, _ := a.harnessLimitedNow()
+	return l
 }
