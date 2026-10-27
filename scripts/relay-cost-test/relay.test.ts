@@ -2,11 +2,12 @@
 // Copyright (C) 2026 Harshal Gajjar
 
 // What a stranger can make the relay's rooms do, and cost, run in the real
-// Workers runtime (run.sh). Two things:
+// Workers runtime (run.sh). Three things:
 //   - a viewer naming a session that was never ready leaves nothing behind;
 //   - every alarm is bounded (src/alarm.ts), and the rooms' real paths arm
-//     only a few times in a session's life.
-import { env, runInDurableObject, runDurableObjectAlarm } from "cloudflare:test";
+//     only a few times in a session's life;
+//   - a room whose agent goes with no close reaching it still expires.
+import { env, evictDurableObject, runInDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { ALARM_ARMS, ALARM_MAX_PER_HOUR, ALARM_MIN_GAP_MS, armAlarm, type AlarmArms } from "../src/alarm";
 
@@ -124,5 +125,56 @@ describe("a session's real life", () => {
     r.webSocket!.accept();
     const n = await runInDurableObject(stub, async (_o, state) => (await state.storage.get<AlarmArms>(ALARM_ARMS))?.n);
     expect(n).toBe(1);
+  });
+});
+
+describe("a room whose agent goes with no close reaching it", () => {
+  async function authed(stub: DurableObjectStub, id: string) {
+    const agent = await open(stub, id, "agent");
+    agent.send(JSON.stringify({ type: "auth", token: "t".repeat(43) }));
+    expect((await next(agent)).type).toBe("auth_ok");
+    return agent;
+  }
+
+  it("still expires after an eviction that closes the agent's socket", async () => {
+    const id = "EVICT001";
+    const stub = room(id);
+    await authed(stub, id);
+    // The runtime restarts under the room: the socket ends, and no
+    // webSocketClose or webSocketError is ever delivered for it.
+    await evictDurableObject(stub, { webSockets: "close" });
+    await new Promise((r) => setTimeout(r, 50));
+    const s = await stored(stub);
+    expect(s.keys).toContain("agentAuthed");
+    expect(s.alarm).not.toBeNull();
+
+    // The expiry finds no agent and clears the room down to its owner record.
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const after = await stored(stub);
+    expect(after.keys).not.toContain("agentAuthed");
+    expect(after.keys).not.toContain("token");
+    expect(after.keys).toContain("ownerHash");
+  });
+
+  it("is kept while its agent is still there, across an eviction that hibernates it", async () => {
+    const id = "EVICT002";
+    const stub = room(id);
+    const agent = await authed(stub, id);
+    await evictDurableObject(stub);
+
+    // The far-off expiry comes round with the agent still connected: the
+    // room stays, and its expiry is armed again rather than left unset.
+    const before = Date.now();
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const s = await stored(stub);
+    expect(s.keys).toContain("agentAuthed");
+    expect(s.keys).toContain("token");
+    expect(s.alarm).toBeGreaterThan(before + 60 * 60 * 1000);
+
+    // The agent leaves: the near expiry replaces the far one.
+    agent.close(1000, "bye");
+    await new Promise((r) => setTimeout(r, 50));
+    const left = await stored(stub);
+    expect(left.alarm).toBeLessThanOrEqual(Date.now() + 10 * 60 * 1000);
   });
 });

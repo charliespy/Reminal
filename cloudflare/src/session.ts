@@ -25,6 +25,15 @@ const PARK_REFILL_MS = 1000;
 // same agent a chance to reattach across a network blip.
 const ORPHAN_TTL_MS = 10 * 60 * 1000;
 
+// How far off a room's expiry stays while an authenticated agent or tunnel is
+// connected. Its close arms the near expiry (ORPHAN_TTL_MS), but a socket can
+// end with no close reaching the room: an eviction or a runtime restart while
+// it is open, a close the hibernation API never delivers. With no alarm armed,
+// such a room would keep its credentials and counts for good. This one comes
+// round anyway: with nobody connected it clears the room as any expiry does;
+// with the agent still there, alarm() arms it again, one wake a day.
+const LIVE_EXPIRY_MS = 24 * 60 * 60 * 1000;
+
 // How long a room remembers who it belongs to after that. Once the room has
 // been cleared, only an agent with the same credential may take the session ID
 // again within this window (a reboot, a `reminal restore`, a laptop asleep for
@@ -231,10 +240,10 @@ export class SessionRoom {
     server.serializeAttachment({ role, authed: false, src } satisfies Attachment);
     this.state.acceptWebSocket(server);
 
-    // The expiry alarm is cancelled once this connection authenticates
-    // (handleAuth), not here: a connection that never does must not keep a
-    // used room alive, so a used room with nothing authenticated in it has
-    // its expiry armed now. A room never used is left as it is: it holds
+    // The expiry alarm is pushed out to LIVE_EXPIRY_MS once this connection
+    // authenticates (handleAuth), not here: a connection that never does must
+    // not keep a used room alive, so a used room with nothing authenticated in
+    // it has its expiry armed now. A room never used is left as it is: it holds
     // nothing to clear, so nothing is written for it (any id can be named);
     // a socket there that never authenticates holds nothing either, and is
     // closed when it says anything else or an agent claims the room.
@@ -479,9 +488,13 @@ export class SessionRoom {
   }
 
   async alarm() {
-    // Only an authenticated agent or tunnel keeps the room. Sockets that
-    // never authenticated are closed with it.
-    if (this.authedAgent() || this.authedTunnel()) return;
+    // Only an authenticated agent or tunnel keeps the room, and its expiry
+    // stays armed, far off, for when it goes with no close reaching the room.
+    // Sockets that never authenticated are closed with it.
+    if (this.authedAgent() || this.authedTunnel()) {
+      await armAlarm(this.state, "SessionRoom", Date.now() + LIVE_EXPIRY_MS);
+      return;
+    }
     for (const role of ["agent", "tunnel"]) {
       for (const s of this.getSockets(role)) {
         try { s.close(4001, "authentication required"); } catch { /* already closing */ }
@@ -593,7 +606,9 @@ export class SessionRoom {
       if (attachment.role === "agent") {
         await this.state.storage.put("agentAuthed", true);
       }
-      await this.state.storage.deleteAlarm();
+      // The near expiry gives way to the far-off one kept while it is
+      // connected (LIVE_EXPIRY_MS); its close brings the near one back.
+      await armAlarm(this.state, "SessionRoom", Date.now() + LIVE_EXPIRY_MS);
       // The visitor gate's attempt count is its own; reconnecting leaves it.
       // Remember who this room belongs to, for after it is cleared.
       const owner = await credentialHashes(
@@ -1562,8 +1577,10 @@ export class SessionRoom {
   }
 
   // armExpiry sets the room's expiry unless one at least as near is set. A
-  // used room keeps a far-off alarm for its owner record (OWNER_KEEP_MS); that
-  // must not count as expiry being armed. alarm() restores it afterwards.
+  // used room keeps a far-off alarm for its owner record (OWNER_KEEP_MS), or
+  // for an agent it last saw connected (LIVE_EXPIRY_MS); neither may count as
+  // expiry being armed. alarm() restores the first afterwards, and an agent
+  // or tunnel authenticating the second.
   private async armExpiry() {
     const at = await this.state.storage.getAlarm();
     const due = Date.now() + this.orphanTTL;
