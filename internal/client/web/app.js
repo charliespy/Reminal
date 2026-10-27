@@ -432,7 +432,7 @@
       // whatever the poll last knew.
       if (sessionId && ('attn' in info)) {
         setLiveAttn(sessionId, info.attn || '');
-        if (window.reminalMoments) reminalMoments.attn(sessionId, info.attn || '');
+        if (window.reminalMoments) try { reminalMoments.attn(sessionId, info.attn || ''); } catch (_) {}
       }
       renderHost();
     }
@@ -6045,7 +6045,8 @@
       // the visible character.
       const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
       lastDataAt = Date.now();
-      if (window.reminalMoments) reminalMoments.output(sessionId, u8);
+      // Moments only watches: nothing it does may stop a chunk reaching the screen.
+      if (window.reminalMoments) try { reminalMoments.output(sessionId, u8); } catch (_) {}
       const after = reconcilePredictions(u8);
       if (after.byteLength === 0) return;
       pendingChunks.push(after);
@@ -8275,7 +8276,7 @@
       // redone): held, and sent once it is. Dropped here, the keys vanished
       // with nothing to say so. Behind keys already held, so nothing typed
       // overtakes them.
-      if (window.reminalMoments) reminalMoments.input(sessionId, data);
+      if (window.reminalMoments) try { reminalMoments.input(sessionId, data); } catch (_) {}
       const n = ++inputSerial;
       if (!inputLive() || heldInput.length) {
         holdInput(data, n);
@@ -13683,6 +13684,7 @@
         const el = document.activeElement;
         const busy = document.querySelector('details[open]') ||
           ($('share-modal') && getComputedStyle($('share-modal')).display !== 'none') ||
+          document.querySelector('.mo-sheet.open') ||
           Date.now() - lastTermKeyAt < TOUR_TYPING_PAUSE_MS ||
           (!connected() && isField(el) && !isTermKeys(el) && el.value !== '');
         const ready = !waitForSession || connected() || Date.now() - t0 > 6000;

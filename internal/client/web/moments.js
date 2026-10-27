@@ -3,8 +3,9 @@
   // a framed shot of the screen, and a weekly recap. Everything is drawn here,
   // in the browser, from the session's own output; nothing is sent anywhere
   // until the person shares or saves it. Every card goes through scrub() first:
-  // secrets, tokens, e-mail and IP addresses, home folders, this machine's name,
-  // the session's id and PIN, and any word the person adds are hidden.
+  // secrets, tokens and keys, e-mail and IP addresses, home folders and the
+  // user names seen in them or in prompts, this machine's name, and the
+  // session's id and PIN are hidden.
   //
   // app.js feeds it: reminalMoments.output (every chunk of the session's
   // output), .attn (the session's attention state as the agent pushes it) and
@@ -13,32 +14,49 @@
     'use strict';
 
     // ---------------------------------------------------------------- scrub
-    const HIDE_KEY = 'reminal:moments:hide';
-    function extraHidden() {
-      try { return (localStorage.getItem(HIDE_KEY) || '').split(',').map(s => s.trim()).filter(s => s.length >= 2); } catch (_) { return []; }
-    }
     function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
     function hostName() {
       try { return (lastHostInfo && lastHostInfo.hostname || '').replace(/\.local$/, ''); } catch (_) { return ''; }
     }
     // scrub hides what must not leave the device. keep: the result is exactly as
     // long as the input, for text laid out in a terminal grid.
+    // Names of people on this machine, learned from home folders and prompts
+    // seen in the output, so "harshal@laptop ~ %" hides the name as well.
+    const users = new Set();
+    const NOT_USERS = /^(shared|public|guest|default|root|runner|admin|user|users|home|me)$/i;
+    function learnUser(n) { if (n && n.length >= 2 && n.length <= 32 && !NOT_USERS.test(n) && users.size < 20) users.add(n); }
     function scrub(s, keep) {
       if (!s) return s;
       const mask = m => keep ? '•'.repeat(m.length) : '•••';
-      s = s.replace(/\b(sk-ant-[\w-]{8,}|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|xox[abprs]-[\w-]{10,}|AKIA[0-9A-Z]{16}|AIza[\w-]{30,}|eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,})/g, mask);
-      s = s.replace(/\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|PWD|AUTH)[A-Z0-9_]*)(\s*[=:]\s*)(\S+)/g, (m, k, eq, v) => k + eq + mask(v));
+      s = s.replace(/\b(sk-ant-[\w-]{8,}|sk-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|xox[abprs]-[\w-]{10,}|AKIA[0-9A-Z]{16}|AIza[\w-]{30,}|eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,})/g, mask);
+      // A bearer token, and the value after any name that sounds like a secret,
+      // in any case and quoting: API_KEY=…, "apiKey": "…", --password=…
+      s = s.replace(/\b(Bearer|Basic|Token)(\s+)([\w.~+\/=-]{6,})/gi, (m, k, sp, v) => k + sp + mask(v));
+      s = s.replace(/\b([\w.-]*?(?:api[_-]?key|access[_-]?key|private[_-]?key|secret|token|passw(?:or)?d|passphrase|pwd|pass|credentials?|auth(?:orization)?|key))(["']?\s*[=:]\s*["']?)([^\s"',;]+)/gi, (m, k, eq, v) => k + eq + mask(v));
+      // Base64 (a PEM body, a key file): mixed case and digits, / and + inside.
+      // With a / it must be long, so a path like owner/Repo/pull/445 stays.
+      s = s.replace(/(?=[A-Za-z0-9+\/]*\d)(?=[A-Za-z0-9+\/]*[A-Z])(?=[A-Za-z0-9+\/]*[a-z])[A-Za-z0-9+\/]{24,}={0,2}/g, m => m.includes('/') && m.length < 40 ? m : mask(m));
       s = s.replace(/\b(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]{32,}\b/g, mask);
       s = s.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, mask);
+      // A prompt's user@host: the user is a name.
+      s = s.replace(/(^|[\s(\[])([a-z_][\w.-]{1,31})@(?=[\w-]+[\s:~$%#)\]])/gi, (m, pre, u) => { learnUser(u); return pre + (keep ? '•'.repeat(u.length) : 'me') + '@'; });
       s = s.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, m => m === '127.0.0.1' ? m : mask(m));
+      // IPv6 and MAC addresses: hex groups between colons, with a letter in them
+      // (so a clock like 12:30:45 stays).
+      s = s.replace(/(^|[^\w:])((?=[0-9a-f:]*[a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{1,4})(?![\w:])/gi, (m, pre, v) => pre + mask(v));
       s = s.replace(/#p=[^\s'"]+/g, mask);
-      s = s.replace(/(\/Users\/|\/home\/|[A-Za-z]:\\Users\\)([^\/\\\s'"]+)/g, (m, pre, name) => keep ? pre + '•'.repeat(name.length) : '~');
-      const words = extraHidden();
+      // The session's PIN: after "PIN", after "reminal connect <id>", or as itself.
+      s = s.replace(/\b(PIN\b\s*[:#=]?\s*)(\d{6,8})\b/gi, (m, k, v) => k + mask(v));
+      s = s.replace(/(reminal\s+connect\s+\S+\s+)(\d{6,8})\b/gi, (m, k, v) => k + mask(v));
+      s = s.replace(/(\/Users\/|\/home\/|[A-Za-z]:\\Users\\)([^\/\\\s'"]+)/g, (m, pre, name) => { learnUser(name); return keep ? pre + '•'.repeat(name.length) : '~'; });
+      const words = [...users];
       const host = hostName();
       if (host) words.push(host);
       try { if (sessionId) words.push(sessionId); } catch (_) {}
+      try { const pin = typeof sharePin === 'function' && sharePin(); if (pin) words.push(String(pin)); } catch (_) {}
+      // Whole words only: a user called "dev" leaves "development" alone.
       for (const w of words) {
-        s = s.replace(new RegExp(escRe(w), 'gi'), m => keep ? '•'.repeat(m.length) : (w === host ? 'my machine' : '•••'));
+        s = s.replace(new RegExp('(^|[^\\w])(' + escRe(w) + ')(?![\\w])', 'gi'), (m, pre, v) => pre + (keep ? '•'.repeat(v.length) : (w === host ? 'my machine' : '•••')));
       }
       return s;
     }
@@ -50,12 +68,32 @@
     const sessions = new Map();
     const COARSE = window.matchMedia && matchMedia('(pointer: coarse)').matches;
 
+    // The scrollback a viewer is sent on connecting is old output, not new: lines
+    // in it are never offered as moments, and a clip "since you connected" starts
+    // after it. A connect (the page's body gains .connected) opens the window.
+    let replayUntil = 0;
+    const REPLAY_MS = 4000;
+    try {
+      let was = document.body.classList.contains('connected');
+      new MutationObserver(() => {
+        const now = document.body.classList.contains('connected');
+        if (now && !was) replayUntil = Date.now() + REPLAY_MS;
+        was = now;
+      }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    } catch (_) {}
+    function isReplay(s, at) { return at < replayUntil || at < s.firstAt + REPLAY_MS; }
+
     function sess(id) {
       id = String(id || '').toUpperCase();
       let s = sessions.get(id);
       if (!s) {
+      // Only the few sessions looked at last are kept, each up to LOG_BYTES.
+      if (sessions.size >= 3) {
+        let curId = ''; try { curId = String(sessionId || '').toUpperCase(); } catch (_) {}
+        for (const k of sessions.keys()) { if (sessions.size < 3) break; if (k !== curId) sessions.delete(k); }
+      }
         s = { id, log: [], bytes: 0, dec: new TextDecoder(), partial: '', attn: '', run: null, runs: [],
-              moments: [], seenMoment: new Set(), connectedAt: Date.now(), agent: '' };
+              moments: [], seenMoment: new Set(), firstAt: 0, agent: '' };
         sessions.set(id, s);
       }
       return s;
@@ -77,7 +115,7 @@
     function newRun(s, at) {
       return { start: at, end: 0, agent: s.agent || '', host: hostName(), filesRead: new Set(), filesChanged: new Set(),
                cmds: new Set(), commits: new Map(), passFirst: null, passLast: null, failLast: null, okPkgs: new Set(),
-               waits: 0, approvals: [], away: 0, hiddenSince: document.hidden ? at : 0, joinedLate: false };
+               waits: 0, approvals: [], away: 0, hiddenSince: document.hidden ? at : 0, joinedLate: false, waited: 0, inputSince: 0 };
     }
 
     const TOOL_RE = /^\s*[⏺●•✻⎿]?\s*(Read|Update|Edit|MultiEdit|Write|Bash|Grep|Glob|Search|List|WebFetch|Task)\((.{1,300}?)\)?\s*$/;
@@ -113,10 +151,11 @@
       s.pendMoment = null; clearTimeout(p.timer);
       const text = p.text.slice(0, 220);
       if (s.seenMoment.has(text)) return;
+      if (s.seenMoment.size > 500) s.seenMoment.clear();
       s.seenMoment.add(text);
       s.moments.push({ kind: p.k.kind, text, at: p.at });
       if (s.moments.length > 40) s.moments.shift();
-      offerMoment(s, p.k, text);
+      if (!p.old) offerMoment(s, p.k, text);
     }
     function readLine(s, line, at) {
       line = line.replace(/\s+$/, '');
@@ -133,7 +172,7 @@
       if (!s.agent) { const a = agentFrom(line); if (a) { s.agent = a; if (s.run && !s.run.agent) s.run.agent = a; } }
       for (const k of MOMENT_KINDS) {
         if (k.re.test(line)) {
-          s.pendMoment = { k, at, text: line.replace(/^\s*[⏺●•✻⎿>]\s*/, '').trim() };
+          s.pendMoment = { k, at, old: isReplay(s, at), text: line.replace(/^\s*[⏺●•✻⎿>]\s*/, '').trim() };
           s.pendMoment.timer = setTimeout(() => keepMoment(s), 1500);
           break;
         }
@@ -162,12 +201,23 @@
       if ((m = /^ok\s+(\S+)\s/.exec(line))) r.okPkgs.add(m[1]);
     }
 
+    // trimLog drops the oldest entries past the size or age cap, in one splice.
+    // An attention change in the log carries no bytes.
+    function trimLog(s, at) {
+      let n = 0;
+      while (n < s.log.length - 1 && (s.bytes > LOG_BYTES || at - s.log[n].t > LOG_AGE)) {
+        if (s.log[n].b) s.bytes -= s.log[n].b.byteLength;
+        n++;
+      }
+      if (n) s.log.splice(0, n);
+    }
     function output(id, u8) {
       if (!id || !u8 || !u8.byteLength) return;
       const s = sess(id), at = Date.now();
-      s.log.push({ t: at, b: u8.slice() });
+      if (!s.firstAt) s.firstAt = at;
+      s.log.push({ t: at, b: u8.slice(), old: isReplay(s, at) });
       s.bytes += u8.byteLength;
-      while (s.log.length > 1 && (s.bytes > LOG_BYTES || at - s.log[0].t > LOG_AGE)) s.bytes -= s.log.shift().b.byteLength;
+      trimLog(s, at);
       const text = s.partial + stripAnsi(s.dec.decode(u8, { stream: true }));
       const lines = text.split('\n');
       s.partial = lines.pop().slice(-400);
@@ -178,12 +228,15 @@
       if (!id) return;
       const s = sess(id), at = Date.now(), prev = s.attn, first = !s.attnSeen;
       s.log.push({ t: at, attn: a || '' });
+      trimLog(s, at);
+      // Time spent waiting on the person is not the agent's time.
+      if (s.run && prev === 'input' && a !== 'input' && s.run.inputSince) { s.run.waited += at - s.run.inputSince; s.run.inputSince = 0; }
       s.attn = a || '';
       s.attnSeen = true;
       if (a === 'working' || a === 'input') {
         // A run already going when this viewer connected: it began before we saw it.
         if (!s.run) { s.run = newRun(s, at); s.run.joinedLate = first; }
-        if (a === 'input' && prev !== 'input') { s.run.waits++; s.run.answered = false; }
+        if (a === 'input' && prev !== 'input') { s.run.waits++; s.run.answered = false; s.run.inputSince = at; }
       } else if (s.run) {
         finishRun(s, at);
       }
@@ -213,12 +266,13 @@
                filesChanged: r.filesChanged.size, cmds: r.cmds.size, commits: r.commits.size,
                commitMsgs: [...r.commits.values()].slice(-3), passFirst: r.passFirst, passLast: r.passLast,
                failLast: r.failLast, okPkgs: r.okPkgs.size, waits: r.waits, approvals: r.approvals, away: r.away,
-               joinedLate: !!r.joinedLate };
+               joinedLate: !!r.joinedLate, waited: r.waited || 0 };
     }
     function finishRun(s, at) {
       const r = s.run;
       s.run = null;
       if (r.hiddenSince) { r.away += at - r.hiddenSince; r.hiddenSince = 0; }
+      if (r.inputSince) { r.waited += at - r.inputSince; r.inputSince = 0; }
       r.end = at;
       if (r.end - r.start < 4000) return;
       const p = plainRun(r);
@@ -346,14 +400,39 @@
     function hex(n) { return '#' + n.toString(16).padStart(6, '0'); }
     // snapRows reads rows [from, from+count) of an xterm buffer as styled runs,
     // scrubbed in place (a hidden word keeps its width, so the grid holds).
+    // A long line (a key, say) wraps over several rows: it is scrubbed whole,
+    // then each cell takes its own slice back, by the cell's offset in the
+    // text, so a wide character doesn't shift the rest.
+    function cleanCells(t, buf, y, cache) {
+      let y0 = y;
+      while (y0 > 0 && buf.getLine(y0) && buf.getLine(y0).isWrapped) y0--;
+      if (cache.has(y0)) return cache.get(y0).get(y);
+      const per = new Map(), parts = [];
+      let cell = buf.getNullCell(), off = 0;
+      for (let yy = y0; yy === y0 || (buf.getLine(yy) && buf.getLine(yy).isWrapped); yy++) {
+        const line = buf.getLine(yy);
+        if (!line) break;
+        const cells = [];
+        for (let x = 0; x < t.cols; x++) {
+          cell = line.getCell(x, cell);
+          if (!cell) break;
+          const ch = cell.getWidth() === 0 ? '' : (cell.getChars() || ' ');
+          cells.push([off, ch.length]); parts.push(ch); off += ch.length;
+        }
+        per.set(yy, cells);
+      }
+      const raw = parts.join(''), clean = scrub(raw, true), out = new Map();
+      for (const [yy, cells] of per) out.set(yy, clean === raw ? null : cells.map(([o, n]) => clean.substr(o, n)));
+      cache.set(y0, out);
+      return out.get(y);
+    }
     function snapRows(t, from, count) {
-      const buf = t.buffer.active, rows = [];
+      const buf = t.buffer.active, rows = [], cache = new Map();
       let cell = buf.getNullCell();
       for (let y = from; y < from + count; y++) {
         const line = buf.getLine(y);
         if (!line) { rows.push([]); continue; }
-        const raw = line.translateToString(false, 0, t.cols);
-        const clean = scrub(raw, true);
+        const clean = cleanCells(t, buf, y, cache);
         const runs = [];
         let run = null;
         for (let x = 0; x < t.cols; x++) {
@@ -364,7 +443,7 @@
           let bg = cell.isBgRGB() ? hex(cell.getBgColor()) : cell.isBgPalette() ? pal(cell.getBgColor()) : null;
           if (cell.isInverse()) { const f = fg; fg = bg || '#0d1117'; bg = f || '#e6edf3'; }
           const bold = !!cell.isBold(), dim = !!cell.isDim();
-          const ch = clean !== raw ? (clean[x] !== undefined ? clean[x] : ' ') : (cell.getChars() || ' ');
+          const ch = clean ? (clean[x] || ' ') : (cell.getChars() || ' ');
           if (run && run.fg === fg && run.bg === bg && run.bold === bold && run.dim === dim) run.text += ch;
           else { run = { x, text: ch, fg, bg, bold, dim }; runs.push(run); }
         }
@@ -396,6 +475,11 @@
           if (/[\u23FA\u25CF]/.test(text)) {
             [...text].forEach((ch, i) => { if (/[\u23FA\u25CF]/.test(ch)) { ctx.beginPath(); ctx.arc(x + (r.x + i + 0.5) * cw, yy + lh / 2, cw * 0.44, 0, 7); ctx.fill(); } });
             text = text.replace(/[\u23FA\u25CF]/g, ' ');
+          }
+          // So is a hidden character's \u2022, one to a cell, so the text after it keeps its column.
+          if (text.includes('\u2022')) {
+            [...text].forEach((ch, i) => { if (ch === '\u2022') { ctx.beginPath(); ctx.arc(x + (r.x + i + 0.5) * cw, yy + lh / 2, cw * 0.17, 0, 7); ctx.fill(); } });
+            text = text.replace(/\u2022/g, ' ');
           }
           // Held to its cells: a glyph from a fallback font (a dot, a box line) can run wider.
           ctx.fillText(text, x + r.x * cw, yy + (lh - px) / 2, text.length * cw);
@@ -447,7 +531,8 @@
         L.push(['YOU SAID YES' + (ph ? ' FROM PHONE' : ''), String(ph || approvals.length)]);
       }
       L.push(['-']);
-      L.push(['AGENT TIME', dur(total).toUpperCase(), 'big']);
+      L.push(['AGENT TIME', dur(Math.max(0, total - (r.waited || 0))).toUpperCase(), 'big']);
+      if ((r.waited || 0) > 60000) L.push(['WAITED ON YOU', dur(r.waited).toUpperCase()]);
       if (r.away > 60000) L.push(['WHILE YOU WERE AWAY', dur(r.away).toUpperCase()]);
       if (r.joinedLate) L.push(['', '(IT STARTED BEFORE YOU LOOKED)']);
       return L;
@@ -459,8 +544,11 @@
       const m = mk(1, 1).getContext('2d');
       m.font = 'italic ' + px + 'px ' + MONO;
       // A note can't put a price on the card: amounts of money are blanked out.
-      const MONEY = /[$€£¥₹]\s?\d[\d,.]*|\d[\d,.]*\s?(usd|eur|gbp|inr|dollars?|bucks|euros?|pounds?|rupees?)\b/gi;
-      if (opts.note) noteLines.push(...wrap(m, scrub('"' + opts.note + '"').replace(MONEY, '•••'), PW - 96).slice(0, 3));
+      // So are the words a bill is made of.
+      const CUR = 'usd|eur|gbp|inr|cad|aud|jpy|cny|chf|rs\\.?|dollars?|bucks|euros?|pounds?|rupees?|yen';
+      const MONEY = new RegExp('[$€£¥₹]\\s?\\d[\\d,.]*|\\b(' + CUR + ')\\s?\\d[\\d,.]*|\\d[\\d,.]*\\s?(' + CUR + ')\\b', 'gi');
+      const BILL = /\b(paid|payment|invoice|receipt|total|subtotal|amount( due)?|balance|billed?|charged?|refund(ed)?|tax|vat|gst)\b(\s*[:#]?\s*\d[\d,.]*)?/gi;
+      if (opts.note) noteLines.push(...wrap(m, scrub('"' + opts.note + '"').replace(MONEY, '•••').replace(BILL, '•••'), PW - 96).slice(0, 3));
       const lastOk = (r.approvals || [])[(r.approvals || []).length - 1];
       const stamp = lastOk ? (lastOk.phone ? 'I SAID YES FROM MY PHONE' : 'I SAID YES') + ' · ' + clock(lastOk.at) : '';
       const PH = 250 + lines.length * lh + noteLines.length * lh + (noteLines.length ? 30 : 0) + 110 + (stamp ? 120 : 0);
@@ -487,7 +575,7 @@
       ctx.save();
       ctx.clip();
       ctx.translate(W / 2, py0 + PH / 2); ctx.rotate(-0.5);
-      ctx.font = '700 22px ' + SANS; ctx.fillStyle = 'rgba(31,111,235,.10)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = '700 22px ' + SANS; ctx.fillStyle = 'rgba(31,111,235,.13)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       const motto = 'AI AGENT LOG  ·  NOT A RECEIPT  ·  NO PAYMENT  ·  ';
       const span = Math.hypot(PW, PH);
       for (let i = 0, yy = -span / 2; yy < span / 2; yy += 58, i++) ctx.fillText(motto.repeat(6), (i % 2) * 120, yy);
@@ -1046,9 +1134,12 @@
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 30000);
     }
+    // copyImage takes the picture or a promise of it. Safari wants the promise
+    // (written inside the tap); a browser that refuses one gets the picture.
     async function copyImage(blob) {
       if (!navigator.clipboard || !window.ClipboardItem) return false;
-      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); return true; } catch (_) { return false; }
+      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); return true; } catch (_) {}
+      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': await blob })]); return true; } catch (_) { return false; }
     }
 
     // ------------------------------------------------------------------ UI
@@ -1066,7 +1157,7 @@
       ['phone', 'Phone shot', 'This terminal, on a phone'],
       ['wrapped', 'Wrapped', 'Your week with agents, as stories'],
     ];
-    const PRIVACY = 'Made on this device. Secrets, tokens, e-mail and IP addresses, home folders, this machine’s name and the session’s id are hidden before anything is shared.';
+    const PRIVACY = 'Made on this device. Secrets, tokens and keys, e-mail and IP addresses, home folders, user names, this machine’s name and the session’s id and PIN are hidden before anything is shared. Look before you post: a name or a client in your own text can’t always be told apart.';
 
     function el(tag, attrs, kids) {
       const e = document.createElement(tag);
@@ -1092,6 +1183,12 @@
     }
     function open(tab, extra) {
       ensureSheet();
+      // Recording a clip: the sheet stays on it, nothing rebuilds it.
+      if (lapseBusy) { sheet.classList.add('open'); back.classList.add('open'); return; }
+      // Another session: its own quote, clip and choices, not the last one's.
+      let sid = ''; try { sid = String(sessionId || '').toUpperCase(); } catch (_) {}
+      if (state.sid !== sid) state = { tab: 'home', mode: state.mode, sid };
+      state.wrappedAll = null;
       state.tab = tab || 'home';
       Object.assign(state, extra || {});
       const was = sheet.classList.contains('open');
@@ -1202,19 +1299,26 @@
       return box;
     }
     // The maker's buttons sit in the sheet's footer, always in reach.
-    function actions(getFile, kind, lead) {
+    // The file is made ahead, just after the preview shows: iOS lets a tap
+    // share or copy only while the tap is fresh, and drawing a card at full
+    // size can outlast it. keepFile, when given, is what Save keeps (one slide,
+    // not seven downloads the browser would block).
+    function actions(makeFile, kind, lead, keepFile) {
+      let made = null;
+      const getFile = () => made || (made = makeFile().catch(e => { made = null; throw e; }));
+      setTimeout(() => { if (foot && foot.contains(row)) getFile().catch(() => {}); }, 250);
       const say = el('span', { class: 'mo-said' });
       const flash = t => { say.textContent = t; setTimeout(() => { if (say.textContent === t) say.textContent = ''; }, 2500); };
       const row = el('div', { class: 'mo-actions' }, [say]);
       if (lead) row.appendChild(lead);
       if (kind !== 'video' && kind !== 'slides' && navigator.clipboard && window.ClipboardItem) {
         row.appendChild(el('button', { type: 'button', class: 'mo-btn', text: 'Copy', onclick: async () => {
-          const f = await getFile(); if (!f) return;
-          flash(await copyImage(f) ? 'Copied' : 'Could not copy');
+          // The clipboard takes the picture as a promise, inside the tap.
+          flash(await copyImage(getFile()) ? 'Copied' : 'Could not copy');
         } }));
       }
       row.appendChild(el('button', { type: 'button', class: 'mo-btn', text: 'Save', onclick: async () => {
-        const f = await getFile(); if (!f) return;
+        const f = await (keepFile ? keepFile() : getFile()); if (!f) return;
         (Array.isArray(f) ? f : [f]).forEach(saveFile); flash('Saved');
       } }));
       row.appendChild(el('button', { type: 'button', class: 'mo-btn primary', text: 'Share', onclick: async () => {
@@ -1297,7 +1401,7 @@
       const spans = [];
       for (const ch of choices) spans.push({ label: ch.label, from: ch.run.start - 1500, to: ch.run.live ? 0 : ch.run.end + 1500 });
       if (s && s.log.length) {
-        const first = s.log[0].t;
+        const first = (s.log.find(e => !e.old) || s.log[0]).t;
         for (const m of [5, 15, 30]) if (Date.now() - first > m * 60e3 * 0.5) spans.push({ label: 'Last ' + m + ' min', from: Date.now() - m * 60e3, to: 0 });
         spans.push({ label: 'Since you connected · ' + dur(Date.now() - first), from: first, to: 0 });
       }
@@ -1430,15 +1534,23 @@
         state.slide = ev.clientX - r.left < r.width / 3 ? Math.max(0, state.slide - 1) : (state.slide + 1) % slides.length;
         render();
       });
-      const all = async () => {
-        const files = [];
-        for (let i = 0; i < slides.length; i++) files.push(new File([await toBlob(drawSlide(slides[i], i, slides.length))], stampName('wrapped-' + (i + 1), 'png'), { type: 'image/png' }));
-        return files;
+      // The set is made once for the period, not again on every slide tapped.
+      const all = () => {
+        if (state.wrappedAll && state.wrappedAll.period === state.period) return state.wrappedAll.p;
+        const p = (async () => {
+          const files = [];
+          for (let i = 0; i < slides.length; i++) files.push(new File([await toBlob(drawSlide(slides[i], i, slides.length))], stampName('wrapped-' + (i + 1), 'png'), { type: 'image/png' }));
+          return files;
+        })();
+        state.wrappedAll = { period: state.period, p };
+        p.catch(() => { if (state.wrappedAll && state.wrappedAll.p === p) state.wrappedAll = null; });
+        return p;
       };
-      actions(all, 'slides');
+      const one = async () => new File([await toBlob(c)], stampName('wrapped-' + (state.slide + 1), 'png'), { type: 'image/png' });
+      actions(all, 'slides', null, one);
       const ctl = controls(body);
       ctl.appendChild(group('Period', chips([['week', 'This week'], ['month', 'This month'], ['all', 'All time']].map(([v, l]) => ({ label: l, v, on: v === state.period })), x => { state.period = x.v; state.slide = 0; render(); })));
-      ctl.appendChild(el('div', { class: 'mo-hint', text: 'Slide ' + (state.slide + 1) + ' of ' + slides.length + '. Tap the right of the slide for the next, the left to go back. Share sends them all. Counts runs this device saw.' }));
+      ctl.appendChild(el('div', { class: 'mo-hint', text: 'Slide ' + (state.slide + 1) + ' of ' + slides.length + '. Tap the right of the slide for the next, the left to go back. Share sends them all; Save keeps this one. Counts runs this device saw.' }));
     }
 
     // Offers, at the corner of the terminal: a run just finished, or a line worth a meme.
