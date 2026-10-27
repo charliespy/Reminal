@@ -97,7 +97,16 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// to get more after it ("· /usage-credits to keep using Claude").
 		`you.?vehityour(?:session|weekly|daily|opus|sonnet|fable|usagecredit|usage|monthlyspend|individualspend|spend|fast)?limit`,
 		`you.?vehityour(?:team|org).?s(?:shared|monthly)[a-z]{0,16}(?:limit|budget)`,
-		`you.?reoutofusagecredits`,
+		`you.?vehityourchannel.?smonthly[a-z]{0,16}(?:limit|budget)`,
+		`(?:you.?re)?outofusagecredits`,
+		// Claude Code 2.1.312: a limit that could not be lifted, and the
+		// automatic continue that gave up. Each with its own row ending only.
+		// ("Fast mode disabled · Out of usage credits" is not one: fast mode
+		// goes off and the session carries on; nor is "Continue now at lower
+		// priority …", an option that keeps it going.)
+		`couldn.?tresetyour5-hourlimitwiththislogin(?:·run/login,thentryagain)?`,
+		`a5-hourlimitresetisn.?tavailablerightnow`,
+		`automaticcontinuestoppedafterrepeatedusagelimithits(?:·thistaskwillnotresumeonitsown\(/rate-limit-optionstotryagain\))?`,
 		`yourorgisoutofusage(?:credits)?`,
 		`usagelimitreached`,
 		`paused·usagelimit`,
