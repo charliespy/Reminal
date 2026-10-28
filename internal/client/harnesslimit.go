@@ -473,7 +473,7 @@ func claudeFooterLimit(rows []string) string {
 	said := ""
 	for _, r := range rows[claudeBoxEnd(rows)+1:] {
 		t := strings.TrimSpace(r)
-		if claudeFooterNeverRow(t) {
+		if claudeFooterNeverRow(r, t) {
 			return ""
 		}
 		parts := limitFooterGap.Split(t, -1)
@@ -488,12 +488,14 @@ func claudeFooterLimit(rows []string) string {
 // empty lines, a box's border, a quote.
 const claudeFooterNever = "~│╭╰┃┌└" + limitQuoteGlyphs
 
-// claudeFooterNeverRow says whether t, a row trimmed, is one Claude Code's
-// footer never draws: one claudeFooterNever opens, an editor's mode ("--
-// INSERT --") or a pager's prompt (":", "(END)") (review).
-func claudeFooterNeverRow(t string) bool {
-	return strings.ContainsAny(firstRune(t), claudeFooterNever) || t == ":" || t == "(END)" ||
-		len(t) > 6 && strings.HasPrefix(t, "-- ") && strings.HasSuffix(t, " --")
+// claudeFooterNeverRow says whether a row (r as drawn, t trimmed) is one
+// Claude Code's footer never draws: one claudeFooterNever opens, or, at the
+// row's start, an editor's mode ("-- INSERT --") or a pager's prompt (":",
+// "(END)"). Claude Code indents its footer, its own vim mode ("-- INSERT
+// --") too (review).
+func claudeFooterNeverRow(r, t string) bool {
+	return strings.ContainsAny(firstRune(t), claudeFooterNever) || r == t && (t == ":" || t == "(END)" ||
+		len(t) > 6 && strings.HasPrefix(t, "-- ") && strings.HasSuffix(t, " --"))
 }
 
 // claudeBoxEnd is the row of the rule that closes Claude Code's lowest input
@@ -501,18 +503,29 @@ func claudeFooterNeverRow(t string) bool {
 // rule), or the screen's last row when it shows none: nothing is under it.
 // Its end is the first row under the prompt that is the same rule as the
 // one above it, as Claude Code draws both: a draft's rules are indented (a
-// pasted screen), and a status line's own bar comes after it (review).
+// pasted screen), and a status line's own bar comes after it. A screen
+// redrawn at a new width may leave the two unlike: then the first rule
+// under it. Only the lowest box counts: one above it is an older frame
+// (review).
 func claudeBoxEnd(rows []string) int {
 	for i := len(rows) - 1; i > 0; i-- {
 		top := strings.TrimRight(rows[i-1], " ")
 		if !strings.HasPrefix(rows[i], "❯") || !attnIsRule(top) {
 			continue
 		}
+		end := -1
 		for j := i + 1; j < len(rows); j++ {
 			if strings.TrimRight(rows[j], " ") == top {
 				return j
 			}
+			if end < 0 && attnIsRule(rows[j]) {
+				end = j
+			}
 		}
+		if end >= 0 {
+			return end
+		}
+		break
 	}
 	return len(rows) - 1
 }
