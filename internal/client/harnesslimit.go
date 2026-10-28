@@ -55,9 +55,9 @@ type limitNotice struct {
 	// capital-first rule then allows a row that starts with one (review).
 	modelLead bool
 	// last: the notice is its answer's last row. Under the rows it took, up
-	// to the prompt, only blank rows, a box rule or a turn's time line: an
-	// answer that quotes a notice drawn as one (●) and goes on is not it
-	// (review).
+	// to the prompt, only blank rows, a box rule, a turn's time line or its
+	// hint: an answer or a tool's output that quotes a notice drawn as one
+	// (●, ⎿) and goes on is not it (review).
 	last bool
 }
 
@@ -73,12 +73,13 @@ func modelLed(ns []limitNotice) []limitNotice {
 // space: a model's id, if modelLeads says so.
 var modelLeadRe = regexp.MustCompile(`^[a-z][a-z0-9.]{0,11}(?:-[a-z0-9.]{1,12}){1,5}\s`)
 
-// modelVendorRe opens a model's id that may have no digit in it.
-var modelVendorRe = regexp.MustCompile(`^(?:gpt|claude|gemini|qwen|o\d|llama|mistral|deepseek|grok|kimi|glm|codestral|devstral)`)
+// modelVendorRe opens a model's id that may have no digit in it: a known
+// maker's, or one OpenCode serves under a name of its own ("big-pickle").
+var modelVendorRe = regexp.MustCompile(`^(?:gpt|claude|gemini|qwen|o\d|llama|mistral|deepseek|grok|kimi|glm|codestral|devstral|big-pickle)`)
 
 // modelLeads reports whether row, as drawn, starts with a model's id: a
-// hyphenated word with a digit in it, or one a known maker's id opens
-// ("gpt-5", "claude-opus-4"); never a word like "re-run" (review).
+// hyphenated word with a digit in it, or one modelVendorRe knows ("gpt-5",
+// "claude-opus-4", "big-pickle"); never a word like "re-run" (review).
 func modelLeads(row string) bool {
 	m := modelLeadRe.FindString(row)
 	return m != "" && (strings.ContainsAny(m, "0123456789") || modelVendorRe.MatchString(m))
@@ -203,7 +204,7 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// budget, credits run out, and the plain headings. Whole rows: what is
 	// read here may be acted on, so a sentence that only starts with them is
 	// never one.
-	"claude": append(append(append(onGlyph("⎿", wholeNotices(claudeHitLimit...)), onGlyph("●", asLast(wholeRows(claudeEndTold, claudeHitLimit...)))...), wholeNotices(
+	"claude": append(append(append(onGlyph("⎿", asLast(wholeNotices(claudeHitLimit...))), onGlyph("●", asLast(wholeRows(claudeEndTold, claudeHitLimit...)))...), wholeNotices(
 		// Claude Code 2.1.312: what to do next after it ("You're out of
 		// usage credits. /model to switch models.").
 		`you.?reoutofusagecredits(?:\.(?:/modeltoswitchmodels|switchtoanothermodel))?`,
@@ -224,7 +225,7 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// cancel" is at its limit too: held until then, as any notice with a
 		// time is, and going on by itself (not "Fable limit reached ·
 		// continuing on Opus …", which goes on now, on another model).
-		onGlyph("⎿", wholeNotices(
+		onGlyph("⎿", asLast(wholeNotices(
 			`outofusagecredits`,
 			`usagelimitreached(?:again)?(?:·continuingautomatically(?:at`+limitWhen+`|in`+limitWait+`)?·esctocancel)?`,
 			`(?:fable|opus|sonnet)limitreached`,
@@ -233,7 +234,7 @@ var harnessLimitNotices = map[string][]limitNotice{
 			`you.?reoutofextrausage`,
 			`you.?vereachedyour(?:session|weekly|daily|monthly|opus|sonnet|fable|usage)?limit`,
 			`yourorganizationisoutofusagecredits(?:\.contactyouradmintoaddmore)?`,
-		))...),
+		)))...),
 	// Codex 0.163–0.165: "You’ve hit your usage limit. … try again at 3:05
 	// PM." (the time on the next row when it wraps), its workspace's limit
 	// and credits, its included usage, and the service's quota. Each with
@@ -456,8 +457,8 @@ func limitLastAboveBox(rows []string) bool {
 				}
 			}
 			return false
-		case strings.HasPrefix(t, "✻"), strings.HasPrefix(t, "/"), strings.HasPrefix(strings.ToLower(t), "run /"):
-			continue // a turn's time line; the notice's own hint ("/upgrade to increase your usage limit.", "Run /usage-credits to ask your admin for more")
+		case limitUnderNotice(t):
+			continue
 		default:
 			return false
 		}
@@ -472,18 +473,27 @@ func firstRune(s string) string {
 	return ""
 }
 
+// limitUnderNotice says whether t, a row trimmed, is one drawn under a
+// notice before its prompt: a turn's time line ("✻ Churned for 0s"), or the
+// notice's own hint ("/upgrade to increase your usage limit.", "Run
+// /usage-credits to ask your admin for more").
+func limitUnderNotice(t string) bool {
+	return strings.HasPrefix(t, "✻") || strings.HasPrefix(t, "/") || strings.HasPrefix(strings.ToLower(t), "run /")
+}
+
 // limitAnswerEnds says whether rows, those under a notice, end its answer:
-// up to the prompt, or the screen's end, only blank rows, a box rule or a
-// turn's time line ("✻ Churned for 0s"). A row of words, the answer going
+// up to the prompt (its mark at the row's start, not an answer's indented
+// "> " quote), or the screen's end, only rows with no words (a box's rule),
+// a turn's time line or the notice's hint. A row of words, the answer going
 // on, says not.
 func limitAnswerEnds(rows []string) bool {
 	for _, r := range rows {
 		t := strings.TrimSpace(r)
 		switch {
-		case t == "", strings.HasPrefix(t, "✻"):
-			continue
-		case attnIsRule(r), strings.ContainsAny(firstRune(t), limitPromptGlyphs):
+		case strings.ContainsAny(firstRune(r), limitPromptGlyphs):
 			return true
+		case limitUnderNotice(t), !strings.ContainsFunc(t, func(c rune) bool { return unicode.IsLetter(c) || unicode.IsDigit(c) }):
+			continue
 		default:
 			return false
 		}
