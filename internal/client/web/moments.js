@@ -25,13 +25,25 @@
     const users = new Set();
     const NOT_USERS = /^(shared|public|guest|default|root|runner|admin|user|users|home|me)$/i;
     function learnUser(n) { if (n && n.length >= 2 && n.length <= 32 && !NOT_USERS.test(n) && users.size < 20) users.add(n); }
-    // inLink says the text at index at of s is part of a link: its word (since
-    // the last space) has a scheme's :// before it.
-    function inLink(s, at) {
-      let i = at;
-      while (i > 0 && !/\s/.test(s[i - 1])) i--;
-      return s.slice(i, at).includes('://');
+    // linkSpans are where s has links (a scheme, ://, up to the next space),
+    // found in one pass; inLinks(spans) is a test for an index into s, for
+    // indexes asked in increasing order (a replace's matches), so the whole
+    // scrub stays one pass over s.
+    function linkSpans(s) {
+      const out = [];
+      for (const m of s.matchAll(/[a-z][\w+.-]*:\/\/\S+/gi)) out.push([m.index, m.index + m[0].length]);
+      return out;
     }
+    function inLinks(spans) {
+      let i = 0;
+      return at => {
+        while (i < spans.length && spans[i][1] <= at) i++;
+        return i < spans.length && spans[i][0] <= at;
+      };
+    }
+    // keySegment: one part of a path that is a key by itself (a webhook's
+    // secret): long, mixed case, and digits or longer still.
+    const keySegment = seg => seg.length >= 16 && /[A-Z]/.test(seg) && /[a-z]/.test(seg) && (/\d/.test(seg) || seg.length >= 20);
     function scrub(s, keep) {
       if (!s) return s;
       const mask = m => keep ? '•'.repeat(m.length) : '•••';
@@ -48,7 +60,14 @@
       // character before is taken as `pre`): tried at every place inside a long
       // run, a hex dump, they would take seconds. Not a lookbehind, which an
       // older Safari can't parse at all.
-      s = s.replace(/(^|[^A-Za-z0-9+\/])((?=[A-Za-z0-9+\/]*\d)(?=[A-Za-z0-9+\/]*[A-Z])(?=[A-Za-z0-9+\/]*[a-z])[A-Za-z0-9+\/]{24,}={0,2})/g, (m, pre, v, at, all) => pre + (v.includes('/') && (v.length < 40 || inLink(all, at)) ? v : mask(v)));
+      const inLink = inLinks(linkSpans(s));
+      s = s.replace(/(^|[^A-Za-z0-9+\/])((?=[A-Za-z0-9+\/]*\d)(?=[A-Za-z0-9+\/]*[A-Z])(?=[A-Za-z0-9+\/]*[a-z])[A-Za-z0-9+\/]{24,}={0,2})/g, (m, pre, v, at) => {
+        if (!v.includes('/')) return pre + mask(v);
+        if (v.length >= 40 && !inLink(at)) return pre + mask(v);
+        // A path (short, or in a link): it stays, but a part of it that is a key
+        // by itself is hidden.
+        return pre + v.split('/').map(seg => keySegment(seg) ? mask(seg) : seg).join('/');
+      });
       s = s.replace(/\b(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]{32,}\b/g, mask);
       s = s.replace(/(^|[^\w.+-])([\w.+-]+@[\w-]+\.[\w.-]+)/g, (m, pre, v) => pre + mask(v));
       // A password given after a space: --password x, sshpass -p x, curl -u user:x.
@@ -1230,19 +1249,23 @@
       // Save took two taps. The re-render waits for the tap, runs first, and
       // the tap goes to the new copy of the button, which sees what was typed.
       sheet.addEventListener('pointerdown', () => { pressing = true; clearTimeout(pressTimer); }, true);
-      sheet.addEventListener('pointerup', () => { clearTimeout(pressTimer); pressTimer = setTimeout(endPress, 600); }, true);
-      sheet.addEventListener('pointercancel', endPress, true);
+      // The tap may end outside the sheet: its end is listened for everywhere.
+      window.addEventListener('pointerup', () => { clearTimeout(pressTimer); pressTimer = setTimeout(endPress, 600); }, true);
+      window.addEventListener('pointercancel', endPress, true);
       sheet.addEventListener('click', e => {
         clearTimeout(pressTimer);
         pressing = false;
         if (!pendingRender) return;
         pendingRender = false;
         const sig = b => [b.className, b.textContent, b.getAttribute('aria-label')].join('\n');
+        // The same button among its namesakes (two chips with one label): by
+        // its place among them.
+        const namesakes = key => [...sheet.querySelectorAll('button')].filter(x => sig(x) === key);
         const b = e.target.closest('button');
-        const key = b && sig(b);
+        const key = b && sig(b), nth = b ? namesakes(key).indexOf(b) : -1;
         render();
         if (!key) return;
-        const twin = [...sheet.querySelectorAll('button')].find(x => sig(x) === key);
+        const twin = namesakes(key)[nth];
         if (!twin) return;
         e.stopImmediatePropagation(); e.preventDefault();
         twin.click();
@@ -1255,7 +1278,7 @@
         if (e.key === 'Tab') { trapTab(e); return; }
         if (e.key !== 'Escape') return;
         e.preventDefault(); e.stopImmediatePropagation();
-        if (confirmEl) { dismissConfirm(); return; }
+        if (confirmEl) { keepEditing(); return; }
         if (lapseBusy) return;
         if (state.tab !== 'home') { state.tab = 'home'; render(); } else requestClose();
       }, true);
@@ -1290,7 +1313,8 @@
       // The page's own small dialog (the share card's frame, title, hint and
       // button row; its plain green button and button.danger), so it looks
       // like the viewer's other questions.
-      const keep = el('button', { type: 'button', text: 'Keep editing', onclick: dismissConfirm });
+      confirmFrom = document.activeElement;
+      const keep = el('button', { type: 'button', text: 'Keep editing', onclick: keepEditing });
       const drop = el('button', { type: 'button', class: 'danger', text: 'Discard', onclick: discard });
       confirmEl = el('div', { class: 'mo-confirm', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': 'mo-confirm-t' }, [
         el('div', { class: 'share-card' }, [
@@ -1300,11 +1324,20 @@
         ]),
       ]);
       // A tap on the dimmed part around the question is a "keep editing".
-      confirmEl.addEventListener('click', e => { if (e.target === confirmEl) dismissConfirm(); });
+      confirmEl.addEventListener('click', e => { if (e.target === confirmEl) keepEditing(); });
       sheet.appendChild(confirmEl);
       keep.focus({ preventScroll: true });
     }
     function dismissConfirm() { if (confirmEl) { confirmEl.remove(); confirmEl = null; } }
+    // keepEditing answers the question "keep": it goes, and focus goes back to
+    // where it was (or the sheet), not lost to the page.
+    let confirmFrom = null;
+    function keepEditing() {
+      const from = confirmFrom;
+      confirmFrom = null;
+      dismissConfirm();
+      ((from && from.isConnected && sheet.contains(from)) ? from : sheet).focus({ preventScroll: true });
+    }
     function discard() {
       dismissConfirm();
       state = { tab: 'home', mode: state.mode, sid: state.sid };
