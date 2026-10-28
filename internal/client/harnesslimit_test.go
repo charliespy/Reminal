@@ -111,6 +111,9 @@ var limitScreens = []struct {
 	{"qwen", "✕ [API Error: Request failed with status code 429 (Status: 429)]\nPossible quota limitations in place or slow response times detected. Please wait and try again later.\n│ > │", time.Time{}},
 	{"opencode", "┃  Usage limit reached. It will reset in 3 hours 20 minutes. To continue using this model now, enable usage from your available balance\n┃", limitLA(2026, 10, 19, 13, 20)},
 	{"opencode", "┃  Rate limit exceeded, retry in 45s\n┃", limitLA(2026, 10, 19, 10, 0).Add(45 * time.Second)},
+	// Led by the model's id, in lower case as OpenCode writes it (review).
+	{"opencode", "┃  claude-sonnet-4 usage limit reached. It will reset in 3 hours 20 minutes.\n┃", limitLA(2026, 10, 19, 13, 20)},
+	{"opencode", "┃  gpt-5 usage limit reached. To continue using this model now, enable usage from your available balance\n┃", time.Time{}},
 	{"goose", "  Ran into this error: Rate limit exceeded: 429 Too Many Requests.\n\n  Please retry if you think this is a transient or recoverable error.\n( O)> ", time.Time{}},
 	{"goose", "  Rate limited — wait a moment and try again.\n( O)> ", time.Time{}},
 	{"crush", "  Provider Error\n  You exceeded your current quota, please check your plan and billing details.\n", time.Time{}},
@@ -176,6 +179,11 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		{"claude", "  ⎿  Continue now at lower priority after reaching your 5-hour limit; run again to stop", "an option that keeps it going"},
 		{"claude", "● Out of usage credits is what it shows when the balance runs out.", "an answer quoting the notice"},
 		{"claude", "● You've hit your channel's monthly spend limit. That row is new in this version.", "an answer quoting the notice"},
+		// An answer's own sentence, as a notice's words with nothing a notice
+		// carries after them (no reset, no command): not the notice (review).
+		{"claude", "● You've hit your session limit.", "an answer saying it, no reset or command"},
+		{"claude", "● Your org is out of usage.", "an answer saying it, no command"},
+		{"opencode", "┃  gpt-5 usage limit reached is what it printed earlier.", "a sentence that starts with a model's id and goes on"},
 		{"claude", "● Couldn't reset your 5-hour limit with this login · run /login, then try again, is the row it prints.", "an answer quoting the notice"},
 		{"claude", "● A 5-hour limit reset isn't available right now, so I waited.", "an answer quoting the notice"},
 		{"claude", "● Automatic continue stopped after repeated usage limit hits · This task will not resume on its own (/rate-limit-options to try again) is the new row.", "an answer quoting the notice"},

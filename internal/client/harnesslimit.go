@@ -50,7 +50,22 @@ type limitNotice struct {
 	// all, which the row must show: Antigravity's "AI: Out of credits", not
 	// a sentence's "AI: out of credits" (review).
 	cased string
+	// modelLead: the notice may start with a model's id, in lower case as
+	// the CLI writes it ("gpt-5 usage limit reached."): a whole notice's
+	// capital-first rule then allows a row that starts with one (review).
+	modelLead bool
 }
+
+// modelLed is ns, each allowed to start with a model's id in lower case.
+func modelLed(ns []limitNotice) []limitNotice {
+	for i := range ns {
+		ns[i].modelLead = true
+	}
+	return ns
+}
+
+// modelLeadRe is a row, as drawn, that starts with a model's id and a space.
+var modelLeadRe = regexp.MustCompile(`^[a-z][a-z0-9.]{0,11}(?:-[a-z0-9.]{1,12}){1,5}\s`)
 
 // onCased is ns, each matched only on a row that writes lit as it is.
 func onCased(lit string, ns []limitNotice) []limitNotice {
@@ -105,6 +120,23 @@ const limitCommand = `(?:[·.](?:run)?/usage-credits(?:tokeepusing` + claudeMode
 // 1:30pm"), "· progress saved", and the command it points to.
 const claudeEnd = `(?:·?(?:limit)?resets?(?:at)?` + limitWhen + `)?(?:·progresssaved)?` + limitCommand + `\.?`
 
+// claudeEndTold is claudeEnd with a reset time or a command in it, not
+// optional: what a notice Claude Code draws as an answer (●) always carries,
+// and an answer's own sentence ("● You've hit your session limit.") does not.
+var claudeEndTold = `(?:(?:·?(?:limit)?resets?(?:at)?` + limitWhen + `)(?:·progresssaved)?` + limitCommand +
+	`|(?:·progresssaved)?` + strings.TrimSuffix(limitCommand, "?") + `)\.?`
+
+// claudeHitLimit are Claude Code's "You've hit your … limit" notices (a
+// daily or an individual spend limit too, a team's, a channel's), and its
+// organization out of usage: counted on its notice row (⎿), or drawn as an
+// answer (●) only with the reset time or the command a notice carries.
+var claudeHitLimit = []string{
+	`you.?vehityour(?:session|weekly|daily|monthly|opus|sonnet|fable|usagecredit|usage|monthlyspend|individualspend|spend|fast)?limit`,
+	`you.?vehityour(?:team|org).?s(?:shared|monthly)[a-z]{0,16}(?:limit|budget)`,
+	`you.?vehityourchannel.?smonthly[a-z]{0,16}(?:limit|budget)`,
+	`yourorgisoutofusage(?:credits)?(?:·(?:addfundstocontinue|contactyouradmin))?`,
+}
+
 // wholeRows are notices read as whole rows: each's words, then only what
 // end allows, then the row's end; read with the rows it wraps onto. A row
 // that goes on in words of its own is a sentence, not the notice (an
@@ -146,12 +178,7 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// budget, credits run out, and the plain headings. Whole rows: what is
 	// read here may be acted on, so a sentence that only starts with them is
 	// never one.
-	"claude": append(wholeNotices(
-		// Later, also a daily or an individual spend limit, and the command
-		// to get more after it ("· /usage-credits to keep using Claude").
-		`you.?vehityour(?:session|weekly|daily|monthly|opus|sonnet|fable|usagecredit|usage|monthlyspend|individualspend|spend|fast)?limit`,
-		`you.?vehityour(?:team|org).?s(?:shared|monthly)[a-z]{0,16}(?:limit|budget)`,
-		`you.?vehityourchannel.?smonthly[a-z]{0,16}(?:limit|budget)`,
+	"claude": append(append(append(onGlyph("⎿", wholeNotices(claudeHitLimit...)), onGlyph("●", wholeRows(claudeEndTold, claudeHitLimit...))...), wholeNotices(
 		// Claude Code 2.1.312: what to do next after it ("You're out of
 		// usage credits. /model to switch models.").
 		`you.?reoutofusagecredits(?:\.(?:/modeltoswitchmodels|switchtoanothermodel))?`,
@@ -163,11 +190,10 @@ var harnessLimitNotices = map[string][]limitNotice{
 		`couldn.?tresetyour5-hourlimitwiththislogin(?:·run/login,thentryagain)?`,
 		`a5-hourlimitresetisn.?tavailablerightnow`,
 		`automaticcontinuestoppedafterrepeatedusagelimithits(?:·thistaskwillnotresumeonitsown\(/rate-limit-optionstotryagain\))?`,
-		`yourorgisoutofusage(?:credits)?(?:·(?:addfundstocontinue|contactyouradmin))?`,
 		`paused·usagelimit`,
 		`fastlimitreachedandtemporarilydisabled`,
 		`goalpaused·usagelimitreached`,
-	),
+	)...),
 		// Bare words that could end any sentence: only on the notice's own row.
 		// "Usage limit reached · continuing automatically at 3pm · esc to
 		// cancel" is at its limit too: held until then, as any notice with a
@@ -226,15 +252,16 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// OpenCode 1.19: "Usage limit reached. It will reset in 3 hours 20
 	// minutes." (a model's name may lead it), what to do now, its Go and
 	// free plans', a rate limit.
-	"opencode": wholeRows(`\.?`,
-		`[a-z0-9.\-]*usagelimitreached\.(?:itwillresetin`+limitWait+`\.)?tocontinueusingthismodelnow,enableusagefromyouravailablebalance`,
-		`[a-z0-9.\-]*usagelimitreached\.itwillresetin`+limitWait,
+	"opencode": append(modelLed(wholeRows(`\.?`,
+		`(?:`+limitModel+`)?usagelimitreached\.(?:itwillresetin`+limitWait+`\.)?tocontinueusingthismodelnow,enableusagefromyouravailablebalance`,
+		`(?:`+limitModel+`)?usagelimitreached\.itwillresetin`+limitWait,
+	)), wholeRows(`\.?`,
 		`golimitreached`,
 		`freelimitreached`,
 		`freeusageexceeded(?:,subscribetogo)?`,
 		`ratelimitexceeded,retryin`+limitWait,
 		`quotaexceeded\.checkyourplanandbillingdetails`,
-	),
+	)...),
 	// goose 1.55–1.56: its own words, inside "Ran into this error: …" (the
 	// service's 429 after it) or bare where they are its own.
 	"goose": wholeRows(`\.?`,
@@ -503,7 +530,8 @@ func limitRowIn(lead, core, row string, more, below []string, prog string) (bool
 				}
 				continue
 			}
-			if !ownRow || (n.cased != "" && !strings.Contains(drawn, n.cased)) {
+			own := ownRow || n.modelLead && first >= 0 && modelLeadRe.MatchString(row[first:])
+			if !own || (n.cased != "" && !strings.Contains(drawn, n.cased)) {
 				continue
 			}
 			for used, j := range joins {
