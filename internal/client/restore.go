@@ -893,7 +893,13 @@ func Restorable() ([]session.Restore, error) {
 		return nil, err
 	}
 	var out []session.Restore
+	now := time.Now()
 	for _, r := range all {
+		// A session asleep was not ended by a restart: it stays asleep until it
+		// is woken (a wake cut short just now is tried again).
+		if sleepsOn(r.ID, now) {
+			continue
+		}
 		if runningElsewhere(r.ID) == "" {
 			out = append(out, r)
 		}
@@ -1028,7 +1034,11 @@ func restoreAtStart() {
 				continue
 			}
 			tried[r.ID] = true
-			if _, err := RestoreSession(r); err != nil {
+			restore := RestoreSession
+			if session.IsAsleep(r.ID) {
+				restore = WakeSession // its wake was cut short: finish it
+			}
+			if _, err := restore(r); err != nil {
 				// A handshake that timed out may still have brought it back,
 				// slowly — or something else did: running is not a failure.
 				if runningElsewhere(r.ID) != "" {

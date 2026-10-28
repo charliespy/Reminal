@@ -699,6 +699,13 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "sleep", "wake", "keep-awake":
+			run := map[string]func([]string) error{"sleep": runSleep, "wake": runWake, "keep-awake": runKeepAwake}[os.Args[1]]
+			if err := run(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "own":
 			if err := runOwn(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -2020,6 +2027,9 @@ func runList(args []string) error {
 	}
 
 	if len(rows) == 0 && curRow == nil {
+		if printSleepers(lower) > 0 {
+			return nil // none running; the ones asleep are listed
+		}
 		if len(all) == 0 {
 			fmt.Println("No reminal sessions running. Start one with:")
 			fmt.Println("  reminal                # share this terminal")
@@ -2194,6 +2204,7 @@ func runList(args []string) error {
 		}
 	}
 	fmt.Println()
+	printSleepers(lower)
 	if narrow {
 		// Phone width: the wide two-column help wraps into an unreadable mess.
 		// Drop the "reminal " prefix (implied) and shorten the hints so each

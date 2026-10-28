@@ -401,8 +401,9 @@ func ReadRestores() ([]Restore, error) {
 	return out, locked
 }
 
-// ClearRestore forgets a session for good: its record, its scrollback and
-// its agent's conversation id, sealed or from an older version.
+// ClearRestore forgets a session for good: its record, its scrollback, its
+// agent's conversation id, sealed or from an older version, and its sleep
+// marks (nothing is left asleep after a kill).
 func ClearRestore(id string) error {
 	id = strings.ToUpper(id)
 	// The lock file goes too, or one is left per session ever run. Removing a
@@ -419,7 +420,7 @@ func ClearRestore(id string) error {
 			unlock()
 		}()
 	}
-	for _, suf := range []string{".sealed", ".json", ".scrollback.sealed", ".scrollback.json", ".conv", ".written"} {
+	for _, suf := range []string{".sealed", ".json", ".scrollback.sealed", ".scrollback.json", ".conv", ".written", sufAsleep, sufWaking, sufAwakePin} {
 		if p, err := restorePath(strings.ToUpper(id), suf); err == nil {
 			_ = os.Remove(p)
 			_ = os.Remove(p + ".tmp")

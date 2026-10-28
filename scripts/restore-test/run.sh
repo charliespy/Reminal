@@ -12,6 +12,7 @@
 #   scripts/restore-test/run.sh shutdown [MODE]   # build, then run check-shutdown.sh
 #   scripts/restore-test/run.sh hostile  # build, then run check-hostile-args.sh
 #   scripts/restore-test/run.sh early    # build, then run check-early.sh
+#   scripts/restore-test/run.sh sleep    # build, then run check-sleep.sh
 #   RESTORE_NAME=… scripts/restore-test/run.sh down   # remove a run kept with KEEP=1
 #
 # Its containers, network, image and home volume are this run's own
@@ -90,5 +91,6 @@ shared) "$DIR/check-shared.sh" ;;
 shutdown) "$DIR/check-shutdown.sh" "$2" ;;
 hostile) "$DIR/check-hostile-args.sh" ;;
 early) "$DIR/check-early.sh" ;;
+sleep) "$DIR/check-sleep.sh" ;;
 *) "$DIR/check.sh" ;;
 esac

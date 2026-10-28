@@ -168,6 +168,16 @@ func main() {
 			fmt.Fprintln(f, line)
 			f.Close()
 		}
+		// Where Claude Code keeps it, too, which reminal reads to know a
+		// conversation is still there: ~/.claude/projects/<cwd, / as ->/<id>.jsonl.
+		if cwd, err := os.Getwd(); err == nil {
+			proj := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(cwd, "/", "-"))
+			_ = os.MkdirAll(proj, 0o700)
+			if f, err := os.OpenFile(filepath.Join(proj, conv+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+				fmt.Fprintf(f, "{\"type\":\"user\",\"text\":%q}\n", in.Text())
+				f.Close()
+			}
+		}
 		hook("done", "Stop")
 	}
 }
