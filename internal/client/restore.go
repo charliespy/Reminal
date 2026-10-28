@@ -850,14 +850,17 @@ func (a *Agent) restoreStart() {
 	if run == "" {
 		return
 	}
-	// The prompt is drawn when the shell has printed and gone quiet.
-	start := a.buf.LatestSeq()
-	last, quietSince := start, time.Now()
+	// The prompt is drawn when the shell has printed and gone quiet. Printed
+	// since it started, not since this began to look: its prompt is usually
+	// drawn while the session's first try at the relay is waited for, above,
+	// and this session's own lines (the banner, the note) are not the
+	// shell's. Until it has printed, it is still starting: nothing is typed.
+	last, quietSince := a.buf.LatestSeq(), time.Now()
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 		if s := a.buf.LatestSeq(); s != last {
 			last, quietSince = s, time.Now()
 		}
-		if last != start && time.Since(quietSince) > 700*time.Millisecond {
+		if a.shellPrinted.Load() && time.Since(quietSince) > 700*time.Millisecond {
 			break
 		}
 	}

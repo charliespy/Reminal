@@ -499,6 +499,10 @@ type Agent struct {
 	// outSinceFree counts PTY output since memory was last handed back to
 	// the OS (releaseAfterBurst).
 	outSinceFree atomic.Int64
+	// shellPrinted is whether the shell has printed anything since it
+	// started (pumpPTY): a restored session's resume waits for its prompt
+	// (restoreStart).
+	shellPrinted atomic.Bool
 	// attnKick wakes the detector (kickAttention), made on first use.
 	attnKick     chan struct{}
 	attnKickOnce sync.Once
@@ -3034,6 +3038,7 @@ func (a *Agent) pumpPTY() {
 			// rewrite is throttled by metaFlushLoop.
 			a.markActivity(time.Now())
 			a.outSinceFree.Add(int64(n))
+			a.shellPrinted.Store(true)
 			a.feedTitle(buf[:n])
 			// Mirror to the host's stdout so the user typing at the agent
 			// terminal sees the shell's output as if they had run it
