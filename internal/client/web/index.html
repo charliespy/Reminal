@@ -2040,6 +2040,10 @@
     .mo-sheet.editing { width: min(1000px, calc(100vw - 48px)); height: min(860px, calc(100dvh - 48px)); }
     .mo-sheet.open { display: flex; }
     .mo-sheet:focus { outline: none; }
+    /* "Discard this moment?": over the sheet, not a browser dialog. */
+    .mo-confirm { position: absolute; inset: 0; z-index: 8; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(1,4,9,.6); animation: mo-fade .12s ease-out; }
+    .mo-confirm .share-actions button { flex: 1; border-color: transparent; }
+    @keyframes mo-fade { from { opacity: 0; } to { opacity: 1; } }
     .mo-sheet.rise { animation: mo-pop .2s ease-out; }
     @keyframes mo-pop { from { opacity: 0; transform: translate(-50%,-48%) scale(.985); } to { opacity: 1; transform: translate(-50%,-50%); } }
     .mo-head { flex: none; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 10px 12px; border-bottom: 1px solid #21262d; min-height: 56px; box-sizing: border-box; }

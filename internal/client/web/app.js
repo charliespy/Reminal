@@ -9713,7 +9713,11 @@
         const GRIP = 22, GAP = 12, HEADER = 48;
         toolbar.classList.add('visible');
         const th = toolbar.offsetHeight || 36;
-        const clampX = x => Math.min(window.innerWidth - 60, Math.max(60, x));
+        // Held inside the screen by its real width (Copy · Select all · Meme
+        // is wider than the 120px this once assumed, and ran off the left
+        // edge for a selection that starts there), 8px from either side.
+        const half = (toolbar.offsetWidth || 120) / 2 + 8;
+        const clampX = x => Math.max(half, Math.min(window.innerWidth - half, x));
         const startOn = s.vrow >= 0 && s.vrow < rows, endOn = e.vrow >= 0 && e.vrow < rows;
         if (startOn && s.y - GRIP - GAP - th >= HEADER) {
           toolbar.style.transform = 'translate(-50%, -100%)';
@@ -9729,6 +9733,12 @@
           toolbar.style.top = (s.y + s.h + GAP) + 'px';
         } else {
           toolbar.classList.remove('visible');
+        }
+        // And never below the visible screen (the keyboard, the key bar).
+        if (toolbar.classList.contains('visible')) {
+          const r = toolbar.getBoundingClientRect();
+          const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+          if (r.bottom > vh - 8) toolbar.style.top = (parseFloat(toolbar.style.top) - (r.bottom - (vh - 8))) + 'px';
         }
       }
       function placeHandle(el, pt, visible, yOff) {
