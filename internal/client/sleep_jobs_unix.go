@@ -11,11 +11,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"reminal/internal/proc"
 	"reminal/internal/pty"
-	"reminal/internal/session"
 )
 
 // otherJobs are the programs running in term's shell besides agent, the
@@ -23,9 +21,7 @@ import (
 // build left going, or whatever is in front when that is not the agent (a
 // command run after quitting it). Sleep closes the terminal, which would end
 // them, so a session with any stays awake. Only the shell's own children
-// count: everything under the agent is its own (its tool commands, its MCP
-// servers, which a wake starts again), and a process that left the session
-// (setsid, a daemon) is not in the shell's tree to be ended.
+// count here: what was left running in the background is leftRunning's.
 func otherJobs(term *pty.Session, agent string) []string {
 	prog, _, fg, _ := restoreForeground(term)
 	return shellJobs(listProcs(), term.Pid(), fg, agent != "" && prog == agent)
@@ -46,11 +42,97 @@ func shellJobs(procs []procRow, shell, fg int, fgIsAgent bool) []string {
 	return out
 }
 
+// restBase is the processes on term's terminal when its agent came to rest
+// (Agent.noteRestBase): what runs with an agent at its prompt — itself, its
+// MCP servers, what launched them. nil when it can't be read.
+func restBase(term *pty.Session) map[procKey]bool {
+	members := termMembers(listProcs(), term.Pid())
+	if members == nil {
+		return nil
+	}
+	base := make(map[procKey]bool, len(members))
+	for _, p := range members {
+		base[p.key()] = true
+	}
+	return base
+}
+
+// leftRunning names what runs on term's terminal in the background, past
+// the shell's own jobs (otherJobs, and what they started): a command left
+// going, however soon after it started, under the agent or not (one started
+// with & inside a tool call outlives that call's shell and is reparented
+// away, still on this terminal, which a sleep hangs up). With agent in front
+// and base (what was on the terminal when it came to rest: itself, its MCP
+// servers), what it started since counts, base aside; with no agent in
+// front, whatever is left there, as after an agent was quit.
+func leftRunning(term *pty.Session, agent string, base map[procKey]bool) []string {
+	prog, _, fg, _ := restoreForeground(term)
+	if agent == "" || prog != agent || base == nil {
+		fg, base = 0, nil
+	}
+	return strays(listProcs(), term.Pid(), fg, base)
+}
+
+// strays names, once each, the processes on shell's terminal that are not
+// in base, not the shell's children, and not in the process group of one
+// of them (a job and what it started) other than agentPgrp's, the agent's.
+func strays(procs []procRow, shell, agentPgrp int, base map[procKey]bool) []string {
+	jobs := map[int]bool{}
+	for _, p := range procs {
+		if p.ppid == shell && p.pgid != agentPgrp {
+			jobs[p.pgid] = true
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range termMembers(procs, shell) {
+		if base[p.key()] || p.ppid == shell || jobs[p.pgid] || seen[p.comm] {
+			continue
+		}
+		seen[p.comm] = true
+		out = append(out, p.comm)
+	}
+	return out
+}
+
+// termMembers are the live processes whose terminal is shell's, the shell
+// aside: everything a hangup of that terminal reaches, of any kind. nil when
+// the shell's terminal can't be read.
+func termMembers(procs []procRow, shell int) []procRow {
+	tty := ""
+	for _, p := range procs {
+		if p.pid == shell {
+			tty = p.tty
+		}
+	}
+	if tty == "" || tty == "0" || strings.Trim(tty, "?") == "" {
+		return nil
+	}
+	out := []procRow{}
+	for _, p := range procs {
+		if p.tty == tty && p.pid != shell && !p.zombie {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 type procRow struct {
 	pid, ppid, pgid int
 	comm            string
 	zombie          bool
+	tty             string // its controlling terminal (tty_nr, or ps's name)
+	start           string // when it started, as the kernel keeps it
 }
+
+// procKey is one process for as long as it lives: its pid, and when it
+// started (a pid freed and reused is another).
+type procKey struct {
+	pid   int
+	start string
+}
+
+func (p procRow) key() procKey { return procKey{p.pid, p.start} }
 
 // listProcs is every process on the machine: from /proc where there is one
 // (a container has no ps), else from ps.
@@ -79,8 +161,9 @@ func procFromProc() []procRow {
 	return out
 }
 
-// parseProcStat reads /proc/<pid>/stat: "pid (comm) state ppid pgrp …".
-// comm may hold spaces and parentheses, so it ends at the last ')'.
+// parseProcStat reads /proc/<pid>/stat: "pid (comm) state ppid pgrp session
+// tty_nr … starttime …". comm may hold spaces and parentheses, so it ends at
+// the last ')'.
 func parseProcStat(s string) (procRow, bool) {
 	open, end := strings.IndexByte(s, '('), strings.LastIndexByte(s, ')')
 	if open < 0 || end < open {
@@ -99,24 +182,29 @@ func parseProcStat(s string) (procRow, bool) {
 	if err1 != nil || err2 != nil {
 		return procRow{}, false
 	}
-	return procRow{pid: pid, ppid: ppid, pgid: pgid, comm: s[open+1 : end], zombie: f[0] == "Z"}, true
+	r := procRow{pid: pid, ppid: ppid, pgid: pgid, comm: s[open+1 : end], zombie: f[0] == "Z"}
+	if len(f) > 19 {
+		r.tty, r.start = f[4], f[19]
+	}
+	return r, true
 }
 
 func procFromPS() []procRow {
-	b, err := exec.Command("ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,comm=").Output()
+	b, err := exec.Command("ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,tty=,lstart=,comm=").Output()
 	if err != nil {
 		return nil
 	}
 	return parsePS(string(b))
 }
 
-// parsePS reads `ps -o pid=,ppid=,pgid=,stat=,comm=`: comm is the rest of
-// its line (a path, perhaps with spaces).
+// parsePS reads `ps -o pid=,ppid=,pgid=,stat=,tty=,lstart=,comm=`: lstart is
+// five words ("Tue Oct 27 18:40:34 2026"), comm the rest of its line (a path,
+// perhaps with spaces).
 func parsePS(s string) []procRow {
 	var out []procRow
 	for _, l := range strings.Split(s, "\n") {
 		f := strings.Fields(l)
-		if len(f) < 5 {
+		if len(f) < 11 {
 			continue
 		}
 		pid, e1 := strconv.Atoi(f[0])
@@ -125,8 +213,10 @@ func parsePS(s string) []procRow {
 		if e1 != nil || e2 != nil || e3 != nil {
 			continue
 		}
-		comm := strings.Join(f[4:], " ")
-		out = append(out, procRow{pid: pid, ppid: ppid, pgid: pgid, comm: filepath.Base(comm), zombie: strings.HasPrefix(f[3], "Z")})
+		out = append(out, procRow{
+			pid: pid, ppid: ppid, pgid: pgid, zombie: strings.HasPrefix(f[3], "Z"),
+			tty: f[4], start: strings.Join(f[5:10], " "), comm: filepath.Base(strings.Join(f[10:], " ")),
+		})
 	}
 	return out
 }
@@ -144,54 +234,4 @@ func exited(pid int) bool {
 		}
 	}
 	return true
-}
-
-// agentShells counts the shells running under agent, when it is the program
-// in front of term, that it started after its own start-up: at rest an agent
-// runs none but what its MCP servers were launched through (npx's sh), all
-// started with it, so a later one is a command it left going in the
-// background, whether or not it said so.
-func agentShells(term *pty.Session, agent string) int {
-	prog, _, pid, _ := restoreForeground(term)
-	if agent == "" || prog != agent {
-		return 0
-	}
-	began, ok := session.ProcStartTime(pid)
-	if !ok {
-		return 0
-	}
-	n := 0
-	for _, s := range shellsUnder(listProcs(), pid) {
-		if t, ok := session.ProcStartTime(s); ok && t.After(began.Add(agentStartup)) {
-			n++
-		}
-	}
-	return n
-}
-
-// agentStartup is how long after an agent starts the shells it starts with
-// (its MCP servers') are taken to come.
-const agentStartup = 30 * time.Second
-
-// shellsUnder are the live shells among root's descendants.
-func shellsUnder(procs []procRow, root int) []int {
-	kids := map[int][]procRow{}
-	for _, p := range procs {
-		kids[p.ppid] = append(kids[p.ppid], p)
-	}
-	var out []int
-	for todo := []int{root}; len(todo) > 0; {
-		pid := todo[len(todo)-1]
-		todo = todo[:len(todo)-1]
-		for _, k := range kids[pid] {
-			if k.pid == pid {
-				continue
-			}
-			if !k.zombie && isLoginShell(k.comm) {
-				out = append(out, k.pid)
-			}
-			todo = append(todo, k.pid)
-		}
-	}
-	return out
 }

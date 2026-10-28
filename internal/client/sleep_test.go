@@ -162,17 +162,44 @@ func TestClaudeConversationFileFollowsItsConfigDir(t *testing.T) {
 	}
 }
 
-// Keys typed after a sleep was asked for are someone using the session.
-func TestKeysSince(t *testing.T) {
+// Keys typed after a sleep was asked for are someone using the session: it
+// stays awake, and takes keys. With none, it goes, and keys after that are
+// not typed into a shell about to be ended.
+func TestGoToSleep(t *testing.T) {
 	a := &Agent{}
 	asked := time.Now()
-	if a.keysSince(asked) {
-		t.Fatal("keys before any were typed")
-	}
 	time.Sleep(time.Millisecond)
 	a.feedTyping([]byte("x"))
-	if !a.keysSince(asked) {
-		t.Fatal("keys typed after the ask not seen")
+	if a.goToSleep(asked) || a.asleep() {
+		t.Fatal("went to sleep with keys typed after the ask")
+	}
+	if !a.goToSleep(time.Now()) || !a.asleep() {
+		t.Fatal("did not go to sleep with no keys since")
+	}
+	if n, err := a.typeIn([]byte("rm -rf x\r")); err != nil || n != 9 {
+		t.Fatalf("typeIn once asleep: %d %v", n, err) // a nil terminal: written, it would panic
+	}
+}
+
+// A draft goes in with a turn its hook said began after it was typed; keys
+// typed during a turn are a new draft; a turn told twice is one.
+func TestTurnBegan(t *testing.T) {
+	var l inputLine
+	l.feed([]byte("fix it"))
+	l.at = time.Now()
+	l.turnBegan(l.at.Add(-time.Second))
+	if !l.draft {
+		t.Fatal("a turn from before the keys took them")
+	}
+	l.turnBegan(l.at.Add(time.Second))
+	if l.draft {
+		t.Fatal("a turn after the keys did not take them")
+	}
+	l.feed([]byte("and this"))
+	l.at = l.turn.Add(time.Second)
+	l.turnBegan(l.turn)
+	if !l.draft {
+		t.Fatal("the same turn told again took keys typed since")
 	}
 }
 

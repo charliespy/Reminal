@@ -83,6 +83,9 @@ func (a *Agent) injectKeys(data []byte) error {
 	}
 	data = a.wrapPaste(data)
 	a.feedTyping(data) // keys typed for someone are unsent the same until a Return
+	if a.asleep() {
+		return fmt.Errorf("it went to sleep (keys not sent)")
+	}
 	_, err := a.term.Write(data)
 	return err
 }

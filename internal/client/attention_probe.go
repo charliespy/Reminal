@@ -347,6 +347,7 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 				endAt, failure = hs.TS, hs.Failure
 			}
 		}
+		a.noteTurn(turnAt)
 		if a.noteHarnessLimit(harnessTail(stripANSI(render), harnessRowsFor(prog)), prog, atWork, turnAt, endAt, failure) {
 			a.metaDirty.Store(true)
 		}
@@ -650,12 +651,14 @@ func (a *Agent) setAttnState(state string) {
 		a.attnSince = time.Now()
 		if state == "working" {
 			a.attnTurnAt = a.attnSince
-			a.typing.draft = false // what was typed went in (a turn began on it)
 		}
 	}
 	a.metaMu.Unlock()
 	if !changed {
 		return
+	}
+	if state == "done" || state == harnessLimited {
+		a.noteRestBase() // before the state is pushed: keys held for it wait on it
 	}
 	a.metaDirty.Store(true)
 	if a.metaKick != nil {

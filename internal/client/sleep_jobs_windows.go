@@ -30,7 +30,11 @@ func otherJobs(term *pty.Session, agent string) []string {
 // exited says process pid has ended.
 func exited(pid int) bool { return !proc.Alive(pid) }
 
-// agentShells: a console's processes carry no start-up to tell the shells
-// an agent's MCP servers run through from ones it left going, so none are
-// counted here; what its hook says (or that it said nothing) stands.
-func agentShells(*pty.Session, string) int { return 0 }
+// A console's processes are not read by their terminal here yet (its process
+// list or job object would be the way), so what an agent left running is
+// what its hook says (or that it said nothing): no baseline is kept.
+type procKey struct{}
+
+func restBase(*pty.Session) map[procKey]bool { return nil }
+
+func leftRunning(*pty.Session, string, map[procKey]bool) []string { return nil }

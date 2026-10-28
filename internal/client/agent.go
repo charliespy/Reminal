@@ -287,6 +287,11 @@ type Agent struct {
 	// typing is whether keys left something unsent on the input line, for a
 	// sleep to name as a loss (inputLine). Under metaMu.
 	typing inputLine
+	// restBase is the processes on its terminal when the agent in front
+	// (restBaseFG, its attnFGAt) first came to rest, for a sleep to tell
+	// what it left running since (noteRestBase). Under metaMu.
+	restBase   map[procKey]bool
+	restBaseFG time.Time
 	// attnState is the detected attention state of the foreground agent —
 	// "working", "input" (awaiting the user), "done", or "" (no agent / bare
 	// shell). Written by the attention detector goroutine, read by activeRecord
@@ -1667,6 +1672,13 @@ func (a *Agent) feedTyping(keys []byte) {
 	a.metaMu.Lock()
 	a.typing.feed(keys)
 	a.typing.at = time.Now()
+	a.metaMu.Unlock()
+}
+
+// noteTurn is a turn the agent's hook said began at t (inputLine.turnBegan).
+func (a *Agent) noteTurn(t time.Time) {
+	a.metaMu.Lock()
+	a.typing.turnBegan(t)
 	a.metaMu.Unlock()
 }
 

@@ -174,6 +174,11 @@ func main() {
 			// hook none the wiser.
 			_ = exec.Command("sh", "-c", "sleep 633; true").Start()
 		}
+		if in.Text() == "orphan" {
+			// One started with & inside a command, which outlives it: no
+			// longer under the agent, still on its terminal.
+			_ = exec.Command("sh", "-c", "(sleep 644 &); true").Run()
+		}
 		line := "you said: " + in.Text()
 		fmt.Println(line)
 		if f, err := os.OpenFile(path(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {

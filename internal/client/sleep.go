@@ -36,6 +36,7 @@ type sleepFacts struct {
 	BgSaid   bool     // its agent's hook said what it left running (none, too)
 	Draft    bool     // something typed on its input line, not sent
 	Jobs     []string // other programs running in its shell
+	Strays   []string // programs left running in the background on its terminal (leftRunning)
 	Attached int      // `reminal connect` terminals attached to it
 	Fg       string   // its coding agent, as the saved record names it
 	Conv     string   // the agent's conversation, as saved
@@ -88,6 +89,9 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 	for _, j := range f.Jobs {
 		losses = append(losses, j+", running in it")
 	}
+	for _, s := range f.Strays {
+		losses = append(losses, s+", left running in the background")
+	}
 	if f.Attached > 0 {
 		losses = append(losses, "the terminal attached to it")
 	}
@@ -125,6 +129,10 @@ func (a *Agent) sleepNow(anyway bool) error {
 		Draft: a.typing.draft,
 	}
 	fgAt := a.attnFGAt
+	var base map[procKey]bool
+	if a.restBaseFG.Equal(fgAt) {
+		base = a.restBase
+	}
 	a.metaMu.Unlock()
 	a.currentConnMu.Lock()
 	f.Attached = len(a.localConns)
@@ -144,7 +152,7 @@ func (a *Agent) sleepNow(anyway bool) error {
 		// After the save: only the agent it wakes with is not a job (a record
 		// can hold an agent that was quit, with something else now in front).
 		f.Jobs = otherJobs(a.term, f.Fg)
-		f.Shells = max(f.Shells, agentShells(a.term, f.Fg))
+		f.Strays = leftRunning(a.term, f.Fg, base)
 		if prog, _, _, _ := restoreForeground(a.term); f.Fg != "" && prog == f.Fg {
 			f.BgSaid = attnHookBackground(true, session.ReadHookStateAnyAge(a.sessionID), fgAt) != nil
 		}
@@ -161,21 +169,33 @@ func (a *Agent) sleepNow(anyway bool) error {
 	}
 	// Going: no new terminal attaches from here. Keys that came while it
 	// decided were someone using it: it stays awake, and says why.
-	a.sleeping.Store(true)
-	if a.keysSince(asked) {
-		a.sleeping.Store(false)
+	if !a.goToSleep(asked) {
 		session.ClearAsleep(a.sessionID)
 		return errors.New("awake · used while going to sleep")
 	}
 	return nil
 }
 
-// keysSince says keys were typed into the session (by a person, or for one)
-// after t.
-func (a *Agent) keysSince(t time.Time) bool {
+// goToSleep marks this session gone to sleep, unless keys were typed into it
+// (by a person, or for one) after asked: then it stays awake (false). One
+// step under metaMu, as asleep reads it: every key is either seen here,
+// keeping it awake, or comes after and is not typed in.
+func (a *Agent) goToSleep(asked time.Time) bool {
 	a.metaMu.Lock()
 	defer a.metaMu.Unlock()
-	return a.typing.at.After(t)
+	if a.typing.at.After(asked) {
+		return false
+	}
+	a.sleeping.Store(true)
+	return true
+}
+
+// asleep says this session has gone to sleep (goToSleep): keys stamped
+// before are in, ones after are not typed in.
+func (a *Agent) asleep() bool {
+	a.metaMu.Lock()
+	defer a.metaMu.Unlock()
+	return a.sleeping.Load()
 }
 
 // SleepSession puts this machine's running session id to sleep, and waits
@@ -305,6 +325,26 @@ func ForgetSleeper(id string) error {
 	default:
 		return err
 	}
+}
+
+// noteRestBase keeps what is on this session's terminal the first time the
+// agent in front comes to rest (done, or held back by its limit), once per
+// agent run (attnFGAt): its MCP servers and what launched them, which a
+// sleep then never takes for work it left running (leftRunning).
+func (a *Agent) noteRestBase() {
+	a.metaMu.Lock()
+	fg := a.attnFGAt
+	taken := a.restBase != nil && a.restBaseFG.Equal(fg)
+	a.metaMu.Unlock()
+	if taken || a.term == nil {
+		return
+	}
+	base := restBase(a.term)
+	a.metaMu.Lock()
+	if a.attnFGAt.Equal(fg) {
+		a.restBase, a.restBaseFG = base, fg
+	}
+	a.metaMu.Unlock()
 }
 
 // markAwake is a restored session saying, once it is up and reachable, that

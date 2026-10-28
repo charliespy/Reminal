@@ -41,6 +41,22 @@ type inputLine struct {
 	draft bool
 	paste bool      // inside a bracketed paste
 	at    time.Time // when keys last came (Agent.feedTyping)
+	turn  time.Time // the last turn its agent's hook said began (Agent.noteTurn)
+}
+
+// turnBegan is a turn the agent's hook said began at t: what was typed
+// before it went in with it (the hook fires on the prompt sent); keys typed
+// since are a new draft. A turn read off the screen alone says nothing of
+// what was typed (it may be the agent going on by itself), so only the
+// hook's counts.
+func (l *inputLine) turnBegan(t time.Time) {
+	if !t.After(l.turn) {
+		return
+	}
+	l.turn = t
+	if !l.at.After(t) {
+		l.draft = false
+	}
 }
 
 func (l *inputLine) feed(b []byte) {

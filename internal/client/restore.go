@@ -881,8 +881,14 @@ func (a *Agent) releaseTyped() {
 }
 
 // typeIn is what a person typed, into the shell: held while a restored
-// session's resume waits (holdTyped), never lost.
+// session's resume waits (holdTyped), never lost. Not once the session has
+// gone to sleep (sleepNow): keys stamped before that last look kept it
+// awake; ones after it would start a command its shell is ended in the
+// middle of.
 func (a *Agent) typeIn(data []byte) (int, error) {
+	if a.asleep() {
+		return len(data), nil
+	}
 	a.typedMu.Lock()
 	if a.typedHolding && len(a.typedHeld)+len(data) <= maxTypedHeld {
 		if a.typedTimer == nil {

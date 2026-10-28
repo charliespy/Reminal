@@ -137,12 +137,20 @@ o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "typed and not sent" && o
 box "mcp.sh type $ID '$(printf '\\u0015')' >/dev/null"; sleep 1
 o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "asleep" && ok "the draft cleared, it sleeps: $o" || fail "after clearing the draft: $o"
 
-# Background work its agent left without saying: a shell under it, started
-# after its own start-up.
+# Background work its agent left without saying (its hook says none): on its
+# terminal and new since it came to rest, however soon after a wake, under
+# it or reparented away.
 box "reminal wake $ID >/dev/null 2>&1"
-for i in $(seq 1 40); do [ "$(claudes)" -gt 0 ] && break; sleep 1; done; sleep 32   # claude back, and past its start-up
-send $ID 'bg'; sleep 2
-o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "its agent's background work" && ok "a shell left under claude refuses the sleep: $(echo "$o" | head -1)" || fail "shell under claude: $o; $(box "ps -eo pid,ppid,lstart,comm" | tail -12)"
+for i in $(seq 1 40); do [ "$(claudes)" -gt 0 ] && box "mcp.sh list" | grep -qE 'attn.{0,8}done' && break; sleep 1; done
+send $ID 'bg'; sleep 2                           # seconds after the wake
+o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "sleep, left running in the background" && ok "a command left going right after a wake refuses the sleep: $(echo "$o" | head -1)" || fail "left going after a wake: $o; $(box "ps -eo pid,ppid,tty,comm" | tail -12)"
+box "pgrep -f 'slee[p] 633' >/dev/null" && ok "…and it is still running" || fail "the command left going was ended"
+box "pkill -f 'slee[p] 633'; true"; sleep 1
+send $ID 'orphan'; sleep 2
+op=$(box "ps -o ppid= -p \$(pgrep -f 'slee[p] 644' | head -1) | tr -d ' '")
+[ -n "$op" ] && ! box "pgrep -x claude | grep -qx $op" && ok "control: the orphan's parent is $op, not claude" || fail "the orphan is not reparented (parent $op)"
+o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "sleep, left running in the background" && ok "a command reparented away from claude refuses the sleep: $(echo "$o" | head -1)" || fail "orphan: $o"
+box "pkill -f 'slee[p] 644'; true"; sleep 1
 
 # A conversation gone while asleep: it says so, never a silent fresh start.
 CONV=$(box "ls -t /root/.fake-claude/*.conv | head -1 | xargs basename | sed 's/.conv$//'")   # the conversation it is in now
