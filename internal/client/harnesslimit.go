@@ -491,12 +491,16 @@ const claudeFooterNever = "~│╭╰┃┌└" + limitQuoteGlyphs
 // claudeFooterNeverRow says whether a row (r as drawn, t trimmed) is one
 // Claude Code's footer never draws: one claudeFooterNever opens, or, at the
 // row's start, an editor's mode ("-- INSERT --") or a pager's prompt (":",
-// "(END)"). Claude Code indents its footer, its own vim mode ("-- INSERT
-// --") too (review).
+// "(END)"), padded or not, the mode perhaps with more after it ("--
+// INSERT --recording @q"). Claude Code indents its footer, its own vim mode
+// ("-- INSERT --") too (review).
 func claudeFooterNeverRow(r, t string) bool {
-	return strings.ContainsAny(firstRune(t), claudeFooterNever) || r == t && (t == ":" || t == "(END)" ||
-		len(t) > 6 && strings.HasPrefix(t, "-- ") && strings.HasSuffix(t, " --"))
+	return strings.ContainsAny(firstRune(t), claudeFooterNever) ||
+		!strings.HasPrefix(r, " ") && (t == ":" || t == "(END)" || editorModeRe.MatchString(t))
 }
+
+// editorModeRe is an editor's mode at its row's start: "-- INSERT --".
+var editorModeRe = regexp.MustCompile(`^-- [A-Z]+(?: [A-Z]+)* --`)
 
 // claudeBoxEnd is the row of the rule that closes Claude Code's lowest input
 // box (a rule, its prompt "❯" at the row's start, perhaps a draft's rows, a
