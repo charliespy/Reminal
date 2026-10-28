@@ -25,6 +25,13 @@
     const users = new Set();
     const NOT_USERS = /^(shared|public|guest|default|root|runner|admin|user|users|home|me)$/i;
     function learnUser(n) { if (n && n.length >= 2 && n.length <= 32 && !NOT_USERS.test(n) && users.size < 20) users.add(n); }
+    // inLink says the text at index at of s is part of a link: its word (since
+    // the last space) has a scheme's :// before it.
+    function inLink(s, at) {
+      let i = at;
+      while (i > 0 && !/\s/.test(s[i - 1])) i--;
+      return s.slice(i, at).includes('://');
+    }
     function scrub(s, keep) {
       if (!s) return s;
       const mask = m => keep ? '•'.repeat(m.length) : '•••';
@@ -34,12 +41,14 @@
       s = s.replace(/\b(Bearer|Basic|Token)(\s+)([\w.~+\/=-]{6,})/gi, (m, k, sp, v) => k + sp + mask(v));
       s = s.replace(/\b([\w.-]{0,40}?(?:api[_-]?key|access[_-]?key|private[_-]?key|secret|token|passw(?:or)?d|passphrase|pwd|pass|credentials?|auth(?:orization)?|key))(["']?\s*[=:]\s*["']?)([^\s"',;]+)/gi, (m, k, eq, v) => k + eq + mask(v));
       // Base64 (a PEM body, a key file): mixed case and digits, / and + inside.
-      // With a / it must be long, so a path like owner/Repo/pull/445 stays.
+      // With a / it must be long, so a path like owner/Repo/pull/445 stays, and
+      // never part of a link (https://github.com/owner/Repo/releases/tag/v3):
+      // a key in a link's query is the key=value rule's.
       // Both this and the e-mail rule start only at the start of a run (the
       // character before is taken as `pre`): tried at every place inside a long
       // run, a hex dump, they would take seconds. Not a lookbehind, which an
       // older Safari can't parse at all.
-      s = s.replace(/(^|[^A-Za-z0-9+\/])((?=[A-Za-z0-9+\/]*\d)(?=[A-Za-z0-9+\/]*[A-Z])(?=[A-Za-z0-9+\/]*[a-z])[A-Za-z0-9+\/]{24,}={0,2})/g, (m, pre, v) => pre + (v.includes('/') && v.length < 40 ? v : mask(v)));
+      s = s.replace(/(^|[^A-Za-z0-9+\/])((?=[A-Za-z0-9+\/]*\d)(?=[A-Za-z0-9+\/]*[A-Z])(?=[A-Za-z0-9+\/]*[a-z])[A-Za-z0-9+\/]{24,}={0,2})/g, (m, pre, v, at, all) => pre + (v.includes('/') && (v.length < 40 || inLink(all, at)) ? v : mask(v)));
       s = s.replace(/\b(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]{32,}\b/g, mask);
       s = s.replace(/(^|[^\w.+-])([\w.+-]+@[\w-]+\.[\w.-]+)/g, (m, pre, v) => pre + mask(v));
       // A password given after a space: --password x, sshpass -p x, curl -u user:x.
@@ -100,7 +109,7 @@
         for (const k of sessions.keys()) { if (sessions.size < 3) break; if (k !== curId) sessions.delete(k); }
       }
         s = { id, log: [], bytes: 0, dec: new TextDecoder(), partial: '', attn: '', run: null, runs: [],
-              moments: [], seenMoment: new Set(), firstAt: 0, agent: '' };
+              moments: [], seenMoment: new Set(), firstAt: 0 };
         sessions.set(id, s);
       }
       return s;
@@ -120,7 +129,7 @@
     }
 
     function newRun(s, at) {
-      return { start: at, end: 0, agent: s.agent || '', host: hostName(), filesRead: new Set(), filesChanged: new Set(),
+      return { start: at, end: 0, host: hostName(), filesRead: new Set(), filesChanged: new Set(),
                cmds: new Set(), commits: new Map(), passFirst: null, passLast: null, failLast: null, okPkgs: new Set(),
                waits: 0, approvals: [], away: 0, hiddenSince: document.hidden ? at : 0, joinedLate: false, waited: 0, inputSince: 0 };
     }
@@ -139,16 +148,6 @@
       { kind: 'again', re: /different approach|let me try (again|another|a simpler)/i, top: 'PLAN A FAILED', bottom: 'LET ME TRY A DIFFERENT APPROACH', title: 'Plan B unlocked' },
       { kind: 'tests', re: /\b(remov|delet|skipp?)\w* (the |that )?(failing |flaky )?tests?\b/i, top: 'TESTS FAILING', bottom: 'NOT ANYMORE', title: 'Fixed the tests (by removing them)' },
     ];
-
-    function agentFrom(line) {
-      if (/Claude Code|claude\.ai\/code|Welcome to Claude/i.test(line)) return 'Claude';
-      if (/OpenAI Codex|\bcodex\b/i.test(line)) return 'Codex';
-      if (/Gemini CLI|\bgemini\b/i.test(line)) return 'Gemini';
-      if (/Cursor Agent|cursor-agent/i.test(line)) return 'Cursor';
-      if (/\baider\b/i.test(line)) return 'Aider';
-      if (/\bopencode\b/i.test(line)) return 'OpenCode';
-      return '';
-    }
 
     // A reply wraps onto further rows on a narrow screen: the moment takes the
     // rows that follow it until a new item, a box or a pause, then is kept.
@@ -177,7 +176,6 @@
         keepMoment(s);
       }
       if (line.length < 3) return;
-      if (!s.agent) { const a = agentFrom(line); if (a) { s.agent = a; if (s.run && !s.run.agent) s.run.agent = a; } }
       for (const k of MOMENT_KINDS) {
         if (k.re.test(line)) {
           s.pendMoment = { k, at, old: isReplay(s, at), text: line.replace(/^\s*[⏺●•✻⎿>]\s*/, '').trim() };
@@ -270,7 +268,7 @@
     });
 
     function plainRun(r) {
-      return { start: r.start, end: r.end, agent: r.agent || '', host: r.host || '', filesRead: r.filesRead.size,
+      return { start: r.start, end: r.end, host: r.host || '', filesRead: r.filesRead.size,
                filesChanged: r.filesChanged.size, cmds: r.cmds.size, commits: r.commits.size,
                passFirst: r.passFirst, passLast: r.passLast,
                failLast: r.failLast, okPkgs: r.okPkgs.size, waits: r.waits, approvals: r.approvals, away: r.away,
@@ -464,6 +462,7 @@
       return rows;
     }
     function rowText(runs) { return runs.map(r => r.text).join('').replace(/\s+$/, ''); }
+    const GLYPH_FALLBACK = { '\u23F4': '\u25C2', '\u23F5': '\u25B8', '\u23F8': '\u2016', '\u23F9': '\u25A0' };
     // drawRows lays styled rows out at (x, y), px font, a cell ch wide.
     function drawRows(ctx, rows, x, y, px, opts) {
       opts = opts || {};
@@ -478,7 +477,8 @@
         for (const r of runs) {
           if (r.x >= cut) break;
           let text = r.text.slice(0, Math.max(0, cut - r.x));
-          if (r.bg) { ctx.fillStyle = r.bg; ctx.fillRect(x + r.x * cw, yy, text.length * cw + 0.5, lh); }
+          // A background overlaps the next row by a hair: no seam between rows.
+          if (r.bg) { ctx.fillStyle = r.bg; ctx.fillRect(x + r.x * cw, yy - 0.5, text.length * cw + 0.5, lh + 1); }
           if (!text.trim()) continue;
           ctx.font = (r.bold ? '700 ' : '') + px + 'px ' + MONO;
           ctx.fillStyle = r.fg || opts.fg || '#e6edf3';
@@ -493,6 +493,9 @@
             [...text].forEach((ch, i) => { if (ch === '\u2022') { ctx.beginPath(); ctx.arc(x + (r.x + i + 0.5) * cw, yy + lh / 2, cw * 0.17, 0, 7); ctx.fill(); } });
             text = text.replace(/\u2022/g, ' ');
           }
+          // Glyphs a phone's fonts lack (Claude Code's mode arrows) would be empty
+          // boxes: drawn as near ones every font has.
+          text = text.replace(/[\u23F4\u23F5\u23F8\u23F9]/g, m => GLYPH_FALLBACK[m]);
           // Held to its cells: a glyph from a fallback font (a dot, a box line) can run wider.
           ctx.fillText(text, x + r.x * cw, yy + (lh - px) / 2, text.length * cw);
           ctx.globalAlpha = 1;
@@ -526,7 +529,6 @@
       const L = [];
       const total = r.end - r.start;
       const approvals = r.approvals || [];
-      L.push(['AGENT', (r.agent || opts.agent || 'My agent').toUpperCase()]);
       L.push(['MACHINE', opts.showHost && r.host ? r.host.toUpperCase() : 'MY MACHINE']);
       L.push(['DATE', day(r.start).toUpperCase()]);
       // No clock times: with them, the card reads like a timesheet entry.
@@ -762,14 +764,19 @@
       return out.slice(-want).map(toRuns);
     }
     function rewrap(cells, cols) {
-      if (cells.length <= cols) return [cells];
+      // A highlighted line (a message the person sent, as an agent shows it) keeps
+      // its background across the hang and out to the row's end, a block as it is
+      // on screen, not ragged at each cut.
+      const bg = lineBg(cells);
+      const fill = row => bg ? row.concat(Array.from({ length: Math.max(0, cols - row.length) }, () => ({ ch: ' ', bg }))) : row;
+      if (cells.length <= cols) return [fill(cells)];
       const str = cells.map(c => c.ch).join('');
       if (RULE_ONLY.test(str)) return [cells.slice(0, cols)];
       // Continuation rows hang under the text, past any bullet or box edge, as
       // agents print them; a box's left edge carries on down beside them.
       const at = str.search(/[A-Za-z0-9"'(\[{<$~.\/]/);
       const hang = Math.min(at < 0 ? 0 : at, Math.floor(cols / 3));
-      const edge = cells.slice(0, hang).map(c => /[│┃|]/.test(c.ch) ? c : { ch: ' ' });
+      const edge = cells.slice(0, hang).map(c => /[│┃|]/.test(c.ch) ? c : { ch: ' ', bg });
       const rows = [];
       let rest = cells, first = true;
       while (rest.length) {
@@ -781,12 +788,25 @@
           if (sp > room * 0.5) cut = sp + 1;
         }
         const piece = rest.slice(0, cut);
-        rows.push(first ? piece : edge.concat(piece));
+        rows.push(fill(first ? piece : edge.concat(piece)));
         rest = rest.slice(cut);
         while (rest.length && rest[0].ch === ' ') rest = rest.slice(1);
         first = false;
       }
       return rows;
+    }
+    // lineBg is the background most of a line's text sits on, when one does
+    // (three in five of its letters), else undefined.
+    function lineBg(cells) {
+      const n = {};
+      let text = 0;
+      for (const c of cells) {
+        if (c.ch === ' ') continue;
+        text++;
+        if (c.bg) n[c.bg] = (n[c.bg] || 0) + 1;
+      }
+      const top = Object.entries(n).sort((a, b) => b[1] - a[1])[0];
+      return top && top[1] >= text * 0.6 ? top[0] : undefined;
     }
     function toRuns(cells) {
       const runs = [];
@@ -840,7 +860,7 @@
       ctx.textAlign = 'left'; ctx.font = '700 ' + (u * 4.2) + 'px ' + SANS;
       ctx.fillStyle = '#58a6ff'; ctx.fillText('re', sx + u * 13, hy + hH / 2);
       ctx.fillStyle = '#e6edf3'; ctx.fillText('minal', sx + u * 13 + ctx.measureText('re').width, hy + hH / 2);
-      const label = s.agent ? s.agent + ' · live' : 'live';
+      const label = 'live';
       ctx.font = '600 ' + (u * 3.3) + 'px ' + SANS;
       const lw = ctx.measureText(label).width + u * 9;
       rr(ctx, sx + sw - u * 5 - lw, hy + hH / 2 - u * 3.1, lw, u * 6.2, u * 3.1); ctx.fillStyle = 'rgba(63,185,80,.14)'; ctx.fill();
@@ -917,9 +937,6 @@
       const total = R.reduce((a, r) => a + (r.end - r.start), 0);
       const away = R.reduce((a, r) => a + (r.away || 0), 0);
       const machines = new Set(R.map(r => r.host || '?')).size;
-      const agents = {};
-      for (const r of R) agents[r.agent || 'Your agent'] = (agents[r.agent || 'Your agent'] || 0) + (r.end - r.start);
-      const topAgent = Object.entries(agents).sort((a, b) => b[1] - a[1])[0];
       const approvals = R.flatMap(r => r.approvals || []);
       const latest = approvals.slice().sort((a, b) => lateness(b.at) - lateness(a.at))[0];
       const longest = R.slice().sort((a, b) => (b.end - b.start) - (a.end - a.start))[0];
@@ -932,10 +949,9 @@
       }
       S.push({ kicker: 'YOUR ' + label.toUpperCase() + ' WITH REMINAL', big: dur(total), sub: 'of agent work, across ' + plural(R.length, 'run') + (machines > 1 ? ' on ' + machines + ' machines' : '') + '.' });
       if (away > 60000) S.push({ kicker: 'WHILE YOU WERE AWAY', big: dur(away), sub: 'your agents kept working with this screen off. You did not need to watch.' });
-      if (longest) S.push({ kicker: 'LONGEST RUN', big: dur(longest.end - longest.start), sub: (longest.agent || 'Your agent') + ' on ' + day(longest.start) + (longest.filesChanged ? ', ' + plural(longest.filesChanged, 'file') + ' changed' : '') + '.' });
+      if (longest) S.push({ kicker: 'LONGEST RUN', big: dur(longest.end - longest.start), sub: 'On ' + day(longest.start) + (longest.filesChanged ? ', ' + plural(longest.filesChanged, 'file') + ' changed' : '') + '.' });
       if (latest) S.push({ kicker: 'LATEST APPROVAL', big: clock(latest.at), sub: 'You said yes ' + (latest.phone ? 'from your phone ' : '') + 'on ' + day(latest.at) + '. ' + plural(approvals.length, 'approval') + ' in all.' });
       if (changed || commits || gained) S.push({ kicker: 'SHIPPED', big: changed ? plural(changed, 'file') : plural(commits, 'commit'), sub: [changed && commits ? plural(commits, 'commit') : '', gained ? gained + ' more tests passing' : ''].filter(Boolean).join(' · ') || 'changed by your agents.' });
-      if (topAgent) S.push({ kicker: 'YOUR TOP AGENT', big: topAgent[0], sub: dur(topAgent[1]) + ' of work this ' + label + '.' });
       const lateCount = approvals.filter(a => { const h = new Date(a.at).getHours(); return h >= 0 && h < 5; }).length;
       let p;
       if (lateCount >= 2) p = ['The 3 am Approver', '☾', 'Your agents never sleep, and apparently neither do you.'];
@@ -1053,7 +1069,7 @@
           ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
           ctx.fillStyle = '#e6edf3'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
           ctx.font = '800 54px ' + SANS;
-          ctx.fillText(o.title ? scrub(o.title) : (s.agent || 'My agent') + ' at work', 60, 90);
+          ctx.fillText(o.title ? scrub(o.title) : 'My agent at work', 60, 90);
           ctx.font = '600 34px ' + SANS; ctx.fillStyle = '#8b949e';
           ctx.fillText(speed + '× speed  ·  ' + dur(realMs) + ' of work', 60, 162);
           const cap = waiting ? 'waiting for you…' : caption;
@@ -1171,7 +1187,11 @@
     // preview of each thing that can be made from it; each maker opens in the
     // same sheet, with Back to the home.
     let sheet, back, foot, state = { tab: 'home' };
-    let lastSelection = '';
+    // The last text selected in the terminal, offered for a meme while it is
+    // fresh: one selected this morning is not what a meme opened now is about.
+    let lastSelection = '', lastSelectionAt = 0;
+    const SELECTION_FRESH = 3 * 60 * 1000;
+    function recentSelection() { return Date.now() - lastSelectionAt < SELECTION_FRESH ? lastSelection : ''; }
     const PRESETS = ['Shipped from the couch', 'Fixed prod from a wedding', 'Deployed from a hammock', 'Approved from bed', 'Coding from the gym', 'Merged on the train'];
     const RECEIPT_BG = [['#1f6feb', '#8957e5', 0], ['#f78166', '#ffd33d', 0], ['#0d1117', '#30363d', 1], ['#2ea043', '#a2f5bf', 0]];
     const MAKERS = [
@@ -1196,10 +1216,37 @@
     }
     function ensureSheet() {
       if (sheet) return;
-      back = el('div', { class: 'mo-back', onclick: close });
+      back = el('div', { class: 'mo-back', onclick: requestClose });
       sheet = el('div', { class: 'mo-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Share', tabindex: '-1' });
       document.body.appendChild(back);
       document.body.appendChild(sheet);
+      // Typing in a maker's settings, or picking one of its chips, colours or
+      // boxes, is work the person would lose by closing.
+      sheet.addEventListener('input', e => { if (state.tab !== 'home' && e.target.closest('.mo-controls')) dirty = true; });
+      sheet.addEventListener('click', e => { if (state.tab !== 'home' && e.target.closest('.mo-controls .mo-chip, .mo-controls .mo-swatch, .mo-controls .mo-check')) dirty = true; }, true);
+      // A field's change re-renders the sheet as the field loses focus, which
+      // is in the middle of a tap on one of the sheet's buttons (Save, a
+      // chip): rebuilt mid-tap, that button would never get its click, and
+      // Save took two taps. The re-render waits for the tap, runs first, and
+      // the tap goes to the new copy of the button, which sees what was typed.
+      sheet.addEventListener('pointerdown', () => { pressing = true; clearTimeout(pressTimer); }, true);
+      sheet.addEventListener('pointerup', () => { clearTimeout(pressTimer); pressTimer = setTimeout(endPress, 600); }, true);
+      sheet.addEventListener('pointercancel', endPress, true);
+      sheet.addEventListener('click', e => {
+        clearTimeout(pressTimer);
+        pressing = false;
+        if (!pendingRender) return;
+        pendingRender = false;
+        const sig = b => [b.className, b.textContent, b.getAttribute('aria-label')].join('\n');
+        const b = e.target.closest('button');
+        const key = b && sig(b);
+        render();
+        if (!key) return;
+        const twin = [...sheet.querySelectorAll('button')].find(x => sig(x) === key);
+        if (!twin) return;
+        e.stopImmediatePropagation(); e.preventDefault();
+        twin.click();
+      }, true);
       // Capture, ahead of the page's own handlers: while the sheet is open it
       // takes Escape, and Tab goes round its own controls, never off it into
       // the page behind the backdrop.
@@ -1208,16 +1255,69 @@
         if (e.key === 'Tab') { trapTab(e); return; }
         if (e.key !== 'Escape') return;
         e.preventDefault(); e.stopImmediatePropagation();
+        if (confirmEl) { dismissConfirm(); return; }
         if (lapseBusy) return;
-        if (state.tab !== 'home') { state.tab = 'home'; render(); } else close();
+        if (state.tab !== 'home') { state.tab = 'home'; render(); } else requestClose();
       }, true);
+    }
+    // A maker someone has typed in or picked things in asks before the sheet
+    // closes, so a stray tap on the backdrop doesn't throw that away. Copying,
+    // saving or sharing the picture counts as done with it.
+    let dirty = false, confirmEl = null;
+    let pressing = false, pendingRender = false, pressTimer = 0;
+    function endPress() {
+      pressing = false;
+      if (pendingRender) { pendingRender = false; render(); }
+    }
+    // renderSoon is render for a field's change: now, or after the tap it came in.
+    function renderSoon() { if (pressing) pendingRender = true; else render(); }
+    // bound makes a maker's field for state[key]: it shows what is kept there,
+    // and keeps what is typed or ticked, redrawing the card (but not when
+    // quiet: a clip's title shows only once the clip is made).
+    function bound(tag, attrs, key, quiet) {
+      const f = el(tag, attrs);
+      const box = attrs.type === 'checkbox';
+      if (box) f.checked = !!state[key]; else f.value = state[key] || '';
+      f.addEventListener('change', () => { state[key] = box ? f.checked : f.value; if (!quiet) renderSoon(); });
+      return f;
+    }
+    function requestClose() {
+      if (!sheet || lapseBusy) return;
+      if (dirty) askDiscard(); else close();
+    }
+    function askDiscard() {
+      if (confirmEl) return;
+      // The page's own small dialog (the share card's frame, title, hint and
+      // button row; its plain green button and button.danger), so it looks
+      // like the viewer's other questions.
+      const keep = el('button', { type: 'button', text: 'Keep editing', onclick: dismissConfirm });
+      const drop = el('button', { type: 'button', class: 'danger', text: 'Discard', onclick: discard });
+      confirmEl = el('div', { class: 'mo-confirm', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': 'mo-confirm-t' }, [
+        el('div', { class: 'share-card' }, [
+          el('div', { class: 'share-title', id: 'mo-confirm-t', text: 'Discard this moment?' }),
+          el('div', { class: 'share-hint', text: 'What you typed and picked here will be lost.' }),
+          el('div', { class: 'share-actions' }, [drop, keep]),
+        ]),
+      ]);
+      // A tap on the dimmed part around the question is a "keep editing".
+      confirmEl.addEventListener('click', e => { if (e.target === confirmEl) dismissConfirm(); });
+      sheet.appendChild(confirmEl);
+      keep.focus({ preventScroll: true });
+    }
+    function dismissConfirm() { if (confirmEl) { confirmEl.remove(); confirmEl = null; } }
+    function discard() {
+      dismissConfirm();
+      state = { tab: 'home', mode: state.mode, sid: state.sid };
+      close();
     }
     const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
     function trapTab(e) {
-      const all = [...sheet.querySelectorAll(FOCUSABLE)].filter(n => n.getClientRects().length);
+      // With the question up, Tab goes round its two buttons only.
+      const root = confirmEl || sheet;
+      const all = [...root.querySelectorAll(FOCUSABLE)].filter(n => n.getClientRects().length);
       const at = document.activeElement;
       if (!all.length) { e.preventDefault(); sheet.focus({ preventScroll: true }); return; }
-      const first = all[0], last = all[all.length - 1], inside = sheet.contains(at) && at !== sheet;
+      const first = all[0], last = all[all.length - 1], inside = root.contains(at) && at !== root;
       if (e.shiftKey && (!inside || at === first)) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && (!inside || at === last)) { e.preventDefault(); first.focus(); }
     }
@@ -1237,7 +1337,7 @@
       if (lapseBusy) { sheet.classList.add('open'); back.classList.add('open'); return; }
       // Another session: its own quote, clip and choices, not the last one's.
       let sid = ''; try { sid = String(sessionId || '').toUpperCase(); } catch (_) {}
-      if (state.sid !== sid) state = { tab: 'home', mode: state.mode, sid };
+      if (state.sid !== sid) { state = { tab: 'home', mode: state.mode, sid }; dirty = false; }
       state.wrappedAll = null;
       state.tab = tab || 'home';
       Object.assign(state, extra || {});
@@ -1254,6 +1354,8 @@
     }
     function close() {
       if (!sheet || lapseBusy) return;
+      dirty = false;
+      dismissConfirm();
       parkInvite();
       sheet.classList.remove('open'); back.classList.remove('open');
       returnFocus();
@@ -1285,6 +1387,7 @@
       try { renderSheet(); } finally { rendering = false; }
     }
     function renderSheet() {
+      confirmEl = null; // replaced with the rest below
       parkInvite();
       sheet.replaceChildren();
       const home = state.tab === 'home';
@@ -1295,7 +1398,7 @@
         home ? null : el('button', { class: 'mo-backbtn', type: 'button', 'aria-label': 'Back to Share', onclick: () => { if (lapseBusy) return; state.tab = 'home'; render(); } },
           [el('span', { class: 'mo-chev', text: '‹' }), 'Share']),
         el('div', { class: 'mo-title', text: home ? 'Share' : maker[1] }),
-        el('button', { class: 'mo-x', type: 'button', 'aria-label': 'Close', text: '✕', onclick: close }),
+        el('button', { class: 'mo-x', type: 'button', 'aria-label': 'Close', text: '✕', onclick: requestClose }),
       ]);
       const body = el('div', { class: 'mo-body' });
       foot = el('div', { class: 'mo-foot' });
@@ -1319,6 +1422,13 @@
       box.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + ICONS[k] + '</svg>';
       return box;
     }
+    // freshMaker forgets what maker k chose by itself last time (a meme's line,
+    // the run a receipt shows), so opening it again starts from what is newest
+    // now. Only when nothing was changed in it: that is kept (see dirty).
+    function freshMaker(k) {
+      if (k === 'meme') state.memeQuote = state.memeTop = state.memeBottom = state.memeAt = state.memeTpl = undefined;
+      if (k === 'receipt') state.runIdx = 0;
+    }
     function renderHome(body) {
       if (!state.mode) { try { state.mode = localStorage.getItem(MODE_KEY) || 'invite'; } catch (_) { state.mode = 'invite'; } }
       const pick = m => { state.mode = m; try { localStorage.setItem(MODE_KEY, m); } catch (_) {} render(); };
@@ -1341,7 +1451,7 @@
       const week = loadRuns().filter(r => Date.now() - r.start < 7 * 864e5);
       const thin = week.length < 3 && week.reduce((t, r) => t + (r.end - r.start), 0) < 30 * 60e3;
       for (const [k, label, sub] of MAKERS) {
-        list.appendChild(el('button', { type: 'button', class: 'mo-row', onclick: () => { state.tab = k; render(); } }, [
+        list.appendChild(el('button', { type: 'button', class: 'mo-row', onclick: () => { if (!dirty) freshMaker(k); state.tab = k; render(); } }, [
           icon(k),
           el('span', { class: 'mo-row-txt' }, [el('span', { class: 'mo-row-t', text: label }), el('span', { class: 'mo-row-s', text: k === 'receipt' && !ran ? 'After your agent’s next run' : k === 'wrapped' && thin ? 'Comes alive after a few runs' : sub })]),
           el('span', { class: 'mo-row-go', text: '›' }),
@@ -1374,16 +1484,19 @@
       if (kind !== 'video' && kind !== 'slides' && navigator.clipboard && window.ClipboardItem) {
         row.appendChild(el('button', { type: 'button', class: 'mo-btn', text: 'Copy', onclick: async () => {
           // The clipboard takes the picture as a promise, inside the tap.
-          flash(await copyImage(getFile()) ? 'Copied' : 'Could not copy');
+          const ok = await copyImage(getFile());
+          if (ok) dirty = false;
+          flash(ok ? 'Copied' : 'Could not copy');
         } }));
       }
       row.appendChild(el('button', { type: 'button', class: 'mo-btn', text: 'Save', onclick: async () => {
         const f = await (keepFile ? keepFile() : getFile()); if (!f) return;
-        (Array.isArray(f) ? f : [f]).forEach(saveFile); flash('Saved');
+        (Array.isArray(f) ? f : [f]).forEach(saveFile); dirty = false; flash('Saved');
       } }));
       row.appendChild(el('button', { type: 'button', class: 'mo-btn primary', text: 'Share', onclick: async () => {
         const f = await getFile(); if (!f) return;
         const r = await shareFiles(Array.isArray(f) ? f : [f]);
+        if (r === 'shared' || r === 'saved') dirty = false;
         flash(r === 'shared' ? 'Shared' : r === 'saved' ? 'Saved to your downloads' : '');
       } }));
       foot.appendChild(row);
@@ -1406,7 +1519,7 @@
       const list = [];
       const live = liveRun(s);
       if (live) list.push({ label: 'Running now · ' + dur(live.end - live.start), run: live });
-      for (const r of (s ? s.runs.slice().reverse() : [])) list.push({ label: clock(r.start) + ' · ' + dur(r.end - r.start) + (r.agent ? ' · ' + r.agent : ''), run: r });
+      for (const r of (s ? s.runs.slice().reverse() : [])) list.push({ label: clock(r.start) + ' · ' + dur(r.end - r.start) , run: r });
       return list;
     }
     function controls(body) {
@@ -1422,7 +1535,7 @@
     function tabReceipt(body) {
       const choices = runChoices();
       if (!choices.length) {
-        empty(body, 'No agent run here yet', 'Start a coding agent in this terminal (Claude, Codex, Gemini…). When it finishes a run, its receipt is ready: how long it worked, the files it changed, tests, and when you approved from your phone.');
+        empty(body, 'No agent run here yet', 'Start a coding agent in this terminal. When it finishes a run, its receipt is ready: how long it worked, the files it changed, tests, and when you approved from your phone.');
         return;
       }
       if (state.runIdx == null || state.runIdx >= choices.length) state.runIdx = 0;
@@ -1434,12 +1547,10 @@
       actions(async () => new File([await toBlob(c)], stampName('receipt', 'png'), { type: 'image/png' }));
       const ctl = controls(body);
       if (choices.length > 1) ctl.appendChild(group('Run', chips(choices.map((x, i) => ({ label: x.label, on: i === state.runIdx })), (x, i) => { state.runIdx = i; render(); })));
-      const note = el('input', { type: 'text', maxlength: '80', placeholder: 'e.g. while I was at the gym', value: state.note || '' });
-      note.addEventListener('change', () => { state.note = note.value; render(); });
+      const note = bound('input', { type: 'text', maxlength: '80', placeholder: 'e.g. while I was at the gym' }, 'note');
       ctl.appendChild(field('Your line', note));
       ctl.appendChild(group('Colour', swatches(RECEIPT_BG.map((x, i) => [x[0], x[1], ['Violet', 'Sunset', 'Night', 'Mint'][i]]), state.rbg, i => { state.rbg = i; render(); })));
-      const host = el('input', { type: 'checkbox' }); host.checked = !!state.showHost;
-      host.addEventListener('change', () => { state.showHost = host.checked; render(); });
+      const host = bound('input', { type: 'checkbox' }, 'showHost');
       ctl.appendChild(el('label', { class: 'mo-check' }, [host, el('span', { text: 'Show the machine’s name' })]));
     }
 
@@ -1479,8 +1590,7 @@
       const ctl = controls(body);
       ctl.appendChild(group('What', chips(spans.map((x, i) => ({ label: x.label, on: i === state.spanIdx })), (x, i) => { state.spanIdx = i; state.lapseFile = null; state.lapseLast = null; render(); }, 'wrapchips')));
       ctl.appendChild(group('Length', chips([10, 15, 30].map(n => ({ label: n + ' s', n, on: n === state.secs })), x => { state.secs = x.n; render(); })));
-      const title = el('input', { type: 'text', maxlength: '48', placeholder: (s && s.agent || 'My agent') + ' at work', value: state.lapseTitle || '' });
-      title.addEventListener('change', () => { state.lapseTitle = title.value; });
+      const title = bound('input', { type: 'text', maxlength: '48', placeholder: 'My agent at work' }, 'lapseTitle', true);
       ctl.appendChild(field('Title', title));
       go.addEventListener('click', async () => {
         if (lapseBusy) return;
@@ -1509,8 +1619,9 @@
     function memeDefaults() {
       const s = cur();
       const m = s && s.moments.length ? s.moments[s.moments.length - 1] : null;
-      const quote = lastSelection || (m ? m.text : 'You’re absolutely right! I apologize for the confusion.');
-      const k = MOMENT_KINDS.find(x => x.kind === (m && !lastSelection ? m.kind : 'right'));
+      const sel = recentSelection();
+      const quote = sel || (m ? m.text : 'You’re absolutely right! I apologize for the confusion.');
+      const k = MOMENT_KINDS.find(x => x.kind === (m && !sel ? m.kind : 'right'));
       return { quote, top: k.top, bottom: k.bottom, at: m ? m.at : Date.now() };
     }
     function tabMeme(body) {
@@ -1536,7 +1647,7 @@
         render();
       })));
       const picks = [];
-      const sel = (() => { try { return term.getSelection() || lastSelection; } catch (_) { return lastSelection; } })();
+      const sel = (() => { try { return term.getSelection() || recentSelection(); } catch (_) { return recentSelection(); } })();
       if (sel && sel.trim()) picks.push({ label: 'Selected text', text: sel.trim().slice(0, 220), title: sel });
       for (const m of found.slice(0, 8)) picks.push({ label: '“' + scrub(m.text).slice(0, 42) + (m.text.length > 42 ? '…' : '') + '”', text: m.text, kind: m.kind, at: m.at, title: scrub(m.text), on: m.text === state.memeQuote });
       if (picks.length) ctl.appendChild(group('From this session', chips(picks, x => {
@@ -1546,16 +1657,13 @@
         render();
       }, 'wrapchips')));
       else ctl.appendChild(el('div', { class: 'mo-hint', text: 'Lines like “You’re absolutely right!” or “I see the issue now” show up here as the agent says them. You can also select text in the terminal and tap Meme.' }));
-      const q = el('textarea', { rows: '2', maxlength: '240' }); q.value = state.memeQuote;
-      q.addEventListener('change', () => { state.memeQuote = q.value; render(); });
+      const q = bound('textarea', { rows: '2', maxlength: '240' }, 'memeQuote');
       ctl.appendChild(field('The agent said', q));
       const topLabel = state.memeTpl === 'twopanel' ? 'What I asked' : state.memeTpl === 'quote' ? 'Signed' : state.memeTpl === 'achievement' ? 'Achievement' : 'Top text';
-      const t = el('input', { type: 'text', maxlength: '90', value: state.memeTop || '' });
-      t.addEventListener('change', () => { state.memeTop = t.value; render(); });
+      const t = bound('input', { type: 'text', maxlength: '90' }, 'memeTop');
       ctl.appendChild(field(topLabel, t));
       if (state.memeTpl === 'caption') {
-        const bt = el('input', { type: 'text', maxlength: '90', value: state.memeBottom || '' });
-        bt.addEventListener('change', () => { state.memeBottom = bt.value; render(); });
+        const bt = bound('input', { type: 'text', maxlength: '90' }, 'memeBottom');
         ctl.appendChild(field('Bottom text', bt));
       }
     }
@@ -1570,14 +1678,12 @@
       if (state.ptall) box.classList.add('tall');
       actions(async () => new File([await toBlob(c)], stampName('phone', 'png'), { type: 'image/png' }));
       const ctl = controls(body);
-      const st = el('input', { type: 'text', maxlength: '60', value: state.stamp });
-      st.addEventListener('change', () => { state.stamp = st.value; render(); });
+      const st = bound('input', { type: 'text', maxlength: '60' }, 'stamp');
       ctl.appendChild(field('Caption', st));
       ctl.appendChild(chips(PRESETS.map(p => ({ label: p, on: p === state.stamp })), x => { state.stamp = x.label; render(); }));
       ctl.appendChild(group('Background', swatches(BGS.map((b, i) => [b[0], b[1], ['Peach', 'Ocean', 'Gold', 'Slate', 'Rose', 'Midnight'][i]]), state.pbg, i => { state.pbg = i; render(); })));
       ctl.appendChild(group('Size', chips([{ label: 'Post 4:5', v: false, on: !state.ptall }, { label: 'Story 9:16', v: true, on: !!state.ptall }], x => { state.ptall = x.v; render(); })));
-      const tm = el('input', { type: 'checkbox' }); tm.checked = !!state.ptime;
-      tm.addEventListener('change', () => { state.ptime = tm.checked; render(); });
+      const tm = bound('input', { type: 'checkbox' }, 'ptime');
       ctl.appendChild(el('label', { class: 'mo-check' }, [tm, el('span', { text: 'Show the date and time' })]));
       ctl.appendChild(el('div', { class: 'mo-hint', text: 'Shows the newest lines on the terminal, as a phone shows them. Scroll up first for an earlier part.' }));
     }
@@ -1647,11 +1753,11 @@
         let picked = '';
         mb.addEventListener('pointerdown', () => { try { picked = term.getSelection(); } catch (_) { picked = ''; } });
         mb.addEventListener('click', () => {
-          const t = (picked || lastSelection || '').trim();
+          const t = (picked || recentSelection() || '').trim();
           if (t) open('meme', { memeQuote: t.slice(0, 220), memeTpl: 'caption', memeTop: (MOMENT_KINDS.find(k => k.re.test(t)) || {}).top || 'MY AGENT, LIVE:', memeBottom: (MOMENT_KINDS.find(k => k.re.test(t)) || {}).bottom || '', memeAt: Date.now() });
         });
       }
-      try { term.onSelectionChange(() => { const t = term.getSelection(); if (t && t.trim()) lastSelection = t.trim().slice(0, 220); }); } catch (_) {}
+      try { term.onSelectionChange(() => { const t = term.getSelection(); if (t && t.trim()) { lastSelection = t.trim().slice(0, 220); lastSelectionAt = Date.now(); } }); } catch (_) {}
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
