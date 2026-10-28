@@ -1058,3 +1058,55 @@ func BenchmarkHarnessLimitLongRows(b *testing.B) {
 		})
 	}
 }
+
+// While Claude Code waits to go on by itself after a usage limit, its footer
+// says so under its input box (2.1.312): read there, whole or as its status
+// row's right-hand part, it is at its limit. The same words in an answer
+// above the box, a footer row that goes on in words, and another CLI's
+// screen are not (review).
+func TestHarnessLimitClaudeWaitFooter(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	const (
+		rule   = "────────────────────────────────"
+		status = "  Usage limit reached · limit resets 3pm (America/Los_Angeles)"
+		next   = "  Continuing automatically at 3pm (America/Los_Angeles) · Esc to cancel"
+	)
+	box := "● Done.\n" + rule + "\n❯ \n" + rule + "\n"
+	for _, tc := range []struct {
+		screen string
+		resets time.Time
+	}{
+		{box + status + "\n" + next, limitLA(2026, 10, 19, 15, 0)},
+		{box + status, limitLA(2026, 10, 19, 15, 0)},
+		{box + next, limitLA(2026, 10, 19, 15, 0)},
+		{box + "  ⏵⏵ auto mode on (shift+tab to cycle)    Usage limit reached · limit resets 3pm (America/Los_Angeles)\n" + next, limitLA(2026, 10, 19, 15, 0)},
+		{box + "  Usage limit reached · limit resets 11:15am\n  Continuing automatically at 11:15am · Esc to cancel", limitLA(2026, 10, 19, 11, 15)},
+		{box + "  Usage limit reached\n  Continuing automatically when it resets · Esc to cancel", time.Time{}},
+		{box + "  Usage limit reached · limit resets 3pm\n  Continuing shortly · Esc to cancel", limitLA(2026, 10, 19, 15, 0)},
+	} {
+		for _, prog := range []string{"claude", ""} {
+			hit, at := harnessLimitIn(tc.screen, prog, limitTestNow)
+			if !hit || !at.Equal(tc.resets) {
+				t.Errorf("as %q: hit=%v resets %v, want true, %v:\n%s", prog, hit, at, tc.resets, tc.screen)
+			}
+		}
+	}
+	for why, tc := range map[string]struct{ prog, screen string }{
+		"in an answer above the box":   {"claude", "● Usage limit reached · limit resets 3pm (America/Los_Angeles)\n  Continuing automatically at 3pm (America/Los_Angeles) · Esc to cancel\n" + rule + "\n❯ \n" + rule},
+		"the same, no program known":   {"", "● Usage limit reached · limit resets 3pm (America/Los_Angeles)\n  Continuing automatically at 3pm (America/Los_Angeles) · Esc to cancel\n" + rule + "\n❯ \n" + rule},
+		"a footer row going on":        {"claude", box + status + ", so I'm waiting"},
+		"a status row's part going on": {"claude", box + "  ⏵⏵ auto mode on    Usage limit reached · limit resets 3pm and then more"},
+		"as Codex":                     {"codex", box + status + "\n" + next},
+		"as Gemini CLI":                {"gemini", box + status + "\n" + next},
+		"no Claude box, no program":    {"", "• Done.\n\n› Ask Codex to do anything\n" + status + "\n" + next},
+	} {
+		if hit, _ := harnessLimitIn(tc.screen, tc.prog, limitTestNow); hit {
+			t.Errorf("%s (as %q): read as at its limit:\n%s", why, tc.prog, tc.screen)
+		}
+	}
+	if !limitedAfterTurn(t, box+status+"\n"+next) {
+		t.Error("a session waiting to go on by itself is not held as limited")
+	}
+}

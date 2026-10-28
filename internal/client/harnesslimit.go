@@ -428,6 +428,17 @@ func harnessLimitNoticesIn(tail, prog string, now time.Time) (int, time.Time, bo
 			at = t
 		}
 	}
+	if prog == "" || prog == "claude" {
+		if said := claudeFooterLimit(rows); said != "" {
+			// Waiting to go on by itself, it is at its limit: said under its
+			// input box, the latest thing on the screen.
+			count++
+			if t := parseLimitReset(said, now); !t.IsZero() {
+				at = t
+			}
+			return count, at, true
+		}
+	}
 	if lowestNotice < 0 {
 		return count, at, false
 	}
@@ -439,6 +450,48 @@ func harnessLimitNoticesIn(tail, prog string, now time.Time) (int, time.Time, bo
 	// answers it if it is the last thing above the
 	// input box — not if the agent's work followed it.
 	return count, at, limitLastAboveBox(rows[lowestNotice+1+noticeRows:])
+}
+
+// claudeWaitFooter is what Claude Code's footer says while it waits to go on
+// by itself after a usage limit, flattened (2.1.312, its "limit-status" and
+// "limit-next" rows): "Usage limit reached · limit resets 3pm", "Continuing
+// automatically at 3pm · Esc to cancel".
+var claudeWaitFooter = regexp.MustCompile(`^(?:usagelimitreached(?:·limitresets` + limitWhen + `)?` +
+	`|continuing(?:automatically(?:at` + limitWhen + `|whenitresets)|shortly)·esctocancel)$`)
+
+// limitFooterGap is the run of spaces between a status row's parts.
+var limitFooterGap = regexp.MustCompile(`\s{2,}`)
+
+// claudeFooterLimit is what Claude Code's footer says of a usage limit it
+// waits out, flattened, or "": read only under its input box, where an
+// answer never is, each row whole or as its status row's right-hand part
+// ("⏵⏵ auto mode on (shift+tab to cycle)    Usage limit reached · …").
+func claudeFooterLimit(rows []string) string {
+	said := ""
+	for _, r := range rows[claudeBoxEnd(rows)+1:] {
+		parts := limitFooterGap.Split(strings.TrimSpace(r), -1)
+		if end := strings.ToLower(strings.Join(strings.Fields(parts[len(parts)-1]), "")); claudeWaitFooter.MatchString(end) {
+			said += end
+		}
+	}
+	return said
+}
+
+// claudeBoxEnd is the row of the rule that closes Claude Code's lowest input
+// box (a rule, its prompt "❯" at the row's start, perhaps a draft's rows, a
+// rule), or the screen's last row when it shows none: nothing is under it.
+func claudeBoxEnd(rows []string) int {
+	for i := len(rows) - 1; i > 0; i-- {
+		if !strings.HasPrefix(rows[i], "❯") || !attnIsRule(rows[i-1]) {
+			continue
+		}
+		for j := i + 1; j < len(rows); j++ {
+			if attnIsRule(rows[j]) {
+				return j
+			}
+		}
+	}
+	return len(rows) - 1
 }
 
 // limitLastAboveBox says whether rows, those under a notice, are its input
