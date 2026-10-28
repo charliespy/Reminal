@@ -32,7 +32,8 @@ sh(`reminal add owner ${await p.evaluate(() => ownDeviceId())} -y`);
 spawn('reminal', ['daemon'], { detached: true, stdio: 'ignore' }).unref();
 await sleep(1500);
 sh('mkdir -p /root/work');
-const sid = sh('cd /root/work && reminal new work').match(/Session:\s+([A-Z0-9]+)/)[1];
+const made = sh('cd /root/work && reminal new work');
+const sid = made.match(/Session:\s+([A-Z0-9]+)/)[1], pin = made.match(/PIN:\s*([0-9]+)/)[1];
 await p.evaluate(s => connectOwned(s), sid);
 check(await until(() => p.evaluate(async () => Object.keys(await loadOwnedMachines()).length === 1), 40), 'the browser owns the machine', 'no machine');
 await until(() => p.evaluate(() => document.body.classList.contains('connected')), 20);
@@ -46,6 +47,14 @@ await p.keyboard.type('remember 4242\n', { delay: 10 });
 await sleep(2000);
 check(convs().includes('you said: remember 4242'), 'claude is running with a conversation', convs());
 
+// A guest, by link and PIN, watching it: through the sleep and the wake.
+const gctx = await browser.newContext();
+await gctx.addInitScript(() => { try { localStorage.setItem('reminal-tour-v1', 'skipped'); } catch (_) {} });
+const g = await gctx.newPage();
+g.on('pageerror', e => errs.push('guest: ' + e.message));
+await g.goto(`http://127.0.0.1:8080/?s=${sid}#p=${pin}`);
+check(await until(() => g.evaluate(() => document.body.classList.contains('connected')), 30), 'a guest viewer is watching it by link and PIN', 'guest not connected');
+const screenOf = (pg) => pg.evaluate(() => { const b = term.buffer.active; let t = ''; for (let y = 0; y < b.length; y++) t += b.getLine(y).translateToString(true) + '\n'; return t; });
 const key = await p.evaluate(async () => Object.keys(await loadOwnedMachines())[0]);
 const listing = () => p.evaluate(async (k) => (await queryDirectory(base64ToU8(b64URLToStd(k)), {})).sessions, key);
 const row = async (id) => (await listing()).find(s => s.id === id);
@@ -81,6 +90,7 @@ check(await until(() => convs().includes('you said: typed-while-waking'), 40), '
 check(await until(async () => !(await row(sid))?.asleep, 10), 'awake again, same id', JSON.stringify(await row(sid)));
 check(!existsSync(restore(sid, '.asleep')), 'no longer marked asleep', 'still marked');
 check(await p.evaluate(() => document.getElementById('wake-screen').hidden), 'the live terminal replaced the saved screen', 'wake screen still up');
+check(await until(async () => (await screenOf(g)).includes('typed-while-waking'), 30), 'the guest viewer, open through it all, reconnected and sees it live', (await screenOf(g)).slice(-300));
 
 // A job in it: asked, and slept anyway only when said yes; the row says what went.
 await p.keyboard.type('\x04', { delay: 5 }); await sleep(800);       // leave claude

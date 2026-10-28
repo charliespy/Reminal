@@ -70,6 +70,9 @@ send $ID "what number"; sleep 1
 box "grep -q 'you said: what number' /root/.fake-claude/$CONV.conv" && ok "new input goes into the same conversation" || fail "new input went elsewhere"
 docker exec -e REMINAL_RELAY=ws://$RELAY:8080/ws $RELAY sh -c "mcp.sh read 'http://$RELAY:8080/?s=$ID#p=$PIN'" | grep -q "what number" \
     && ok "reachable through the relay with its old id and PIN" || fail "old link and PIN don't reach it"
+box "reminal list" | grep "$ID" | grep -q "work" && ok "its name came back (work)" || fail "name lost: $(box 'reminal list')"
+for i in $(seq 1 10); do box "mcp.sh list" | grep -qE 'attn.{0,8}done' && break; sleep 1; done
+box "mcp.sh list" | grep -qE 'attn.{0,8}done' && ok "its agent's attention state works again (done)" || fail "no attention state after the wake: $(box 'mcp.sh list' | cut -c1-400)"
 
 # A job running in it: refused, and said; --anyway lets it go, and says so.
 send $ID "$(printf '\\u0004')"; sleep 1          # leave claude
@@ -85,6 +88,12 @@ box "MCP_WAIT=40 mcp.sh send $ID 'hello from the agent tools' >/dev/null"
 sleep 2
 running $ID && ok "send_keys woke it" || fail "send_keys did not wake it"
 box "grep -rq 'you said: hello from the agent tools' /root/.fake-claude/" && ok "…and the keys went to claude, not the shell" || fail "keys lost: $(screen $ID | tail -5)"
+
+# reminal connect to a session asleep wakes it (a terminal attaching is a
+# person at it).
+box "reminal sleep $ID --anyway >/dev/null 2>&1"
+box "timeout 8 script -qec 'reminal connect $ID $PIN' /dev/null >/dev/null 2>&1; true"
+running $ID && ok "reminal connect woke it" || fail "reminal connect did not wake it: $(box 'reminal list')"
 
 # A plain shell: refused unless --anyway (what was typed by hand is lost).
 o2=$(newsession plain /root); P=$(idof "$o2"); sleep 2
