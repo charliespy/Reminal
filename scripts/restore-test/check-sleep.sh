@@ -20,6 +20,10 @@ idof()  { echo "$1" | sed -n 's/^ *Session: *\([A-Z0-9]*\).*/\1/p' | head -1; }
 pinof() { echo "$1" | sed -n 's/.*PIN: *\([0-9]*\).*/\1/p'; }
 running() { box "reminal list" | grep "$1" | grep -vq asleep; }
 claudes() { box "pgrep -x claude | wc -l | tr -d ' '"; }
+# shellin <dir>: the pid of the session shell (bash) working in dir.
+shellin() { box "for p in \$(pgrep -x bash); do [ \"\$(readlink /proc/\$p/cwd)\" = $1 ] && echo \$p; done" | head -1; }
+# ended <pid>: gone, or a zombie (ended, not yet reaped).
+ended() { box "! grep -q '^State:[[:space:]]*[^Z]' /proc/$1/status 2>/dev/null"; }
 
 out=$(newsession work /root/project); ID=$(idof "$out"); PIN=$(pinof "$out")
 [ -n "$ID" ] && ok "session $ID (PIN $PIN)" || { fail "no session: $out"; exit 1; }
@@ -31,6 +35,8 @@ sleep 2
 CONV=$(box "ls -t /root/.fake-claude/*.conv | head -1 | xargs basename | sed 's/.conv$//'")
 screen $ID | grep -q "you said: remember the number 4242" && ok "claude is running, conversation $CONV" || fail "claude not answering"
 before=$(claudes)
+SHPID=$(shellin /root/project)
+[ -n "$SHPID" ] && ! ended $SHPID && ok "its shell is pid $SHPID, running" || fail "no running session shell found ($SHPID)"
 
 # keep-awake holds it awake; --off lets it go.
 box "reminal keep-awake $ID >/dev/null"
@@ -41,6 +47,7 @@ box "reminal keep-awake $ID --off >/dev/null"
 o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "asleep" && ok "slept: $o" || fail "sleep failed: $o"
 running $ID && fail "$ID still running" || ok "its processes are gone"
 [ "$(claudes)" -lt "$before" ] && ok "claude ended ($before → $(claudes) running)" || fail "claude still running"
+[ -n "$SHPID" ] && ended $SHPID && ok "its shell ended (pid $SHPID: the terminal was hung up)" || fail "its shell $SHPID still running: $(box "grep State /proc/$SHPID/status")"
 box "test -f /root/.reminal/restore/$ID.sealed && test -f /root/.reminal/restore/$ID.asleep" && ok "record kept, marked asleep" || fail "no record or no asleep mark"
 box "reminal list" | grep -q "$ID.*asleep" && ok "reminal list shows it asleep" || fail "list: $(box 'reminal list')"
 # The agent tools on a session asleep: listed, read and searched from what it
