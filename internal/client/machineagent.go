@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"sort"
 	"time"
@@ -136,6 +137,7 @@ var machineAccepts = map[protocol.MessageType]bool{
 	protocol.TypeDirRename:     true,
 	protocol.TypeDirRevokeSelf: true,
 	protocol.TypeDirKill:       true,
+	protocol.TypeDirSleep:      true,
 	protocol.TypeDirIntegrate:  true,
 	protocol.TypeNewSession:    true,
 	protocol.TypeHostInfo:      true,
@@ -174,6 +176,7 @@ var dirChannelOnly = map[protocol.MessageType]bool{
 	protocol.TypeDirRename:     true,
 	protocol.TypeDirRevokeSelf: true,
 	protocol.TypeDirKill:       true,
+	protocol.TypeDirSleep:      true,
 	// Edits the user's own agent configs: an owner's action, never a guest's.
 	protocol.TypeDirIntegrate: true,
 	// Replaces the binary under every session here: never a PIN guest's to ask.
@@ -568,4 +571,39 @@ func (a *Agent) handleDirKill(conn *websocket.Conn, data string) {
 		ack.OK = true
 	}
 	a.sendWindowMsg(conn, protocol.TypeDirKill, ack)
+}
+
+// dirSleepAck answers dir_sleep: what a refused sleep would end, and on a
+// wake the session's last saved screen, painted while it comes up.
+type dirSleepAck struct {
+	dirAck
+	Lose   []string `json:"lose,omitempty"`
+	Screen string   `json:"screen,omitempty"`
+}
+
+func (a *Agent) handleDirSleep(conn *websocket.Conn, data string) {
+	if ok, wait := a.takeDir(dirActRename); !ok {
+		a.dirBusy(conn, protocol.TypeDirSleep, data, wait)
+		return
+	}
+	var req struct {
+		ID    string `json:"id"`
+		Act   string `json:"act"`
+		ReqID string `json:"req_id"`
+	}
+	if !a.decryptDir(data, &req) {
+		return
+	}
+	ack := dirSleepAck{dirAck: dirAck{ReqID: req.ReqID}}
+	screen, err := sleepAct(req.ID, req.Act)
+	var lose ErrWouldLose
+	switch {
+	case errors.As(err, &lose):
+		ack.Error, ack.Lose = err.Error(), lose.Losses
+	case err != nil:
+		ack.Error = err.Error()
+	default:
+		ack.OK, ack.Screen = true, screen
+	}
+	a.sendWindowMsg(conn, protocol.TypeDirSleep, ack)
 }

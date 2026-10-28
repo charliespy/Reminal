@@ -389,6 +389,10 @@ func killLocalSession(id string) error {
 		}(pid)
 		return nil
 	}
+	// Asleep: nothing is running to stop; ending it is forgetting it.
+	if session.IsAsleep(id) {
+		return session.ClearRestore(id)
+	}
 	return fmt.Errorf("session not found")
 }
 

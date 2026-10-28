@@ -432,6 +432,7 @@
       // whatever the poll last knew.
       if (sessionId && ('attn' in info)) {
         setLiveAttn(sessionId, info.attn || '');
+        wakeAgentBack(sessionId, info.attn || '');
         if (window.reminalMoments) try { reminalMoments.attn(sessionId, info.attn || ''); } catch (_) {}
       }
       renderHost();
@@ -4139,6 +4140,8 @@
     // takes only the one carrying its own. 8 random bytes as hex, never
     // empty or short, as Math.random's base-36 tail could be: an empty id
     // took another owner's reply for its own.
+    // The reply type each owner action is answered with.
+    const DIR_ACK_TYPE = { spawn: 'new_session', rename: 'dir_rename', revoke: 'dir_revoke_self', kill: 'dir_kill', sleep: 'dir_sleep' };
     function dirReqId() {
       return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
     }
@@ -4251,6 +4254,12 @@
                 const enc = await encrypt(box, JSON.stringify({ id: opts.kill, req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_kill', data: enc }));
                 state = 'kill';
+              } else if (opts.sleep) {
+                // Sleep, wake or keep awake one of its sessions: { id, act }.
+                att.reqId = dirReqId();
+                const enc = await encrypt(box, JSON.stringify({ id: opts.sleep.id, act: opts.sleep.act, req_id: att.reqId }));
+                sock.send(JSON.stringify({ type: 'dir_sleep', data: enc }));
+                state = 'sleep';
               } else if (opts.push) {
                 // Phone alerts ride dir_query too. The proof names which owner
                 // device asked (every owner shares the channel key) and is bound
@@ -4303,40 +4312,16 @@
               }
               return done(null, r);
             }
-            if (state === 'spawn') {
-              if (msg.type !== 'new_session') return;
-              const pt = await decrypt(box, msg.data || '');
-              const r = JSON.parse(new TextDecoder().decode(pt));
-              if (att.reqId && r.req_id && r.req_id !== att.reqId) return; // another owner's reply
-              if (r.retry_ms) return done(dirBusy(r.retry_ms));
-              if (r.error) return done(new Error(r.error));
-              return done(null, r);
-            }
-            if (state === 'rename') {
-              if (msg.type !== 'dir_rename') return;
+            // An owner action's answer: the reply of its own type, carrying its
+            // req_id (another owner's is not ours). A refusal keeps the whole reply
+            // (a sleep says what it would end).
+            if (DIR_ACK_TYPE[state]) {
+              if (msg.type !== DIR_ACK_TYPE[state]) return;
               const pt = await decrypt(box, msg.data || '');
               const r = JSON.parse(new TextDecoder().decode(pt));
               if (att.reqId && r.req_id && r.req_id !== att.reqId) return;
               if (r.retry_ms) return done(dirBusy(r.retry_ms));
-              if (r.error) return done(new Error(r.error));
-              return done(null, r);
-            }
-            if (state === 'revoke') {
-              if (msg.type !== 'dir_revoke_self') return;
-              const pt = await decrypt(box, msg.data || '');
-              const r = JSON.parse(new TextDecoder().decode(pt));
-              if (att.reqId && r.req_id && r.req_id !== att.reqId) return;
-              if (r.retry_ms) return done(dirBusy(r.retry_ms));
-              if (r.error) return done(new Error(r.error));
-              return done(null, r);
-            }
-            if (state === 'kill') {
-              if (msg.type !== 'dir_kill') return;
-              const pt = await decrypt(box, msg.data || '');
-              const r = JSON.parse(new TextDecoder().decode(pt));
-              if (att.reqId && r.req_id && r.req_id !== att.reqId) return;
-              if (r.retry_ms) return done(dirBusy(r.retry_ms));
-              if (r.error) return done(new Error(r.error));
+              if (r.error) return done(Object.assign(new Error(r.error), { reply: r }));
               return done(null, r);
             }
           } catch (e) { done(e); }
@@ -4369,6 +4354,7 @@
     // Consistent stroke icons for the Machines panel — the caret / + / edit /
     // kill controls all render at the same visual size (Unicode glyphs don't).
     const MICONS = {
+      moon:  '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
       down:  '<path d="M6 9l6 6 6-6"/>',
       right: '<path d="M9 6l6 6-6 6"/>',
       plus:  '<path d="M12 5v14M5 12h14"/>',
@@ -5066,7 +5052,11 @@
         // Always surface the reminal id (it's how you identify/connect to a
         // session), then viewers/idle — or "current" for the one you're viewing.
         const bits = [s.id];
-        if (isCurrent) {
+        if (s.asleep) {
+          // Asleep says so even for the session this tab was showing: nothing
+          // runs there until it is opened again.
+          bits.push('asleep · open it to wake it');
+        } else if (isCurrent) {
           // The session you're viewing: keep the live viewer count visible (it
           // includes you), just tagged "current" — idle is meaningless while
           // you're actively connected, so drop it.
@@ -5089,7 +5079,7 @@
         // Attention state word — a quiet chip, right-aligned before the actions,
         // so working/needs-you/done reads without hunting. Idle shows nothing.
         // Reads through attnOf, so a live-pushed state beats the polled one.
-        const msAttn = s.kind !== 'port' ? attnOf(s.id, s.attn) : '';
+        const msAttn = s.asleep ? 'asleep' : s.kind !== 'port' ? attnOf(s.id, s.attn) : '';
         if (msAttn && ATTN_LABELS[msAttn]) {
           const st = document.createElement('div');
           st.className = 'ms-state attn-' + msAttn;
@@ -5101,13 +5091,18 @@
         if (s.kind !== 'port') {
           row.title = (isCurrent ? "The session you're viewing" : 'Connect (no PIN — you own this machine)')
             + ' · ' + NEW_TAB_KEY + '-click opens it in a new tab';
+          if (s.asleep) {
+            row.classList.add('is-asleep');
+            row.title = 'Asleep · open it to wake it (same link and PIN)'
+              + (s.dropped && s.dropped.length ? ' · when it slept it let go of: ' + s.dropped.join('; ') : '');
+          }
           row.addEventListener('click', (ev) => {
             // A modified click is the browser's to handle — it's already
             // opening the anchor in a new tab/window, and hijacking it here
             // would ALSO tear down this tab's session to connect in place.
             if (wantsNewTab(ev)) return;
             ev.preventDefault(); // don't navigate this tab away; connect in place
-            connectOwned(s.id);
+            if (s.asleep) wakeOwned(b64, s); else connectOwned(s.id);
           });
           const dup = document.createElement('button');
           dup.className = 'ms-btn';
@@ -5128,7 +5123,15 @@
           ren.title = 'Rename this session';
           ren.innerHTML = mIcon('edit');
           ren.addEventListener('click', (ev) => { ev.stopPropagation(); renameSessionOnMachine(b64, s.id, s.name || ''); });
-          actions.appendChild(ren);
+          if (!s.asleep) actions.appendChild(ren); // a name is changed in the running session
+          if (!s.asleep) {
+            const sl = document.createElement('button');
+            sl.className = 'ms-btn';
+            sl.title = 'Sleep: end its processes and free their memory; it wakes as itself when opened';
+            sl.innerHTML = mIcon('moon');
+            sl.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); sleepOnMachine(b64, s); });
+            actions.appendChild(sl);
+          }
         } else {
           row.classList.add('is-port');
           row.title = 'Open :' + (s.port || '?') + ' in a new tab';
@@ -5147,7 +5150,7 @@
     }
 
     // Attention state → the word shown in the session's state chip.
-    const ATTN_LABELS = { input: 'needs you', working: 'working', done: 'done', 'logged-out': 'logged out', limited: 'limited' };
+    const ATTN_LABELS = { input: 'needs you', working: 'working', done: 'done', 'logged-out': 'logged out', limited: 'limited', asleep: 'asleep' };
 
     // attnChipEl builds the little state pill shown beside a session name in the
     // Recents dropdown and the mobile dock, or null for an idle/unknown state.
@@ -5474,6 +5477,82 @@
     function cssEscape(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&'); }
 
     // Connect to an owned machine's session with no PIN (owner path).
+    // Sleep (sleep.go): a session of an owned machine can be put to sleep from
+    // here — its processes end, its record is kept — and woken again on its
+    // id, PIN and conversation, over the machine channel (the owner's alone).
+    // While it wakes, its last saved screen shows, and what you type is held
+    // until its agent is back at its prompt (wakeGate): typed into the shell
+    // before the agent is back, it would run there.
+    const WAKE_HOLD_MS = 60000;
+    let wakeGate = null; // { id, agent, until }
+    function wakeHolding() {
+      if (!wakeGate) return false;
+      const done = (sessionId && sessionId !== wakeGate.id) || Date.now() > wakeGate.until
+        || (!wakeGate.agent && agentLive && authed); // a plain shell: once it is live
+      if (done) endWakeGate();
+      return !!wakeGate;
+    }
+    function endWakeGate() {
+      if (!wakeGate) return;
+      wakeGate = null;
+      hideWakeScreen();
+      if (heldInput.length) heldSince = Date.now(); // held while it woke: not late
+      updateHeldChip();
+      flushHeldInput();
+    }
+    // wakeAgentBack is told each attention state the woken session reports:
+    // its agent back at its prompt lets the held keys go.
+    function wakeAgentBack(id, attn) {
+      if (wakeGate && wakeGate.agent && wakeGate.id === id && ['done', 'input', 'limited'].includes(attn)) endWakeGate();
+    }
+    function showWakeScreen(name, screen) {
+      const el = document.getElementById('wake-screen');
+      if (!el) return;
+      el.querySelector('.wake-title').textContent = 'Waking ' + name + '… (usually a few seconds)';
+      el.querySelector('.wake-rows').textContent = screen || '';
+      el.hidden = false;
+    }
+    function hideWakeScreen() {
+      const el = document.getElementById('wake-screen');
+      if (el) el.hidden = true;
+    }
+    async function wakeOwned(b64, s) {
+      const name = sessionLabelWeb(s);
+      showWakeScreen(name, '');
+      setStatus('Waking ' + name + '…', 'info');
+      try {
+        const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { sleep: { id: s.id, act: 'wake' }, timeout: DIR_SPAWN_TIMEOUT_MS });
+        if (r && r.screen) showWakeScreen(name, r.screen);
+        wakeGate = { id: s.id.toUpperCase(), agent: !!s.fg, until: Date.now() + WAKE_HOLD_MS };
+        connectOwned(s.id);
+        renderMachines();
+      } catch (e) {
+        hideWakeScreen();
+        setStatus('Could not wake ' + s.id + ' (' + (e.message || 'error') + ')', 'error');
+      }
+    }
+    // sleepOnMachine puts one of an owned machine's sessions to sleep. Refused
+    // for what it would end (a job running in it, an unfinished turn), it says
+    // what, and sleeps only if you say so.
+    async function sleepOnMachine(b64, s) {
+      const machine = base64ToU8(b64URLToStd(b64));
+      const ask = async (act) => queryDirectory(machine, { sleep: { id: s.id, act }, timeout: DIR_SPAWN_TIMEOUT_MS });
+      try {
+        try {
+          await ask('sleep');
+        } catch (e) {
+          const lose = e.reply && e.reply.lose;
+          if (!lose || !lose.length) throw e;
+          if (!confirm('Sleeping ' + s.id + ' would end:\n\n- ' + lose.join('\n- ') + '\n\nA wake can\x27t bring these back. Sleep anyway?')) return;
+          await ask('sleep_anyway');
+        }
+        setStatus(s.id + ' is asleep · open it to wake it', 'info');
+        renderMachines();
+      } catch (e) {
+        setStatus('Could not sleep ' + s.id + ' (' + (e.message || 'error') + ')', 'error');
+      }
+    }
+
     function connectOwned(id) {
       sessionInput.value = id;
       pinInput.value = '';
@@ -7578,6 +7657,7 @@
             const fresh = !wasLive || msg.type === 'agent_online';
             if (fresh) winStreamsNeedRestart = true; // fresh agent process = no live streams
             agentLive = true;
+            hideWakeScreen(); // a woken session: the live terminal takes over its saved screen
             connectedAt = Date.now();
             backoffMs = 1000;
             redialNow = true; // up: its first close redials at once
@@ -8330,7 +8410,7 @@
       dropHeldInput(); // typed for a session we are not joining
     }
     function inputLive() {
-      return !!(!switchingTo && agentLive && authed && cryptoKey && ws && ws.readyState === WebSocket.OPEN);
+      return !!(!switchingTo && agentLive && authed && cryptoKey && ws && ws.readyState === WebSocket.OPEN) && !wakeHolding();
     }
     function holdInput(data, n) {
       if (heldBytes + data.length > INPUT_HOLD_BYTES) { heldOverflow = true; updateHeldChip(); return; }
@@ -8376,12 +8456,13 @@
       const chip = document.getElementById('held-chip');
       if (!chip) return;
       const k = heldCount();
-      const late = k && Date.now() - heldSince > INPUT_HOLD_MS;
+      // Keys held while a session wakes wait as long as the wake does (wakeGate).
+      const late = k && !wakeGate && Date.now() - heldSince > INPUT_HOLD_MS;
       // Anything dropped is said, even with nothing else held: a paste too
       // large to hold, on an empty queue, went with no word at all.
       const text = !k ? (heldOverflow ? 'A paste too large to hold was not sent' : '') : late
         ? heldChars(k) + ' typed while it was not connected will not be sent: they waited too long'
-        : heldChars(k) + ' typed, waiting for it to connect' + (heldOverflow ? ' (some too many to hold will not be sent)' : '');
+        : heldChars(k) + (wakeGate ? ' typed, waiting for it to wake' : ' typed, waiting for it to connect') + (heldOverflow ? ' (some too many to hold will not be sent)' : '');
       document.getElementById('held-chip-text').textContent = text;
       chip.hidden = !text;
     }

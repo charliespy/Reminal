@@ -3417,6 +3417,8 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.goGuarded("dir revoke-self", func() { a.handleDirRevokeSelf(conn, msg.Data) })
 		case protocol.TypeDirKill:
 			a.goGuarded("dir kill", func() { a.handleDirKill(conn, msg.Data) })
+		case protocol.TypeDirSleep:
+			a.goGuarded("dir sleep", func() { a.handleDirSleep(conn, msg.Data) })
 		case protocol.TypeDirIntegrate:
 			a.goGuarded("dir integrate", func() { a.handleDirIntegrate(conn, msg.Data) })
 		case protocol.TypeData:

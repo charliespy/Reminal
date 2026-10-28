@@ -228,6 +228,12 @@
     /* Keys typed while the session is not live yet (connecting, or its
        machine not answering yet): their count, never the keys (one may be a
        password), and a way to drop them. */
+    /* A session waking (wakeOwned in app.js): its last saved screen, dimmed, under
+       what it is doing, until the live terminal replaces it. */
+    #wake-screen { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; background: #0d1117; padding: 14px; overflow: hidden; }
+    #wake-screen[hidden] { display: none; }
+    #wake-screen .wake-title { color: #e6edf3; font-size: 13px; padding: 2px 0 10px; }
+    #wake-screen .wake-rows { margin: 0; flex: 1; color: #6e7681; font: 12.5px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
     #held-chip { position: absolute; right: 14px; bottom: 14px; z-index: 4; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 28px);
       background: #161b22; border: 1px solid #30363d; color: #e6edf3; font-size: 12.5px; padding: 6px 8px 6px 12px; border-radius: 6px; }
     #held-chip[hidden] { display: none; }
@@ -1476,6 +1482,7 @@
     .machine-session .ms-state.attn-input   { color: #e3b341; background: rgba(227,179,65,0.14); }
     .machine-session .ms-state.attn-logged-out { color: #e3b341; background: rgba(227,179,65,0.14); }
     .machine-session .ms-state.attn-limited { color: #e3b341; background: rgba(227,179,65,0.14); }
+    .machine-session .ms-state.attn-asleep { color: #8b949e; background: rgba(139,148,158,0.14); }
     .machine-session .ms-state.attn-working { color: #4fc4d6; background: rgba(79,196,214,0.12); }
     .machine-session .ms-state.attn-done    { color: #57ab6a; background: rgba(87,171,106,0.12); }
     /* Attention chip in the session switchers (Recents dropdown + mobile dock),
@@ -1500,6 +1507,7 @@
     /* A port row opens the forwarded app, so it keeps the pointer and hover of
        any other action. Slightly dimmer than a shell: still a secondary thing. */
     .machine-session.is-port { opacity: 0.85; }
+    .machine-session.is-asleep .ms-label { color: #8b949e; }
     .machine-session.is-port .ms-label { color: #7ee787; }
     /* Two-line layout so the title / cwd isn't crushed onto one line alongside
        the id and action buttons: the label wraps (up to 3 lines) with its
@@ -2181,6 +2189,7 @@
     <div id="overlay"><span id="overlay-text">Connecting…</span></div>
     <div id="viewer-notes" aria-live="polite"></div>
     <div id="upload-toasts" aria-live="polite"></div>
+    <div id="wake-screen" hidden role="status"><div class="wake-title"></div><pre class="wake-rows"></pre></div>
     <div id="held-chip" hidden role="status"><span id="held-chip-text"></span><button id="held-discard">Discard</button></div>
     <button id="jump-bottom" title="Jump to bottom">↓ Jump to bottom</button>
     <div id="findbar">

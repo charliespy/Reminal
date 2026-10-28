@@ -4,6 +4,7 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"reminal/internal/proc"
 	"reminal/internal/protocol"
 	"reminal/internal/session"
 )
@@ -88,12 +90,12 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 // in the folder changed what "latest" is.
 func sleepsExactly(fg string) bool { return fg == "claude" }
 
-// errWouldLose is a sleep refused for what it would end; "sleep anyway"
-// (anyway) lets those go.
-type errWouldLose struct{ losses []string }
+// ErrWouldLose is a sleep refused for what it would end (Losses); sleeping
+// anyway lets those go.
+type ErrWouldLose struct{ Losses []string }
 
-func (e errWouldLose) Error() string {
-	return "awake · sleeping would end " + strings.Join(e.losses, "; ")
+func (e ErrWouldLose) Error() string {
+	return "awake · sleeping would end " + strings.Join(e.Losses, "; ")
 }
 
 // sleepNow puts this session to sleep, or says why not (control "sleep",
@@ -124,12 +126,90 @@ func (a *Agent) sleepNow(anyway bool) error {
 		return errors.New(block)
 	}
 	if len(losses) > 0 && !anyway {
-		return errWouldLose{losses}
+		return ErrWouldLose{losses}
 	}
 	if err := session.MarkAsleep(a.sessionID, session.Asleep{SleptAt: time.Now(), Why: "asked", Fg: r.Fg, Dropped: losses}); err != nil {
 		return fmt.Errorf("kept awake · couldn't save: %w", err)
 	}
 	return nil
+}
+
+// SleepSession puts this machine's running session id to sleep, and waits
+// for it to have ended (`reminal sleep`, and Sleep in the viewer). A refusal
+// for what the sleep would end is an ErrWouldLose; anyway lets that go.
+func SleepSession(id string, anyway bool) error {
+	a, err := session.ReadActiveByID(id)
+	if err != nil {
+		return fmt.Errorf("no session %s running here", strings.ToUpper(id))
+	}
+	cmd := "sleep"
+	if anyway {
+		cmd = "sleep anyway"
+	}
+	if _, err := sendControlToDeadline(a.PID, cmd, 20*time.Second); err != nil {
+		msg := strings.TrimPrefix(err.Error(), "agent: ")
+		if js, ok := strings.CutPrefix(msg, "lose:"); ok {
+			var losses []string
+			if json.Unmarshal([]byte(strings.TrimSpace(js)), &losses) == nil {
+				return ErrWouldLose{losses}
+			}
+		}
+		return errors.New(msg)
+	}
+	// It said yes and is ending itself.
+	deadline := time.Now().Add(10 * time.Second)
+	for proc.Alive(a.PID) && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if proc.Alive(a.PID) {
+		return fmt.Errorf("%s said it would sleep but is still running (PID %d)", a.ID, a.PID)
+	}
+	return nil
+}
+
+// sleepAct does what an owner asked of session id from another device
+// (dir_sleep): "sleep", "sleep_anyway", "wake", "keep_awake",
+// "keep_awake_off". A wake answers with the last screen it saved, for the
+// viewer to show while it comes up.
+func sleepAct(id, act string) (screen string, err error) {
+	id = strings.ToUpper(strings.TrimSpace(id))
+	switch act {
+	case "sleep", "sleep_anyway":
+		return "", SleepSession(id, act == "sleep_anyway")
+	case "wake":
+		if !session.IsAsleep(id) {
+			if SessionRunning(id) {
+				return "", nil // awake already: nothing to do
+			}
+			return "", fmt.Errorf("no session %s asleep here", id)
+		}
+		r, err := session.ReadRestore(id)
+		if err != nil {
+			return "", fmt.Errorf("%s can't wake: its record can't be read: %w", id, err)
+		}
+		if text, _, ok := sleeperTranscript(id); ok {
+			screen = lastLines(text, lastScreenRows)
+		}
+		_, err = WakeSession(*r)
+		return screen, err
+	case "keep_awake", "keep_awake_off":
+		return "", session.SetAwakePin(id, act == "keep_awake")
+	}
+	return "", fmt.Errorf("unknown sleep action %q", act)
+}
+
+// lastScreenRows is how much of a sleeping session's saved scrollback a
+// viewer is shown while it wakes: about a phone's screen.
+const lastScreenRows = 40
+
+// lastLines is the last n lines of s.
+func lastLines(s string, n int) string {
+	s = strings.TrimRight(s, "\n")
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // wakeCheck is why sleeping session r can't wake exactly, or "": its folder

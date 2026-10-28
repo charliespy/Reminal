@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"reminal/internal/client"
-	"reminal/internal/proc"
 	"reminal/internal/session"
 )
 
@@ -39,24 +38,12 @@ func runSleep(args []string) error {
 	if err != nil {
 		return err
 	}
-	cmd := "sleep"
-	if anyway {
-		cmd = "sleep anyway"
-	}
-	if _, err := sendControl(a.PID, cmd, 20*time.Second); err != nil {
-		msg := strings.TrimPrefix(err.Error(), "agent: ")
-		if rest, ok := strings.CutPrefix(msg, "lose:"); ok {
-			return fmt.Errorf("%s\n  reminal sleep %s --anyway   to sleep it all the same", strings.TrimSpace(rest), a.ID)
+	if err := client.SleepSession(a.ID, anyway); err != nil {
+		var lose client.ErrWouldLose
+		if errors.As(err, &lose) {
+			return fmt.Errorf("%v\n  reminal sleep %s --anyway   to sleep it all the same", err, a.ID)
 		}
-		return errors.New(msg)
-	}
-	// It said yes and is ending itself; wait for it to be gone.
-	deadline := time.Now().Add(10 * time.Second)
-	for proc.Alive(a.PID) && time.Now().Before(deadline) {
-		time.Sleep(100 * time.Millisecond)
-	}
-	if proc.Alive(a.PID) {
-		return fmt.Errorf("%s said it would sleep but is still running (PID %d)", a.ID, a.PID)
+		return err
 	}
 	fmt.Printf("  %s %s asleep · reminal wake %s\n", cGreen("✓"), cBold(a.ID), a.ID)
 	return nil

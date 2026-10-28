@@ -347,9 +347,10 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 		// does, its record kept, to wake as itself (sleep.go). The same on
 		// every OS: no signal is needed, so Windows sleeps as Unix does.
 		if err := a.sleepNow(line == "sleep anyway"); err != nil {
-			var lose errWouldLose
+			var lose ErrWouldLose
 			if errors.As(err, &lose) {
-				_, _ = fmt.Fprintln(conn, "lose:", err)
+				js, _ := json.Marshal(lose.Losses)
+				_, _ = fmt.Fprintln(conn, "lose:", string(js))
 			} else {
 				_, _ = fmt.Fprintln(conn, "error:", err)
 			}
