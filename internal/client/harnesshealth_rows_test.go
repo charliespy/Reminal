@@ -386,7 +386,7 @@ func BenchmarkHarnessLoginRowsOnAHugeTail(b *testing.B) {
 
 // A Claude Code session at work, a message typed into its input box that
 // quotes a CLI's login wording, wrapped, its last row the quote alone — the
-// screen of a working session once read as logged out, and its mail held
+// screen of a working session once read as logged out, and what was sent to it held
 // (its words changed; its rows, its spacing and how they run together as
 // Claude Code draws them, as they were).
 const quotingLoginWordsScreen = `BothPRsalsocatchrealnoticesthatmainmissed.Theauthorshipandwordingarefine.
@@ -441,6 +441,10 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"an A2A agent's login", "gemini", "answer" + box + " Authentication required for A2A agent: planner", false},
 		{"an answer's last row \"Authentication required.\"", "claude", "● The staging API returned 401:\n  Authentication required.", false},
 		{"an answer's last row \"Not logged in\"", "claude", "● Checked the dashboard session. Result:\n  Not logged in", false},
+		// Codex's and Gemini CLI's answers start with their own marks (review).
+		{"Codex's answer (•), its last row \"Login required: …\"", "codex", "• I checked the CI logs. The registry step failed:\n  Login required: run docker login with the bot token.", false},
+		{"the same, no program known", "", "• I checked the CI logs. The registry step failed:\n  Login required: run docker login with the bot token.", false},
+		{"Gemini CLI's answer (✦), its last row \"Authentication required.\"", "gemini", "✦ The staging API answered 401:\n  Authentication required.", false},
 		{"a tool's output's last row", "claude", "  ⎿  Fetched https://staging.example.com/api\n     Authentication required.", false},
 		{"a person's text at the prompt", "claude", "────\n❯ why does it say\n  Authentication required.\n────", false},
 		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", true},
