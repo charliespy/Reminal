@@ -188,3 +188,33 @@ func TestAnAgentsKeysWhileARestoreWaitsAreTypedAfterItsResume(t *testing.T) {
 		t.Fatalf("the agent's keys were not typed after the resume: %q", out)
 	}
 }
+
+// The keys verb, through the control socket as MCP send_keys and the CLI
+// send it, is given long enough for a restored session's hold: its caller
+// is not told it timed out while its keys are still to be typed (and so
+// types them again).
+func TestTheKeysVerbWaitsOutARestoresHoldThroughTheControlSocket(t *testing.T) {
+	home, err := os.MkdirTemp("", "h") // short: a socket's path is
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(home)
+	t.Setenv("HOME", home)
+	old := typedHoldMax
+	typedHoldMax = 4 * time.Second // past the 3 s the other verbs are given
+	defer func() { typedHoldMax = old }()
+	a := quietShell(t, `printf 'ready$ '`)
+	stop := a.listenControl()
+	defer stop()
+	a.holdTyped()
+	go a.restoreStart() // its relay never answers here: the hold lasts
+	began := time.Now()
+	if err := InjectAgentKeys(os.Getpid(), []byte("zq-agent")); err != nil {
+		t.Fatalf("the keys verb failed after %v: %v", time.Since(began).Round(100*time.Millisecond), err)
+	}
+	waitShown(t, a, "zq-agent", 2*time.Second)
+	if n := strings.Count(a.shown(t), "zq-agent"); n != 1 {
+		t.Fatalf("its keys shown %d times", n)
+	}
+	a.signalRegistered() // let it end
+}
