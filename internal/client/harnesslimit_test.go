@@ -1115,12 +1115,48 @@ func TestHarnessLimitClaudeWaitFooter(t *testing.T) {
 		"a draft with dashes":        "● Done.\n" + rule + "\n❯ notes\n  --------\n" + status + "\n" + next + shortcuts,
 		"a pasted screen in a draft": "● Done.\n" + rule + "\n❯ it showed:\n  " + rule + "\n  ❯\n  " + rule + "\n" + status + shortcuts,
 		"an editor over it":          rule + "\n❯ \n" + rule + "\n" + status + "\n~\n~\n\"notes.txt\" 3L, 40B",
+		"an editor in insert mode":   rule + "\n❯ \n" + rule + "\n" + status + "\n-- INSERT --",
+		"a pager's prompt":           rule + "\n❯ \n" + rule + "\n" + status + "\n:",
+		"a pager at its end":         rule + "\n❯ \n" + rule + "\n" + status + "\n(END)",
 		"a dialog under it":          rule + "\n❯ earlier message\n" + rule + "\n" + status + "\n╭──────────────────╮\n│ Allow this?      │\n│ ❯ 1. Yes         │\n╰──────────────────╯",
 	} {
 		for _, prog := range []string{"claude", ""} {
 			if hit, _ := harnessLimitIn(screen, prog, limitTestNow); hit {
 				t.Errorf("%s (as %q): read as at its limit:\n%s", why, prog, screen)
 			}
+		}
+	}
+	// A status line of its own that draws a bare bar under the footer: the
+	// box still ends at the rule that matches its top (review).
+	for _, bar := range []string{"  ━━━━────", rule, "----------"} {
+		screen := box + status + "\n" + next + "\n" + bar
+		for _, prog := range []string{"claude", ""} {
+			if hit, _ := harnessLimitIn(screen, prog, limitTestNow); !hit {
+				t.Errorf("a status line's bar %q under it (as %q): not read as at its limit", bar, prog)
+			}
+		}
+	}
+	// Claude Code's own vim mode, indented under its box (2.1.312 draws
+	// "-- INSERT --" and "-- VISUAL --", none in NORMAL), and a screen
+	// redrawn at a new width, its two rules unlike (review).
+	narrow := strings.Repeat("─", 24)
+	for why, screen := range map[string]string{
+		"vim mode on its own row, above":  box + "  -- INSERT --\n" + status + "\n" + next,
+		"vim mode on its own row, below":  box + status + "\n" + next + "\n  -- INSERT --",
+		"vim mode leading the status row": box + "  -- VISUAL -- ⏵⏵ auto mode on    Usage limit reached · limit resets 3pm (America/Los_Angeles)\n" + next,
+		"NORMAL, were it drawn":           box + "  -- NORMAL --\n" + status + "\n" + next,
+		"rules of two widths":             "● Done.\n" + rule + "\n❯ \n" + narrow + "\n" + status + "\n" + next,
+	} {
+		for _, prog := range []string{"claude", ""} {
+			if hit, _ := harnessLimitIn(screen, prog, limitTestNow); !hit {
+				t.Errorf("%s (as %q): not read as at its limit:\n%s", why, prog, screen)
+			}
+		}
+	}
+	stale := box + status + "\n" + next + "\n● Back to work.\n" + narrow + "\n❯ \n" + strings.Repeat("─", 20)
+	for _, prog := range []string{"claude", ""} {
+		if hit, _ := harnessLimitIn(stale, prog, limitTestNow); hit {
+			t.Errorf("an older frame's footer above a live box (as %q): read as at its limit:\n%s", prog, stale)
 		}
 	}
 	if !limitedAfterTurn(t, box+status+"\n"+next) {
