@@ -170,4 +170,14 @@ o=$(box "reminal kill $G -y 2>&1"); echo "$o" | grep -q "Ended sleeping session 
 box "ls /root/.reminal/restore/ | grep -q $G" && fail "something of it is left: $(box "ls /root/.reminal/restore/ | grep $G")" || ok "…its record and marks are gone"
 o=$(box "reminal wake $G 2>&1"); echo "$o" | grep -q "awake" && fail "woke one that was ended: $o" || ok "…and it cannot be woken: $(echo "$o" | head -1)"
 
+# A first turn begun before claude ever rested (claude "do X", keys typed as
+# it starts): what that turn left going is still asked about.
+box "pkill -f 'slee[p] 633'; true"
+o4=$(newsession early /root/early); E1=$(idof "$o4"); sleep 1
+send $E1 'claude bg'                       # its first turn on its command line: begun before it ever rests
+for i in $(seq 1 20); do box "pgrep -f 'slee[p] 633' >/dev/null" && break; sleep 1; done; sleep 3
+o=$(box "reminal sleep $E1 2>&1"); echo "$o" | grep -q "sleep, left running in the background" && ok "a command left going by a turn begun before claude rested refuses the sleep: $(echo "$o" | head -1)" || fail "first turn before a rest: $o"
+box "pgrep -f 'slee[p] 633' >/dev/null" && ok "…and it is still running" || fail "the command left going by the first turn was ended"
+box "pkill -f 'slee[p] 633'; true"
+
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

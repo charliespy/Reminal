@@ -209,3 +209,24 @@ func TestKeepAwakeNeedsASession(t *testing.T) {
 		t.Fatalf("pinned a session that is not there: %v", err)
 	}
 }
+
+// The run's first turn is kept: a later turn does not move it, and a turn
+// from before this agent run (a hook left by the last) is not its.
+func TestFirstTurnOfTheRun(t *testing.T) {
+	run := time.Now()
+	a := &Agent{attnFGAt: run}
+	a.noteFirstTurnLocked(run.Add(-time.Minute))
+	if !a.firstTurn.IsZero() {
+		t.Fatal("a turn from before the run taken as its first")
+	}
+	a.noteFirstTurnLocked(run.Add(2 * time.Second))
+	a.noteFirstTurnLocked(run.Add(9 * time.Second))
+	if !a.firstTurn.Equal(run.Add(2*time.Second)) || !a.firstTurnFG.Equal(run) {
+		t.Fatalf("first turn %v", a.firstTurn)
+	}
+	a.attnFGAt = run.Add(time.Hour) // another run in front
+	a.noteFirstTurnLocked(run.Add(time.Hour + time.Second))
+	if !a.firstTurn.Equal(run.Add(time.Hour + time.Second)) {
+		t.Fatalf("the next run's first turn %v", a.firstTurn)
+	}
+}

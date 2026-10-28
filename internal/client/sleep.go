@@ -335,16 +335,32 @@ func (a *Agent) noteRestBase() {
 	a.metaMu.Lock()
 	fg := a.attnFGAt
 	taken := a.restBase != nil && a.restBaseFG.Equal(fg)
+	var turn time.Time // a turn begun before it ever rested (`claude "do X"`, keys typed as it started)
+	if a.firstTurnFG.Equal(fg) {
+		turn = a.firstTurn
+	}
 	a.metaMu.Unlock()
 	if taken || a.term == nil {
 		return
 	}
-	base := restBase(a.term)
+	base := restBase(a.term, turn)
 	a.metaMu.Lock()
 	if a.attnFGAt.Equal(fg) {
 		a.restBase, a.restBaseFG = base, fg
 	}
 	a.metaMu.Unlock()
+}
+
+// noteFirstTurnLocked notes a turn of the agent in front begun at t, keeping
+// the run's first (noteRestBase). A turn from before this run (a hook left
+// by the one before) is not its. Called with metaMu held.
+func (a *Agent) noteFirstTurnLocked(t time.Time) {
+	if t.IsZero() || t.Before(a.attnFGAt) {
+		return
+	}
+	if !a.firstTurnFG.Equal(a.attnFGAt) || t.Before(a.firstTurn) {
+		a.firstTurn, a.firstTurnFG = t, a.attnFGAt
+	}
 }
 
 // markAwake is a restored session saying, once it is up and reachable, that

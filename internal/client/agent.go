@@ -292,6 +292,11 @@ type Agent struct {
 	// what it left running since (noteRestBase). Under metaMu.
 	restBase   map[procKey]bool
 	restBaseFG time.Time
+	// firstTurn is when the agent run in front (firstTurnFG, its attnFGAt)
+	// began its first turn, by its hook or its screen: what it started from
+	// then is its work, never its baseline. Under metaMu.
+	firstTurn   time.Time
+	firstTurnFG time.Time
 	// attnState is the detected attention state of the foreground agent —
 	// "working", "input" (awaiting the user), "done", or "" (no agent / bare
 	// shell). Written by the attention detector goroutine, read by activeRecord
@@ -1679,6 +1684,7 @@ func (a *Agent) feedTyping(keys []byte) {
 func (a *Agent) noteTurn(t time.Time) {
 	a.metaMu.Lock()
 	a.typing.turnBegan(t)
+	a.noteFirstTurnLocked(t)
 	a.metaMu.Unlock()
 }
 

@@ -5518,10 +5518,21 @@
       if (!wakeGate || !wakeGate.agent || wakeGate.id !== id) return;
       if (WAKE_READY.includes(attn)) endWakeGate(true);
       else if (attn === 'input') {
-        const k = heldCount();
+        const k = heldCount(), typed = heldText();
         endWakeGate(false);
-        if (k) viewerNote(heldChars(k) + ' typed while it woke ' + (k === 1 ? 'was' : 'were') + ' not sent: it is asking you something.');
+        if (k) viewerNote('Not sent, it is asking you something. You typed: ' + (typed ? '"' + typed + '"' : heldChars(k)), 20000);
       }
+    }
+    // heldText is what is held, as text to show (and copy): keys and paste
+    // markers out, line ends as spaces, at most 200 characters.
+    function heldText() {
+      const s = heldInput.map((it) => it.data).join('')
+        .replace(/\x1b\[20[01]~/g, '')
+        .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1bO.|\x1b./g, '')
+        .replace(/[\r\n]+/g, ' ')
+        .replace(/[\x00-\x1f\x7f]/g, '')
+        .trim();
+      return s.length > 200 ? s.slice(0, 200) + '…' : s;
     }
     function showWakeScreen(name, screen) {
       const el = document.getElementById('wake-screen');

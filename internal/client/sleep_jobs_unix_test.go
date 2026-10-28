@@ -8,6 +8,7 @@ package client
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestParseProcStat(t *testing.T) {
@@ -83,5 +84,46 @@ func TestStrays(t *testing.T) {
 	// A terminal that can't be read: nothing claimed.
 	if got := strays([]procRow{{pid: 10, tty: "?"}, {pid: 11, tty: "?"}}, 10, 0, nil); got != nil {
 		t.Errorf("unread terminal: %q", got)
+	}
+}
+
+// A baseline taken after a turn the agent began before it ever rested
+// leaves out what started at or after that turn (a tick early counts as at
+// it): work, not a helper. A start not read is left out too (asked about,
+// never dropped).
+func TestBaseOfLeavesOutWhatTheFirstTurnStarted(t *testing.T) {
+	launch := time.Date(2026, 10, 27, 18, 0, 0, 0, time.UTC)
+	turn := launch.Add(2*time.Second + 400*time.Millisecond)
+	starts := map[int]time.Time{
+		20: launch,                             // the agent
+		21: launch.Add(500 * time.Millisecond), // its MCP server
+		22: turn.Add(time.Second),              // what the turn started
+		23: turn.Add(-5 * time.Millisecond),    // within a tick of the turn
+		25: turn.Add(-300 * time.Millisecond),  // well before it
+	}
+	startOf := func(p procRow) (time.Time, bool) { s, ok := starts[p.pid]; return s, ok }
+	members := []procRow{{pid: 20, start: "a"}, {pid: 21, start: "b"}, {pid: 22, start: "c"}, {pid: 23, start: "d"}, {pid: 24, start: "e"}, {pid: 25, start: "f"}}
+	base := baseOf(members, startOf, turn)
+	if !base[procKey{20, "a"}] || !base[procKey{21, "b"}] || !base[procKey{25, "f"}] || len(base) != 3 {
+		t.Errorf("base after an early turn: %v", base)
+	}
+	if base := baseOf(members, startOf, time.Time{}); len(base) != 6 {
+		t.Errorf("base with no turn first: %v", base)
+	}
+	if baseOf(nil, startOf, turn) != nil {
+		t.Error("an unread terminal gave a baseline")
+	}
+}
+
+// A /proc start is read to the tick against a boot time to the tick: never
+// whole seconds, which read a process up to two seconds older than it is.
+func TestStartedSince(t *testing.T) {
+	boot := time.Date(2026, 10, 27, 12, 0, 0, 900_000_000, time.UTC)
+	got, ok := startedSince(boot, "12345")
+	if want := boot.Add(123*time.Second + 450*time.Millisecond); !ok || !got.Equal(want) {
+		t.Fatalf("started %v, want %v", got, want)
+	}
+	if _, ok := startedSince(boot, "x"); ok {
+		t.Fatal("read a start that is not a number")
 	}
 }

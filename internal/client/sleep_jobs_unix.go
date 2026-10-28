@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"reminal/internal/proc"
 	"reminal/internal/pty"
+	"reminal/internal/session"
 )
 
 // otherJobs are the programs running in term's shell besides agent, the
@@ -44,17 +46,70 @@ func shellJobs(procs []procRow, shell, fg int, fgIsAgent bool) []string {
 
 // restBase is the processes on term's terminal when its agent came to rest
 // (Agent.noteRestBase): what runs with an agent at its prompt — itself, its
-// MCP servers, what launched them. nil when it can't be read.
-func restBase(term *pty.Session) map[procKey]bool {
-	members := termMembers(listProcs(), term.Pid())
+// MCP servers, what launched them. A turn it began before it ever rested
+// (turn, else zero) may have started work: what started at or after it is
+// left out. nil when the terminal can't be read.
+func restBase(term *pty.Session, turn time.Time) map[procKey]bool {
+	boot, precise := procBoot()
+	return baseOf(termMembers(listProcs(), term.Pid()), func(p procRow) (time.Time, bool) {
+		if precise {
+			return startedSince(boot, p.start)
+		}
+		return session.ProcStartTime(p.pid)
+	}, turn)
+}
+
+// startTick is how close two start times may be and still be taken as the
+// same moment: a clock tick, the coarsest /proc counts in.
+const startTick = 10 * time.Millisecond
+
+// baseOf is members as a baseline, those started at or after turn (when not
+// zero, a tick early counted as at it) left out, and those whose start can't
+// be read: left out, a sleep asks rather than drops.
+func baseOf(members []procRow, startOf func(procRow) (time.Time, bool), turn time.Time) map[procKey]bool {
 	if members == nil {
 		return nil
 	}
 	base := make(map[procKey]bool, len(members))
 	for _, p := range members {
+		if !turn.IsZero() {
+			if t, ok := startOf(p); !ok || !t.Before(turn.Add(-startTick)) {
+				continue
+			}
+		}
 		base[p.key()] = true
 	}
 	return base
+}
+
+// procBoot is when the machine booted, to a tick, from /proc/uptime (now
+// less how long it has been up): /proc/stat's btime is whole seconds, which
+// with a start's whole seconds can read a process up to two seconds older
+// than it is. false where there is no /proc.
+func procBoot() (time.Time, bool) {
+	b, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return time.Time{}, false
+	}
+	f := strings.Fields(string(b))
+	if len(f) == 0 {
+		return time.Time{}, false
+	}
+	up, err := strconv.ParseFloat(f[0], 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Now().Add(-time.Duration(up * float64(time.Second))), true
+}
+
+// startedSince is when a process whose /proc start (ticks since boot) is
+// ticks started, boot being when the machine booted.
+func startedSince(boot time.Time, ticks string) (time.Time, bool) {
+	n, err := strconv.ParseInt(ticks, 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return boot.Add(time.Duration(n) * startTick), true
 }
 
 // leftRunning names what runs on term's terminal in the background, past

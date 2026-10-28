@@ -644,6 +644,11 @@ func (a *Agent) noteForeground(fg string, pgrp int) {
 // kicks an immediate meta-flush (same pattern as commitOscCwd) so `reminal list`
 // reflects the new state within ~a tick instead of at the next slow flush.
 func (a *Agent) setAttnState(state string) {
+	if state == "done" || state == harnessLimited {
+		// Before the state is written, and so before anything reads it
+		// (a flush, the viewer's held keys): a no-op once taken.
+		a.noteRestBase()
+	}
 	a.metaMu.Lock()
 	changed := state != a.attnState
 	a.attnState = state
@@ -651,14 +656,12 @@ func (a *Agent) setAttnState(state string) {
 		a.attnSince = time.Now()
 		if state == "working" {
 			a.attnTurnAt = a.attnSince
+			a.noteFirstTurnLocked(a.attnSince)
 		}
 	}
 	a.metaMu.Unlock()
 	if !changed {
 		return
-	}
-	if state == "done" || state == harnessLimited {
-		a.noteRestBase() // before the state is pushed: keys held for it wait on it
 	}
 	a.metaDirty.Store(true)
 	if a.metaKick != nil {

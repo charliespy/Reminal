@@ -7,6 +7,7 @@ package client
 
 import (
 	"strings"
+	"time"
 
 	"reminal/internal/proc"
 	"reminal/internal/pty"
@@ -35,6 +36,6 @@ func exited(pid int) bool { return !proc.Alive(pid) }
 // what its hook says (or that it said nothing): no baseline is kept.
 type procKey struct{}
 
-func restBase(*pty.Session) map[procKey]bool { return nil }
+func restBase(*pty.Session, time.Time) map[procKey]bool { return nil }
 
 func leftRunning(*pty.Session, string, map[procKey]bool) []string { return nil }
