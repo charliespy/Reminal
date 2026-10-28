@@ -499,6 +499,19 @@ type Agent struct {
 	// outSinceFree counts PTY output since memory was last handed back to
 	// the OS (releaseAfterBurst).
 	outSinceFree atomic.Int64
+	// shellPrinted is whether the shell has printed anything since it
+	// started (pumpPTY): a restored session's resume waits for its prompt
+	// (restoreStart). Set false where a shell is started (Run).
+	shellPrinted atomic.Bool
+	// typedMu guards typedHeld: what a person typed (a viewer, the host
+	// terminal) while a restored session waits to type its resume, held in
+	// order and typed after it (typeIn, releaseTyped), so the two never
+	// interleave on the shell's line ("hiecho …").
+	typedMu      sync.Mutex
+	typedHolding bool
+	typedHeld    []byte
+	typedTimer   *time.Timer   // what was held typed anyway, typedHoldMax after its first key
+	typedDone    chan struct{} // closed once nothing is held (releaseTyped)
 	// attnKick wakes the detector (kickAttention), made on first use.
 	attnKick     chan struct{}
 	attnKickOnce sync.Once
@@ -922,6 +935,7 @@ func (a *Agent) Run() error {
 		defer term.Close()
 		defer a.stopAttention() // runs before the PTY closes: no probe polls a closed file
 		a.term = term
+		a.shellPrinted.Store(false) // a new shell: it has printed nothing yet
 		if cg := term.ShellCgroup(); cg != nil {
 			a.shellCgroup = cg
 			if !cg.OK {
@@ -1043,6 +1057,7 @@ func (a *Agent) Run() error {
 		close(a.replayDone)
 	}
 	if a.restoring {
+		a.holdTyped() // before any viewer can type: released by restoreStart
 		go a.restoreStart()
 	}
 
@@ -3034,6 +3049,7 @@ func (a *Agent) pumpPTY() {
 			// rewrite is throttled by metaFlushLoop.
 			a.markActivity(time.Now())
 			a.outSinceFree.Add(int64(n))
+			a.shellPrinted.Store(true)
 			a.feedTitle(buf[:n])
 			// Mirror to the host's stdout so the user typing at the agent
 			// terminal sees the shell's output as if they had run it
@@ -3100,7 +3116,7 @@ func (a *Agent) pumpHostStdin() {
 			if i := bytes.IndexByte(data, escapeKey); i >= 0 {
 				// Flush bytes before the escape to the PTY.
 				if i > 0 {
-					_, _ = a.term.Write(data[:i])
+					_, _ = a.typeIn(data[:i])
 				}
 				if a.paused.Load() {
 					// Second Ctrl-] (already paused) — fully exit.
@@ -3114,10 +3130,10 @@ func (a *Agent) pumpHostStdin() {
 				// escape (likely none — Ctrl-] is usually pressed
 				// solo — but handle the edge case anyway).
 				if rest := data[i+1:]; len(rest) > 0 {
-					_, _ = a.term.Write(rest)
+					_, _ = a.typeIn(rest)
 				}
 			} else {
-				_, _ = a.term.Write(data)
+				_, _ = a.typeIn(data)
 			}
 		}
 		if err != nil {
@@ -3425,7 +3441,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				continue
 			}
 			a.noteInput(data)
-			if _, err := a.term.Write(data); err != nil {
+			if _, err := a.typeIn(data); err != nil {
 				return err
 			}
 		case protocol.TypeResize:
