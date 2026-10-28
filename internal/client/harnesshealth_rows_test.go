@@ -16,6 +16,9 @@ type loginRowCase struct {
 	refused   bool // a key it was given and refused (harnessKeyRefusals)
 	bottom    bool // read only on the last few rows: its status line
 	notice    bool // Claude Code's notice shape (harnessNoticeRow), read on its own row only
+	// howTo: a status line already saying what to do (loginHowTo): what
+	// follows that on its row is taken as more of it, a sentence's worth.
+	howTo bool
 }
 
 var loginRowCases = []loginRowCase{
@@ -108,9 +111,9 @@ var loginRowCases = []loginRowCase{
 
 	// What any CLI may say of its login on its own status rows.
 	{prog: "gemini", row: " Authentication required.", bottom: true},
-	{prog: "claude", row: "  Authentication required · Sign in again to continue", bottom: true},
+	{prog: "claude", row: "  Authentication required · Sign in again to continue", bottom: true, howTo: true},
 	{prog: "claude", row: " Please log in with a permitted organization: claude auth login", bottom: true},
-	{prog: "claude", row: "  login required — run /login", bottom: true},
+	{prog: "claude", row: "  login required — run /login", bottom: true, howTo: true},
 	{prog: "claude", row: " Login expired", bottom: true},
 	{prog: "claude", row: " Not logged in", bottom: true},
 	{prog: "claude", row: " Waiting for authorization… (^C to cancel)", bottom: true},
@@ -132,10 +135,10 @@ func loggedOutBy(tail, prog string) bool {
 }
 
 // screenWith is a screen with rows where the case reads them: above the
-// input box, or (bottom) on the last rows.
+// input box, or (bottom) on the last rows, below it.
 func (c loginRowCase) screenWith(rows string) string {
 	if c.bottom {
-		return "● Done with the build.\n" + rows + "\n❯"
+		return "● Done with the build." + loginRowFrame + "\n" + rows
 	}
 	return "● Done with the build.\n" + rows + loginRowFrame
 }
@@ -216,6 +219,9 @@ func TestLoginWordsInAnAgentsOwnTextAreNotALogin(t *testing.T) {
 			// A row whose first half is itself a whole row a CLI draws
 			// ("Waiting for authentication" of "… callback...") reads as
 			// that row, wrapped or not: nothing on a screen tells them apart.
+			if c.howTo && (s.what == "carries on" || s.what == "wrapped, carrying on") {
+				continue
+			}
 			if s.what == "wrapped, carrying on" && loggedOutBy(harnessTail(c.screenWith(lead+first), harnessRows), c.prog) {
 				t.Logf("%s: %q alone is a whole row: its wrap is not told apart", c.prog, lead+first)
 				continue
@@ -335,8 +341,8 @@ func TestAnAgentsOwnTextIsNotALoginAfterAll(t *testing.T) {
 	}
 	// On the status rows: words that open what follows (a list, a form).
 	for _, c := range []struct{ prog, screen string }{
-		{"agy", "● Done.\n Sign in required:\n❯"},
-		{"claude", "● Done.\n Login expired:\n❯"},
+		{"agy", "● Done." + loginRowFrame + "\n Sign in required:"},
+		{"claude", "● Done." + loginRowFrame + "\n Login expired:"},
 	} {
 		if loggedOutBy(c.screen, c.prog) {
 			t.Errorf("%s: read as logged out:\n%s", c.prog, c.screen)
@@ -356,7 +362,7 @@ func TestAnAgentsOwnTextIsNotALoginAfterAll(t *testing.T) {
 // A server's login on the status rows does not hide the agent's own: each
 // row is read for itself.
 func TestAServersLoginDoesNotHideTheAgentsOwn(t *testing.T) {
-	screen := "● Done.\n Authentication required for MCP Server: github\n Authentication required.\n❯"
+	screen := "● Done." + loginRowFrame + "\n Authentication required for MCP Server: github\n Authentication required."
 	for _, prog := range []string{"gemini", ""} {
 		if !harnessProblemIn(screen, prog) {
 			t.Errorf("as %q: the agent's own \"Authentication required.\" was missed", prog)
@@ -375,5 +381,72 @@ func BenchmarkHarnessLoginRowsOnAHugeTail(b *testing.B) {
 				harnessProblemIn(tail, prog)
 			}
 		})
+	}
+}
+
+// A Claude Code session at work, a message typed into its input box that
+// quotes a CLI's login wording, wrapped, its last row the quote alone — the
+// screen of a working session once read as logged out, and its mail held
+// (its words changed; its rows, its spacing and how they run together as
+// Claude Code draws them, as they were).
+const quotingLoginWordsScreen = `BothPRsalsocatchrealnoticesthatmainmissed.Theauthorshipandwordingarefine.
+
+✻Brewedfor4m54s·done5:03PM
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Onemoreforthereview:thefollow-upturnstheremainingloginpatternsintowholerows.Notethechange:
+  "AuthenticationrequiredforMCPServer/A2A/policy"nolongerreadsasloggedout.Checkthatitcan'thidetheagent'sown
+  "Authenticationrequired".
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+⏵⏵bypasspermissionson (shift+tabtocycle)✔Updateinstalled·Restarttoupdate`
+
+func TestAMessageQuotingLoginWordsIsNotALogin(t *testing.T) {
+	for _, s := range []string{quotingLoginWordsScreen, strings.ReplaceAll(quotingLoginWordsScreen, `"Authenticationrequired".`, `Authenticationrequired.`)} {
+		for _, prog := range []string{"claude", ""} {
+			if harnessProblemIn(harnessTail(s, harnessRows), prog) || harnessProblemIn(harnessHealthTail(s, harnessRows), prog) {
+				t.Errorf("as %q: a message at the prompt quoting login words read as logged out:\n%s", prog, s)
+			}
+		}
+		a := &Agent{}
+		a.noteHarnessHealth(s, "claude", false)
+		a.noteHarnessHealth(s, "claude", false)
+		if a.harnessDown() {
+			t.Error("the session was marked logged out")
+		}
+	}
+}
+
+// What a CLI's status rows say of its login in words that drift from one
+// version to the next, and what an agent's answer says in the same words.
+func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
+	box := "\n────\n❯ \n────\n"
+	for _, c := range []struct {
+		name, prog, tail string
+		want             bool
+	}{
+		{"its own \"Authentication required.\"", "gemini", "answer" + box + " Authentication required.", true},
+		{"\"Authentication required · Sign in again to continue\"", "claude", "answer" + box + "  Authentication required · Sign in again to continue", true},
+		{"\"Authentication required. Run /login\"", "claude", "answer" + box + "  Authentication required. Run /login", true},
+		{"\"Authentication required (press Enter to sign in)\"", "gemini", "answer" + box + " Authentication required (press Enter to sign in)", true},
+		{"\"Authentication required: run /auth\"", "qwen", "answer" + box + " Authentication required: run /auth", true},
+		{"\"Authentication required - please sign in\"", "gemini", "answer" + box + " Authentication required - please sign in", true},
+		{"its status with a hint after it on the row", "claude", "answer" + box + "  Authentication required · Sign in again to continue      ? for shortcuts", true},
+		{"its status wrapped onto two rows", "claude", "answer" + box + "  Authentication required · Sign in again\n  to continue", true},
+		{"\"Not logged in · Run /login\" alone", "gemini", "answer" + box + " Not logged in · Run /login", true},
+		{"\"Login expired. Please run /login\", no program known", "", "answer" + box + " Login expired. Please run /login", true},
+		{"Claude Code's menu with another plan", "claude", " Select login method:\n\n ❯ 1. Claude account with subscription · Pro, Max, Team, Enterprise, or Free\n   2. Anthropic Console account · API usage billing\n", true},
+		{"the menu's item alone, another plan", "claude", "answer\n ❯ 1. Claude account with subscription · Pro, Max, Team, Enterprise, or Free" + box, true},
+		{"its own notice, led by ●", "claude", "answer" + box + "● Authentication required · Sign in again to continue", true},
+		{"an MCP server's login", "gemini", "answer" + box + " Authentication required for MCP Server: github", false},
+		{"an A2A agent's login", "gemini", "answer" + box + " Authentication required for A2A agent: planner", false},
+		{"an answer's last row \"Authentication required.\"", "claude", "● The staging API returned 401:\n  Authentication required.", false},
+		{"an answer's last row \"Not logged in\"", "claude", "● Checked the dashboard session. Result:\n  Not logged in", false},
+		{"a tool's output's last row", "claude", "  ⎿  Fetched https://staging.example.com/api\n     Authentication required.", false},
+		{"a person's text at the prompt", "claude", "────\n❯ why does it say\n  Authentication required.\n────", false},
+		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", true},
+	} {
+		if got := harnessProblemIn(c.tail, c.prog); got != c.want {
+			t.Errorf("%s (as %q): logged out %v, want %v:\n%s", c.name, c.prog, got, c.want, c.tail)
+		}
 	}
 }

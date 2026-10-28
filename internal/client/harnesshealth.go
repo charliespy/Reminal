@@ -271,7 +271,9 @@ var harnessLoginScreens = map[string][]loginRow{
 	// not harnessLoginNotice's shape.
 	"claude": loginAll(loginRows(
 		`selectloginmethod:?`,
-		`(?:\d\.)?claudeaccountwithsubscription·pro,max,team,orenterprise`,
+		// Its plans, as many as it lists ("Pro, Max, Team, or Enterprise";
+		// a later one adds "Free").
+		`(?:\d\.)?claudeaccountwithsubscription·(?:,|or|pro|max|team|enterprise|free|plus|business|education)+`,
 		`(?:\d\.)?anthropicconsoleaccount·apiusagebilling`,
 		`pastecodehereifprompted>?`,
 		`openingbrowsertosignin`,
@@ -405,7 +407,13 @@ func harnessLoginRowIn(l loginLines, i int, rs []loginRow) bool {
 		if !ok || len(core) > harnessLoginRowMax {
 			continue
 		}
-		if r.marks != "" && !bottom && !strings.ContainsAny(lead, r.marks) {
+		marked := r.marks != "" && strings.ContainsAny(lead, r.marks)
+		if r.marks != "" && !bottom && !marked {
+			continue
+		}
+		// Read only for being on the bottom rows: not if those rows are an
+		// agent's answer, or a person's text at the prompt, running on.
+		if (r.bottom || (r.marks != "" && !marked)) && l.inAnswer(i) {
 			continue
 		}
 		if r.re.MatchString(core) {
@@ -423,6 +431,31 @@ func harnessLoginRowIn(l loginLines, i int, rs []loginRow) bool {
 			if row += next; r.re.MatchString(row) {
 				return r.then == nil || l.followedBy(j, r.then)
 			}
+		}
+	}
+	return false
+}
+
+// inAnswer reports whether row i is a person's text at the prompt ("❯ …"),
+// or in the same paragraph as one or as an answer's first row ("●", "⏺",
+// "⎿"): the rows above it, up to a blank row or a row with no words (an
+// input box's rule, an empty prompt). "● The staging API returned 401:" then "Authentication
+// required." is an agent's answer, not a CLI's status line.
+func (l loginLines) inAnswer(i int) bool {
+	for j := i; j >= 0; j-- {
+		flat := l.rows[j]
+		at := strings.IndexFunc(flat, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) })
+		if at < 0 {
+			return false
+		}
+		// The row itself may be the CLI's own notice ("● …"); a person's
+		// text it is not.
+		marks := limitAnswerGlyphs + "⏺" + limitPromptGlyphs
+		if j == i {
+			marks = limitPromptGlyphs
+		}
+		if strings.ContainsAny(flat[:at], marks) {
+			return true
 		}
 	}
 	return false
@@ -513,15 +546,20 @@ func harnessLoginScreenIn(l loginLines, i int, prog string) bool {
 // in an answer — and only with what they end on ("Authentication required
 // for MCP Server: …" is a server's login, not the agent's).
 var harnessLoginLines = loginBottom(
-	`authenticationrequired(?:·signinagaintocontinue)?`,
+	`(?:authenticationrequired|loginrequired|notloggedin|loginexpired)`+loginHowTo,
 	`pleaselogin(?:tocontinue|withapermittedorganization:claudeauthlogin)?`,
 	`pleasesignin(?:tocontinue)?`,
-	`loginrequired(?:—run/login)?`,
 	`waitingforauth(?:entication(?:callback)?|orization(?:tocomplete)?)?(?:\.|…)*(?:\((?:esctocancel|pressescorctrl\+ctocancel|\^ctocancel)\))?`,
 	`pleasesetanauthmethodinyour.{1,80}?orspecifyoneofthefollowingenvironmentvariablesbeforerunning:gemini_api_key,google_genai_use_vertexai,google_genai_use_gca`,
-	`loginexpired`,
-	`notloggedin`,
 )
+
+// loginHowTo is what such a line may go on with: what to do about it, after
+// a mark ("Authentication required · Sign in again to continue", "… Run
+// /login", "… (press Enter to sign in)", "… - please sign in"), then
+// perhaps a hint the status row carries ("? for shortcuts"). A line that goes
+// on in words of its own ("Authentication required for MCP Server: github")
+// is another login, not the agent's.
+const loginHowTo = `(?:[·.:\-—(][^a-z0-9]*(?:please)?(?:run|press|use|signin|login|re-?auth)[^\n]{0,60})?`
 
 // harnessLineRows is where those notices count: the last few rows with
 // anything on them — a CLI's own status line and what sits right above its
