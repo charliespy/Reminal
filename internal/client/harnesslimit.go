@@ -473,7 +473,7 @@ func claudeFooterLimit(rows []string) string {
 	said := ""
 	for _, r := range rows[claudeBoxEnd(rows)+1:] {
 		t := strings.TrimSpace(r)
-		if strings.ContainsAny(firstRune(t), claudeFooterNever) {
+		if claudeFooterNeverRow(t) {
 			return ""
 		}
 		parts := limitFooterGap.Split(t, -1)
@@ -488,18 +488,28 @@ func claudeFooterLimit(rows []string) string {
 // empty lines, a box's border, a quote.
 const claudeFooterNever = "~│╭╰┃┌└" + limitQuoteGlyphs
 
+// claudeFooterNeverRow says whether t, a row trimmed, is one Claude Code's
+// footer never draws: one claudeFooterNever opens, an editor's mode ("--
+// INSERT --") or a pager's prompt (":", "(END)") (review).
+func claudeFooterNeverRow(t string) bool {
+	return strings.ContainsAny(firstRune(t), claudeFooterNever) || t == ":" || t == "(END)" ||
+		len(t) > 6 && strings.HasPrefix(t, "-- ") && strings.HasSuffix(t, " --")
+}
+
 // claudeBoxEnd is the row of the rule that closes Claude Code's lowest input
 // box (a rule, its prompt "❯" at the row's start, perhaps a draft's rows, a
 // rule), or the screen's last row when it shows none: nothing is under it.
-// Its end is the lowest rule under the prompt: a draft may hold rules of its
-// own (a pasted screen), and the footer draws none (review).
+// Its end is the first row under the prompt that is the same rule as the
+// one above it, as Claude Code draws both: a draft's rules are indented (a
+// pasted screen), and a status line's own bar comes after it (review).
 func claudeBoxEnd(rows []string) int {
 	for i := len(rows) - 1; i > 0; i-- {
-		if !strings.HasPrefix(rows[i], "❯") || !attnIsRule(rows[i-1]) {
+		top := strings.TrimRight(rows[i-1], " ")
+		if !strings.HasPrefix(rows[i], "❯") || !attnIsRule(top) {
 			continue
 		}
-		for j := len(rows) - 1; j > i; j-- {
-			if attnIsRule(rows[j]) {
+		for j := i + 1; j < len(rows); j++ {
+			if strings.TrimRight(rows[j], " ") == top {
 				return j
 			}
 		}

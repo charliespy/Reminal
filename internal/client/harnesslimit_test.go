@@ -1115,11 +1115,24 @@ func TestHarnessLimitClaudeWaitFooter(t *testing.T) {
 		"a draft with dashes":        "● Done.\n" + rule + "\n❯ notes\n  --------\n" + status + "\n" + next + shortcuts,
 		"a pasted screen in a draft": "● Done.\n" + rule + "\n❯ it showed:\n  " + rule + "\n  ❯\n  " + rule + "\n" + status + shortcuts,
 		"an editor over it":          rule + "\n❯ \n" + rule + "\n" + status + "\n~\n~\n\"notes.txt\" 3L, 40B",
+		"an editor in insert mode":   rule + "\n❯ \n" + rule + "\n" + status + "\n-- INSERT --",
+		"a pager's prompt":           rule + "\n❯ \n" + rule + "\n" + status + "\n:",
+		"a pager at its end":         rule + "\n❯ \n" + rule + "\n" + status + "\n(END)",
 		"a dialog under it":          rule + "\n❯ earlier message\n" + rule + "\n" + status + "\n╭──────────────────╮\n│ Allow this?      │\n│ ❯ 1. Yes         │\n╰──────────────────╯",
 	} {
 		for _, prog := range []string{"claude", ""} {
 			if hit, _ := harnessLimitIn(screen, prog, limitTestNow); hit {
 				t.Errorf("%s (as %q): read as at its limit:\n%s", why, prog, screen)
+			}
+		}
+	}
+	// A status line of its own that draws a bare bar under the footer: the
+	// box still ends at the rule that matches its top (review).
+	for _, bar := range []string{"  ━━━━────", rule, "----------"} {
+		screen := box + status + "\n" + next + "\n" + bar
+		for _, prog := range []string{"claude", ""} {
+			if hit, _ := harnessLimitIn(screen, prog, limitTestNow); !hit {
+				t.Errorf("a status line's bar %q under it (as %q): not read as at its limit", bar, prog)
 			}
 		}
 	}
