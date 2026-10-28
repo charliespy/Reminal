@@ -510,6 +510,8 @@ type Agent struct {
 	typedMu      sync.Mutex
 	typedHolding bool
 	typedHeld    []byte
+	typedTimer   *time.Timer   // what was held typed anyway, typedHoldMax after its first key
+	typedDone    chan struct{} // closed once nothing is held (releaseTyped)
 	// attnKick wakes the detector (kickAttention), made on first use.
 	attnKick     chan struct{}
 	attnKickOnce sync.Once

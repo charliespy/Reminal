@@ -93,6 +93,7 @@ func (a *Agent) handleKeysControl(b64 string) error {
 	if len(raw) > maxInjectBytes {
 		return fmt.Errorf("keys too long (max %d bytes)", maxInjectBytes)
 	}
+	a.awaitTyped() // a restored session's resume first (holdTyped)
 	return a.injectKeys(raw)
 }
 

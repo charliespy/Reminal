@@ -6,6 +6,7 @@
 package client
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,5 +139,52 @@ func TestWhatIsTypedWhileARestoreWaitsIsTypedAfterItsResume(t *testing.T) {
 	r, h := strings.Index(out, "echo resumed-42"), strings.Index(out, "zq-typed")
 	if r < 0 || h < r {
 		t.Fatalf("what was typed meanwhile was not typed after the resume: %q", out)
+	}
+}
+
+// Held no longer than typedHoldMax: a restored session whose relay is slow
+// to answer its first try (the resume waits on it) does not keep a person's
+// keys from the shell. Shortened here; it is 12 s.
+func TestKeysHeldWhileTheRelayIsSlowAreTypedWithinTheHoldsBound(t *testing.T) {
+	if typedHoldMax != 12*time.Second {
+		t.Fatalf("typedHoldMax is %v", typedHoldMax)
+	}
+	old := typedHoldMax
+	typedHoldMax = time.Second
+	defer func() { typedHoldMax = old }()
+	a := quietShell(t, `printf 'ready$ '`)
+	a.holdTyped()
+	go a.restoreStart() // its relay never answers here: the resume waits
+	time.Sleep(200 * time.Millisecond)
+	_, _ = a.typeIn([]byte("zq-typed"))
+	took := waitShown(t, a, "zq-typed", 3*time.Second)
+	if took > 2*time.Second {
+		t.Fatalf("a held key reached the shell %v after it was typed", took)
+	}
+	if strings.Contains(a.shown(t), "echo resumed-42") {
+		t.Fatal("the resume was typed without its relay's answer")
+	}
+	a.signalRegistered() // let it end
+}
+
+// An agent's keys (the keys control: MCP send_keys) sent while a restored
+// session waits to type its resume are typed after it, not into it.
+func TestAnAgentsKeysWhileARestoreWaitsAreTypedAfterItsResume(t *testing.T) {
+	a := quietShell(t, `printf 'ready$ '`)
+	a.holdTyped()
+	a.signalRegistered()
+	sent := make(chan error, 1)
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		sent <- a.handleKeysControl(base64.StdEncoding.EncodeToString([]byte("zq-agent")))
+	}()
+	a.restoreStart()
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	waitShown(t, a, "zq-agent", 2*time.Second)
+	out := a.shown(t)
+	if r, k := strings.Index(out, "echo resumed-42"), strings.Index(out, "zq-agent"); r < 0 || k < r {
+		t.Fatalf("the agent's keys were not typed after the resume: %q", out)
 	}
 }

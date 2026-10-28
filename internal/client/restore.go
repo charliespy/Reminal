@@ -829,12 +829,35 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 // resume waits, kept: past it, what was held is typed at once.
 const maxTypedHeld = 64 << 10
 
+// typedHoldMax is how long what a person typed is held at most, from their
+// first key: a resume that waits on a relay slow to answer (its first try
+// can take 45 s) does not keep someone typing at the session unanswered.
+// Past it, what was held is typed, and the resume after it when it comes.
+var typedHoldMax = 12 * time.Second
+
 // holdTyped holds what a person types until releaseTyped: a restored
 // session's resume is typed first, on a line of its own.
 func (a *Agent) holdTyped() {
 	a.typedMu.Lock()
 	a.typedHolding = true
+	a.typedDone = make(chan struct{})
 	a.typedMu.Unlock()
+}
+
+// awaitTyped waits, as long as a person's keys may be held at most, until
+// nothing is: an agent's keys (the keys control: MCP send_keys) are typed
+// after the resume too, not into the middle of it.
+func (a *Agent) awaitTyped() {
+	a.typedMu.Lock()
+	done := a.typedDone
+	a.typedMu.Unlock()
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(typedHoldMax):
+	}
 }
 
 // releaseTyped types what was held, in order, and lets what is typed next
@@ -843,10 +866,18 @@ func (a *Agent) releaseTyped() {
 	a.typedMu.Lock()
 	defer a.typedMu.Unlock()
 	a.typedHolding = false
+	if a.typedTimer != nil {
+		a.typedTimer.Stop()
+		a.typedTimer = nil
+	}
 	if len(a.typedHeld) > 0 && a.term != nil {
 		_, _ = a.term.Write(a.typedHeld)
 	}
 	a.typedHeld = nil
+	if a.typedDone != nil {
+		close(a.typedDone)
+		a.typedDone = nil
+	}
 }
 
 // typeIn is what a person typed, into the shell: held while a restored
@@ -854,6 +885,9 @@ func (a *Agent) releaseTyped() {
 func (a *Agent) typeIn(data []byte) (int, error) {
 	a.typedMu.Lock()
 	if a.typedHolding && len(a.typedHeld)+len(data) <= maxTypedHeld {
+		if a.typedTimer == nil {
+			a.typedTimer = time.AfterFunc(typedHoldMax, a.releaseTyped)
+		}
 		a.typedHeld = append(a.typedHeld, data...)
 		a.typedMu.Unlock()
 		return len(data), nil
