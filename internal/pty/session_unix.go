@@ -25,6 +25,12 @@ type Session struct {
 	// child, the exec kept the pid, and the old image passed it along.
 	// 0 when it wasn't passed (restarted by an older binary).
 	shell int
+	// shellMark is which process shell named when it was taken over
+	// (procMark): a pid freed since (the shell died and was reaped, by
+	// reapInherited or any other wait) may be another process's now, which
+	// is then never taken for the shell, nor signalled. "" when it could not
+	// be read: the pid alone, as before.
+	shellMark string
 	// cgroup is how starting the shell in ShellCgroupEnv's directory went
 	// (nil: not asked for).
 	cgroup *ShellCgroup
@@ -68,8 +74,21 @@ func (s *Session) ShellCgroup() *ShellCgroup { return s.cgroup }
 // the shell so there's no Cmd to Wait on. EOF on the master fd
 // signals shell exit instead. shellPid is the shell's pid as the old image
 // knew it, or 0 if it didn't say.
+//
+// The shell is this process's own child (the exec kept the pid): a pid the
+// old image named that is not, or no longer, is not taken for it.
 func Attach(ptmx *os.File, shellPid int) *Session {
-	return &Session{ptmx: ptmx, cmd: nil, shell: shellPid}
+	s := &Session{ptmx: ptmx, cmd: nil, shell: shellPid}
+	if shellPid > 0 {
+		if mark, ppid, ok := procMark(shellPid); ok {
+			if ppid == os.Getpid() {
+				s.shellMark = mark
+			} else {
+				s.shell = 0
+			}
+		}
+	}
+	return s
 }
 
 func (s *Session) Read(p []byte) (int, error) {
@@ -109,6 +128,30 @@ func (s *Session) Wait() error {
 
 func (s *Session) Close() error {
 	return s.ptmx.Close()
+}
+
+// Hangup does to the session's terminal what closing it does when nothing
+// else holds its master: its shell and the program in front are sent SIGHUP,
+// then SIGCONT so a stopped one sees it, as the kernel sends them on a
+// hangup. Close alone does not, while the master is read: it is a blocking
+// descriptor (its Fd is taken), and the kernel keeps it open under the read
+// under way, so the terminal is never hung up and an idle shell runs on — a
+// stop sent to the session alone left it running. A job told to outlive its
+// terminal (nohup) goes on, as after any hangup. Before Close: its
+// foreground is asked of the master.
+func (s *Session) Hangup() {
+	fg := s.pgrp()
+	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGCONT} {
+		if fg > 0 {
+			_ = unix.Kill(-fg, sig)
+		}
+		switch {
+		case s.cmd != nil && s.cmd.Process != nil:
+			_ = s.cmd.Process.Signal(sig) // never one reaped, whose pid may be reused
+		case s.ShellPid() > 0: // still the shell taken over (stillShell)
+			_ = unix.Kill(s.shell, sig)
+		}
+	}
 }
 
 // withFd runs f on the master's fd while the file holds it (SyscallConn's
@@ -175,10 +218,20 @@ func (s *Session) ShellPid() int {
 	if s.cmd != nil && s.cmd.Process != nil {
 		return s.cmd.Process.Pid
 	}
-	if s.shell > 0 && unix.Kill(s.shell, 0) == nil {
+	if s.shell > 0 && unix.Kill(s.shell, 0) == nil && s.stillShell() {
 		return s.shell
 	}
 	return 0
+}
+
+// stillShell says whether s.shell is still the process taken over as the
+// shell (shellMark), not another that took its pid once it was freed.
+func (s *Session) stillShell() bool {
+	if s.shellMark == "" {
+		return true // not known: the pid alone, as before
+	}
+	mark, _, ok := procMark(s.shell)
+	return ok && mark == s.shellMark
 }
 
 // ForegroundPgrp returns the PTY's current foreground process group (TIOCGPGRP

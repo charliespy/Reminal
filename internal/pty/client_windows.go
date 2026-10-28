@@ -280,6 +280,10 @@ func (s *Session) Wait() error {
 // ShellCgroup: ShellCgroupEnv is Linux's; never asked for here.
 func (s *Session) ShellCgroup() *ShellCgroup { return nil }
 
+// Hangup is Unix's hanging up of the terminal before Close; here Close
+// itself ends the shell (the holder kills it), so there is nothing to do.
+func (s *Session) Hangup() {}
+
 // Close ends the SESSION: ask the holder to kill the shell, then drop the
 // connection. (A hot restart must NOT call this — the old agent just exits
 // and lets the socket drop; the holder keeps serving the successor.)
