@@ -104,6 +104,31 @@ func AwakePinned(id string) bool {
 	return err == nil
 }
 
+// AsleepIDs are the sessions marked asleep, each with when its mark was
+// last written: read from the marks alone, no record opened (a list of
+// hundreds is cheap).
+func AsleepIDs() map[string]time.Time {
+	dir, err := restoreDir()
+	if err != nil {
+		return nil
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := map[string]time.Time{}
+	for _, e := range ents {
+		id, ok := strings.CutSuffix(e.Name(), sufAsleep)
+		if !ok || id == "" || strings.HasPrefix(id, ".") {
+			continue
+		}
+		if fi, err := e.Info(); err == nil {
+			out[id] = fi.ModTime()
+		}
+	}
+	return out
+}
+
 func writeSidecar(id, suf string, b []byte) error {
 	p, err := restorePath(strings.ToUpper(id), suf)
 	if err != nil {

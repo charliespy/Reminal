@@ -68,16 +68,16 @@ func runWake(args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: reminal wake <id|name>   (reminal list shows who is asleep)")
 	}
-	r := findSleeper(args[0])
+	r, err := wakeSleeper(args[0], "")
+	if err != nil {
+		return err
+	}
 	if r == nil {
 		if client.SessionRunning(strings.ToUpper(args[0])) {
 			fmt.Printf("  %s is awake\n", strings.ToUpper(args[0]))
 			return nil
 		}
 		return fmt.Errorf("no session asleep matches %q (reminal list)", args[0])
-	}
-	if _, err := client.WakeSession(*r); err != nil {
-		return err
 	}
 	fmt.Printf("  %s %s awake · same link and PIN\n", cGreen("✓"), cBold(r.ID))
 	return nil
@@ -115,6 +115,54 @@ func runKeepAwake(args []string) error {
 	}
 	return nil
 }
+
+// wakeForKeys wakes the session sel names if it sleeps, and waits (up to
+// wakeForKeysWait) for it to be ready for keys: running again, with the
+// agent it slept with back in its foreground and not mid-start. Nothing to
+// do for a session awake, or one sel does not name.
+func wakeForKeys(sel string) error {
+	r, err := wakeSleeper(sel, "")
+	if r == nil || err != nil {
+		return err
+	}
+	deadline := time.Now().Add(wakeForKeysWait)
+	for time.Now().Before(deadline) {
+		a, err := session.ReadActiveByID(r.ID)
+		// A shell is ready once it runs; an agent once it is back and has
+		// settled at its prompt (an attention state, not "working").
+		if err == nil && (r.Fg == "" || a.Fg == r.Fg && a.Attn != "" && a.Attn != "working") {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("%s is still waking (its agent is not back yet); try again in a few seconds", r.ID)
+}
+
+// wakeToUse wakes the session sel names if it sleeps, saying so: `reminal
+// attach` and `reminal connect` then reach it as they would awake.
+func wakeToUse(sel string) error {
+	_, err := wakeSleeper(sel, "  %s is asleep · waking it…\n")
+	return err
+}
+
+// wakeSleeper wakes the session sel names if it sleeps (saying say, with its
+// id, first), and is that session; nil for one awake or not named.
+func wakeSleeper(sel, say string) (*session.Restore, error) {
+	r := findSleeper(sel)
+	if r == nil {
+		return nil, nil
+	}
+	if say != "" {
+		fmt.Printf(say, r.ID)
+	}
+	if _, err := client.WakeSession(*r); err != nil {
+		return r, fmt.Errorf("%s is asleep and could not be woken: %w", r.ID, err)
+	}
+	return r, nil
+}
+
+// wakeForKeysWait is how long keys for a sleeping session wait for it to wake.
+const wakeForKeysWait = 60 * time.Second
 
 // sleepers are the sessions asleep, newest sleep first.
 func sleepers() []session.Restore {

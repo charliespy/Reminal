@@ -1542,6 +1542,10 @@ func runAttach(idArg string) error {
 		_, err := resolveActive("")
 		return err
 	}
+	// Asleep: woken, then attached to (a terminal attaching is a person at it).
+	if err := wakeToUse(idArg); err != nil {
+		return err
+	}
 	a, err := resolveActive(idArg)
 	if err != nil {
 		return err
@@ -2687,6 +2691,10 @@ func runConnect(target, pinArg string, owner bool) error {
 	sessionID, urlPin := parseConnectTarget(target)
 	if sessionID == "" {
 		return errors.New("needs a session ID or a relay URL containing ?s=<ID>")
+	}
+	// A session of this machine's, asleep: woken first, then connected to.
+	if err := wakeToUse(sessionID); err != nil {
+		return err
 	}
 	if os.Getenv("REMINAL_SESSION") == sessionID {
 		return fmt.Errorf("already inside session %s — connecting from this shell would loop viewer output back through the PTY; open a different terminal first", sessionID)

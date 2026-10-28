@@ -489,6 +489,9 @@ func localDirSessions() []protocol.DirSession {
 		}
 		out = append(out, ds)
 	}
+	// The sessions asleep, after the running ones: still this machine's, woken
+	// from here (sleep.go).
+	out = append(out, sleeperDirSessions()...)
 	return out
 }
 

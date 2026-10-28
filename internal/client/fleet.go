@@ -127,6 +127,10 @@ func applyLocalSearchHits(resp *protocol.DirResponse, pattern string) {
 	for i := range resp.Sessions {
 		pid := pidByID[resp.Sessions[i].ID]
 		if pid == 0 {
+			if resp.Sessions[i].Asleep {
+				// Asleep: its saved scrollback, searched without waking it.
+				resp.Sessions[i].SearchHits = SearchSleeperTranscript(resp.Sessions[i].ID, pattern)
+			}
 			continue
 		}
 		hits, err := SearchAgentTranscript(pid, pattern)
@@ -160,6 +164,14 @@ func applyLocalTranscriptDump(resp *protocol.DirResponse, sessionID string) {
 		}
 	}
 	if pid == 0 {
+		// Asleep: its saved scrollback, read without waking it.
+		if text, truncated, ok := sleeperTranscript(strings.ToUpper(sessionID)); ok {
+			for i := range resp.Sessions {
+				if strings.EqualFold(resp.Sessions[i].ID, sessionID) {
+					resp.Sessions[i].Transcript, resp.Sessions[i].TranscriptTruncated, resp.Sessions[i].TranscriptOK = text, truncated, true
+				}
+			}
+		}
 		return
 	}
 	text, truncated, err := ReadAgentTranscript(pid)
@@ -181,6 +193,9 @@ func applyLocalTranscriptDump(resp *protocol.DirResponse, sessionID string) {
 func ReadAgentTranscriptFromID(id string) (string, bool, error) {
 	a, err := session.ReadActiveByID(id)
 	if err != nil {
+		if text, truncated, ok := sleeperTranscript(strings.ToUpper(id)); ok && session.IsAsleep(id) {
+			return text, truncated, nil // asleep: what it saved
+		}
 		return "", false, err
 	}
 	if a.IsPort() {

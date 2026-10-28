@@ -43,6 +43,11 @@ running $ID && fail "$ID still running" || ok "its processes are gone"
 [ "$(claudes)" -lt "$before" ] && ok "claude ended ($before → $(claudes) running)" || fail "claude still running"
 box "test -f /root/.reminal/restore/$ID.sealed && test -f /root/.reminal/restore/$ID.asleep" && ok "record kept, marked asleep" || fail "no record or no asleep mark"
 box "reminal list" | grep -q "$ID.*asleep" && ok "reminal list shows it asleep" || fail "list: $(box 'reminal list')"
+# The agent tools on a session asleep: listed, read and searched from what it
+# saved, never an error.
+box "mcp.sh list" | grep -q "$ID" && box "mcp.sh list" | grep -q 'asleep' && ok "list_sessions shows it, asleep" || fail "list_sessions: $(box 'mcp.sh list' | cut -c1-300)"
+box "mcp.sh read $ID" | grep -q "before-the-sleep-marker" && ok "read_transcript reads what it saved" || fail "read_transcript: $(box 'mcp.sh read '$ID | cut -c1-300)"
+box "mcp.sh search before-the-sleep-marker" | grep -q "$ID" && ok "search_sessions finds it in what it saved" || fail "search_sessions: $(box 'mcp.sh search before-the-sleep-marker' | cut -c1-300)"
 
 # Asleep through a daemon restart and a reboot.
 box "pkill -x -f 'reminal daemon'; sleep 1; (reminal daemon >/root/daemon2.log 2>&1 &)"; sleep 6
@@ -75,7 +80,11 @@ o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "sleep, running in it" &&
 running $ID && ok "…and it is still awake" || fail "slept despite the job"
 o=$(box "reminal sleep $ID --anyway 2>&1"); echo "$o" | grep -q "asleep" && ok "--anyway sleeps it" || fail "--anyway: $o"
 box "reminal list" | grep -q "let go of: sleep, running in it" && ok "the list says what that let go of" || fail "dropped not shown: $(box 'reminal list')"
-box "reminal wake $ID >/dev/null 2>&1"; sleep 4
+# send_keys to a session asleep wakes it, and the keys land in its agent.
+box "MCP_WAIT=40 mcp.sh send $ID 'hello from the agent tools' >/dev/null"
+sleep 2
+running $ID && ok "send_keys woke it" || fail "send_keys did not wake it"
+box "grep -rq 'you said: hello from the agent tools' /root/.fake-claude/" && ok "…and the keys went to claude, not the shell" || fail "keys lost: $(screen $ID | tail -5)"
 
 # A plain shell: refused unless --anyway (what was typed by hand is lost).
 o2=$(newsession plain /root); P=$(idof "$o2"); sleep 2

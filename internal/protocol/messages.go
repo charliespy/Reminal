@@ -522,6 +522,13 @@ type DirSession struct {
 	// says whether a running agent predates its reminal setup and so still
 	// lacks the tools until it is restarted. Zero from hosts too old to report.
 	FgSince int64 `json:"fg_since,omitempty"`
+	// Asleep: the session sleeps (`reminal sleep`): its processes ended, its
+	// record kept, and it wakes as itself, on the same id and PIN, when it
+	// is woken. SleptAt is when (unix seconds); Dropped, what the person let
+	// go of by sleeping it anyway (a job that was running in it).
+	Asleep  bool     `json:"asleep,omitempty"`
+	SleptAt int64    `json:"slept_at,omitempty"`
+	Dropped []string `json:"dropped,omitempty"`
 	// SearchHits is filled when the directory query carried a regex: snippets
 	// from this session's live scrollback. Omitted on a plain listing, and by
 	// hosts that do not search yet (they still return the session list).
