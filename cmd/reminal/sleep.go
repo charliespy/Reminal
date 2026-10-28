@@ -115,10 +115,19 @@ func wakeForKeys(sel string) error {
 	deadline := time.Now().Add(wakeForKeysWait)
 	for time.Now().Before(deadline) {
 		a, err := session.ReadActiveByID(r.ID)
-		// A shell is ready once it runs; an agent once it is back and has
-		// settled at its prompt (an attention state, not "working").
-		if err == nil && (r.Fg == "" || a.Fg == r.Fg && a.Attn != "" && a.Attn != "working") {
+		// A shell is ready once it runs; an agent once it is back in front at
+		// its prompt (done, or held back by its limit). One back asking
+		// something would take the keys as its answer: not sent.
+		if err == nil && r.Fg == "" {
 			return nil
+		}
+		if err == nil && a.Fg == r.Fg {
+			switch a.Attn {
+			case "done", "limited":
+				return nil
+			case "input":
+				return fmt.Errorf("%s woke, and its agent is asking something: read it first (keys not sent)", r.ID)
+			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}

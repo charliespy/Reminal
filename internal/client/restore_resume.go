@@ -51,14 +51,15 @@ func resumeTooBig(r session.Restore) string {
 }
 
 // claudeConvSize is the size of claude's file for conversation conv, or 0:
-// ~/.claude/projects/<its folder>/<conv>.jsonl, the largest if two folders
-// have one. conv is a ValidConv id, so nothing in it is read as a pattern.
+// <claude's folder>/projects/<its folder>/<conv>.jsonl (claudeConfigDir), the
+// largest if two folders have one. conv must be a ValidConv id, so nothing
+// in it is read as a pattern.
 func claudeConvSize(conv string) int64 {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	dir := claudeConfigDir()
+	if dir == "" || !session.ValidConv(conv) {
 		return 0
 	}
-	matches, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", conv+".jsonl"))
+	matches, _ := filepath.Glob(filepath.Join(dir, "projects", "*", conv+".jsonl"))
 	var max int64
 	for _, m := range matches {
 		if fi, err := os.Stat(m); err == nil && fi.Mode().IsRegular() && fi.Size() > max {

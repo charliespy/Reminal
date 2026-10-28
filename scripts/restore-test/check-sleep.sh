@@ -156,4 +156,10 @@ o3=$(newsession unsaid /root/unsaid); G=$(idof "$o3")
 send $G 'FAKE_CLAUDE_BG_SAID=0 claude'; sleep 2; send $G "hi"; sleep 2
 o=$(box "reminal sleep $G 2>&1"); echo "$o" | grep -q "it didn't say" && ok "an agent that never said what it left: $(echo "$o" | head -1)" || fail "unsaid background: $o"
 
+# Ending a session asleep: reminal kill, as for one running; nothing left.
+box "reminal sleep $G --anyway >/dev/null 2>&1"
+o=$(box "reminal kill $G -y 2>&1"); echo "$o" | grep -q "Ended sleeping session $G" && ok "reminal kill ends a session asleep" || fail "kill a sleeper: $o"
+box "ls /root/.reminal/restore/ | grep -q $G" && fail "something of it is left: $(box "ls /root/.reminal/restore/ | grep $G")" || ok "…its record and marks are gone"
+o=$(box "reminal wake $G 2>&1"); echo "$o" | grep -q "awake" && fail "woke one that was ended: $o" || ok "…and it cannot be woken: $(echo "$o" | head -1)"
+
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

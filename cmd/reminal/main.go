@@ -2534,6 +2534,9 @@ func abbrevHome(p string) string {
 func runKill(idArg string, yes bool) error {
 	a, err := resolveActive(idArg)
 	if err != nil {
+		if r := findSleeper(idArg); r != nil {
+			return killSleeper(*r, yes)
+		}
 		return err
 	}
 	fmt.Printf("\n  This will fully terminate session %s on this machine.\n", a.ID)
@@ -2551,23 +2554,52 @@ func runKill(idArg string, yes bool) error {
 	fmt.Println("    · The session ID and PIN stop being valid right away.")
 	fmt.Println("    · This is irreversible.")
 	fmt.Println()
-	if !yes {
-		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return errors.New("refusing to kill without confirmation — re-run with -y to skip the prompt")
-		}
-		fmt.Print("  Proceed? [y/N]: ")
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		resp := strings.ToLower(strings.TrimSpace(line))
-		if resp != "y" && resp != "yes" {
-			fmt.Println("  Aborted.")
-			return nil
-		}
+	if ok, err := proceed(yes, "kill"); !ok {
+		return err
 	}
 	if err := terminateAgent(*a); err != nil {
 		return err
 	}
 	fmt.Printf("  Killed session %s (PID %d).\n", a.ID, a.PID)
 	return nil
+}
+
+// killSleeper ends sleeping session r for good (runKill): nothing runs to
+// stop; its record, scrollback and conversation link are forgotten.
+func killSleeper(r session.Restore, yes bool) error {
+	fmt.Printf("\n  This will end sleeping session %s on this machine for good.\n", r.ID)
+	fmt.Println("    · It is not woken: what it saved (its scrollback, its agent's")
+	fmt.Println("      conversation link) is forgotten.")
+	fmt.Println("    · The session ID and PIN stop being valid right away.")
+	fmt.Println("    · This is irreversible.")
+	fmt.Println()
+	if ok, err := proceed(yes, "kill"); !ok {
+		return err
+	}
+	if err := client.ForgetSleeper(r.ID); err != nil {
+		return err
+	}
+	fmt.Printf("  Ended sleeping session %s.\n", r.ID)
+	return nil
+}
+
+// proceed asks the person to confirm what was just described, unless yes
+// (-y): false when they said no (said so), or when there is no terminal to
+// ask at (an error naming verb and -y).
+func proceed(yes bool, verb string) (bool, error) {
+	if yes {
+		return true, nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false, fmt.Errorf("refusing to %s without confirmation — re-run with -y to skip the prompt", verb)
+	}
+	fmt.Print("  Proceed? [y/N]: ")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	if resp := strings.ToLower(strings.TrimSpace(line)); resp != "y" && resp != "yes" {
+		fmt.Println("  Aborted.")
+		return false, nil
+	}
+	return true, nil
 }
 
 // terminateAgent SIGTERMs the agent, gives it a brief window to run its defers
@@ -2659,17 +2691,8 @@ func runPrune(idle time.Duration, yes bool) error {
 	}
 	fmt.Println("\n    The shell inside each is killed — unsaved work is lost. Irreversible.")
 	fmt.Println()
-	if !yes {
-		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return errors.New("refusing to prune without confirmation — re-run with -y to skip the prompt")
-		}
-		fmt.Print("  Proceed? [y/N]: ")
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		resp := strings.ToLower(strings.TrimSpace(line))
-		if resp != "y" && resp != "yes" {
-			fmt.Println("  Aborted.")
-			return nil
-		}
+	if ok, err := proceed(yes, "prune"); !ok {
+		return err
 	}
 	killed := 0
 	for _, a := range victims {

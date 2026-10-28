@@ -404,7 +404,11 @@ func ReadRestores() ([]Restore, error) {
 // ClearRestore forgets a session for good: its record, its scrollback, its
 // agent's conversation id, sealed or from an older version, and its sleep
 // marks (nothing is left asleep after a kill).
-func ClearRestore(id string) error {
+func ClearRestore(id string) error { return clearRestoreIf(id, nil) }
+
+// clearRestoreIf is ClearRestore, done only when may (nil: always) says yes,
+// asked under the record's lock; with a may, a lock not had is not cleared.
+func clearRestoreIf(id string, may func() error) error {
 	id = strings.ToUpper(id)
 	// The lock file goes too, or one is left per session ever run. Removing a
 	// lock file others might open is the classic flock gotcha (one process
@@ -412,13 +416,21 @@ func ClearRestore(id string) error {
 	// only here, as the session ends for good, so the risk is negligible. On
 	// Windows the remove fails while the file is open and is ignored; the
 	// lock file then simply stays.
-	if unlock, err := lockSession(id); err == nil {
+	unlock, err := lockSession(id)
+	if err == nil {
 		defer func() {
 			if dir, err := restoreDir(); err == nil {
 				_ = os.Remove(filepath.Join(dir, "."+id+".lock"))
 			}
 			unlock()
 		}()
+	} else if may != nil {
+		return err
+	}
+	if may != nil {
+		if err := may(); err != nil {
+			return err
+		}
 	}
 	for _, suf := range []string{".sealed", ".json", ".scrollback.sealed", ".scrollback.json", ".conv", ".written", sufAsleep, sufWaking, sufAwakePin} {
 		if p, err := restorePath(strings.ToUpper(id), suf); err == nil {

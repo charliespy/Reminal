@@ -39,6 +39,7 @@ type sleepFacts struct {
 	Attached int      // `reminal connect` terminals attached to it
 	Fg       string   // its coding agent, as the saved record names it
 	Conv     string   // the agent's conversation, as saved
+	ConvFile bool     // claude's file for Conv is there (claudeConvSize)
 	NoTurn   bool     // the agent was never sent a message (nothing to resume)
 	Saved    bool     // its record was just saved
 }
@@ -62,6 +63,10 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 		return "kept awake · " + f.Fg + " can't be resumed exactly yet", nil
 	case f.Fg != "" && !f.NoTurn && !session.ValidConv(f.Conv):
 		return "kept awake · can't tell which conversation is its own", nil
+	case f.Fg == "claude" && !f.NoTurn && !f.ConvFile:
+		// The wake checks for it too (wakeCheck): never asleep on a
+		// conversation it could not be woken on.
+		return "kept awake · can't find claude's file for its conversation", nil
 	}
 	switch f.Attn {
 	case "working":
@@ -112,6 +117,7 @@ func (e ErrWouldLose) Error() string {
 // "sleep anyway"). It saves its record first and checks the save: the record
 // is what it wakes from.
 func (a *Agent) sleepNow(anyway bool) error {
+	asked := time.Now()
 	a.metaMu.Lock()
 	f := sleepFacts{
 		Pinned: session.AwakePinned(a.sessionID), Headless: a.headless,
@@ -129,6 +135,7 @@ func (a *Agent) sleepNow(anyway bool) error {
 	f.Saved = err == nil && r != nil && !r.SavedAt.Before(before)
 	if f.Saved {
 		f.Fg, f.Conv, f.NoTurn = r.Fg, r.Conv, r.NoTurn
+		f.ConvFile = f.Fg == "claude" && claudeConvSize(f.Conv) > 0
 	}
 	// An agent that is not running (quit, something else in front) has no
 	// background work of its own left to lose.
@@ -152,7 +159,23 @@ func (a *Agent) sleepNow(anyway bool) error {
 	if err := session.MarkAsleep(a.sessionID, session.Asleep{SleptAt: time.Now(), Why: "asked", Fg: r.Fg, Dropped: losses}); err != nil {
 		return fmt.Errorf("kept awake · couldn't save: %w", err)
 	}
+	// Going: no new terminal attaches from here. Keys that came while it
+	// decided were someone using it: it stays awake, and says why.
+	a.sleeping.Store(true)
+	if a.keysSince(asked) {
+		a.sleeping.Store(false)
+		session.ClearAsleep(a.sessionID)
+		return errors.New("awake · used while going to sleep")
+	}
 	return nil
+}
+
+// keysSince says keys were typed into the session (by a person, or for one)
+// after t.
+func (a *Agent) keysSince(t time.Time) bool {
+	a.metaMu.Lock()
+	defer a.metaMu.Unlock()
+	return a.typing.at.After(t)
 }
 
 // SleepSession puts this machine's running session id to sleep, and waits
@@ -232,6 +255,10 @@ func sleepAct(id, act string) (screen string, err error) {
 		_, err = WakeSession(*r)
 		return screen, err
 	case "keep_awake", "keep_awake_off":
+		// Only a session there is: no mark left for an id named at random.
+		if !SessionRunning(id) && !session.IsAsleep(id) {
+			return "", fmt.Errorf("session %s not found", id)
+		}
 		return "", session.SetAwakePin(id, act == "keep_awake")
 	}
 	return "", fmt.Errorf("unknown sleep action %q", act)
@@ -265,6 +292,31 @@ func wakeCheck(r session.Restore) string {
 	return ""
 }
 
+// ForgetSleeper ends sleeping session id for good: its record and marks go
+// (`reminal kill`, End in the viewer). Never while a wake of it is under way,
+// which may be bringing it up on that record: it is ended once it is up.
+func ForgetSleeper(id string) error {
+	id = strings.ToUpper(strings.TrimSpace(id))
+	switch err := session.ForgetAsleep(id, wakeRetryWithin); {
+	case errors.Is(err, session.ErrWaking):
+		return fmt.Errorf("%s is waking up; end it once it is up", id)
+	case errors.Is(err, session.ErrNotAsleep):
+		return fmt.Errorf("session %s not found", id)
+	default:
+		return err
+	}
+}
+
+// markAwake is a restored session saying, once it is up and reachable, that
+// any sleep it was woken from is over: its own word, so a waker that ended
+// before it could say so (killed mid-wake, its daemon restarted) never
+// leaves a running session marked asleep, or its wake to be tried again.
+func (a *Agent) markAwake() {
+	if a.restoring {
+		session.ClearAsleep(a.sessionID)
+	}
+}
+
 // WakeSession wakes sleeping session r: back on its id, PIN and
 // conversation, the way a reboot brings it back. A wake that does not come
 // up leaves it asleep, to be tried again.
@@ -272,7 +324,9 @@ func WakeSession(r session.Restore) (*SpawnedSession, error) {
 	if why := wakeCheck(r); why != "" {
 		return nil, errors.New(why)
 	}
-	_ = session.MarkWaking(r.ID, time.Now())
+	if err := session.BeginWake(r.ID, time.Now()); errors.Is(err, session.ErrNotAsleep) {
+		return nil, fmt.Errorf("%s was ended while asleep", r.ID)
+	}
 	sp, err := RestoreSessionWith(r, "woke from sleep")
 	if err != nil && !SessionRunning(r.ID) {
 		session.ClearWaking(r.ID)

@@ -4,6 +4,7 @@
 package session
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -87,5 +88,40 @@ func TestClearRestoreTakesTheSleepMarks(t *testing.T) {
 	}
 	if _, ok := WakingSince(id); ok {
 		t.Fatal("the waking mark outlived ClearRestore")
+	}
+}
+
+// A wake and an end of a sleeping session never cross: whichever comes first
+// is seen by the other. An end waits out a wake under way, not one left
+// from long ago (cut short: its session is not coming up).
+func TestAWakeAndAnEndNeverCross(t *testing.T) {
+	const id = "SLEEPA05"
+	put := func() {
+		_ = WriteRestore(Restore{ID: id, PIN: "12345678", SavedAt: time.Now()})
+		_ = MarkAsleep(id, Asleep{SleptAt: time.Now(), Why: "asked"})
+	}
+	put()
+	if err := ForgetAsleep(id, time.Minute); err != nil {
+		t.Fatalf("ending a sleeper: %v", err)
+	}
+	if err := BeginWake(id, time.Now()); !errors.Is(err, ErrNotAsleep) {
+		t.Fatalf("a wake after the end: %v, want ErrNotAsleep", err)
+	}
+	put()
+	if err := BeginWake(id, time.Now()); err != nil {
+		t.Fatalf("a wake: %v", err)
+	}
+	if err := ForgetAsleep(id, time.Minute); !errors.Is(err, ErrWaking) {
+		t.Fatalf("an end during the wake: %v, want ErrWaking", err)
+	}
+	if !IsAsleep(id) {
+		t.Fatal("an end refused still cleared it")
+	}
+	_ = MarkWaking(id, time.Now().Add(-time.Hour))
+	if err := ForgetAsleep(id, time.Minute); err != nil || IsAsleep(id) {
+		t.Fatalf("an end after a wake cut short long ago: %v, asleep %v", err, IsAsleep(id))
+	}
+	if err := ForgetAsleep(id, time.Minute); !errors.Is(err, ErrNotAsleep) {
+		t.Fatalf("ending one not asleep: %v, want ErrNotAsleep", err)
 	}
 }

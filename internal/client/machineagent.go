@@ -594,6 +594,13 @@ func (a *Agent) handleDirSleep(conn *websocket.Conn, data string) {
 	if !a.decryptDir(data, &req) {
 		return
 	}
+	// A wake starts a session, and its agent: priced as a spawn, on top.
+	if req.Act == "wake" {
+		if ok, wait := a.takeDir(dirActSpawn); !ok {
+			a.dirBusy(conn, protocol.TypeDirSleep, data, wait)
+			return
+		}
+	}
 	ack := dirSleepAck{dirAck: dirAck{ReqID: req.ReqID}}
 	screen, err := sleepAct(req.ID, req.Act)
 	var lose ErrWouldLose

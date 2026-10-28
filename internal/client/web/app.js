@@ -5482,28 +5482,46 @@
     // id, PIN and conversation, over the machine channel (the owner's alone).
     // While it wakes, its last saved screen shows, and what you type is held
     // until its agent is back at its prompt (wakeGate): typed into the shell
-    // before the agent is back, it would run there.
-    const WAKE_HOLD_MS = 60000;
-    let wakeGate = null; // { id, agent, until }
+    // before the agent is back, it would run there. A wake that takes long
+    // keeps them held all the same (WAKE_SLOW_MS only changes what the chip
+    // says, Discard always there): never let go into a shell whose agent is
+    // not back.
+    const WAKE_SLOW_MS = 60000;
+    let wakeGate = null; // { id, agent, since }
     function wakeHolding() {
       if (!wakeGate) return false;
-      const done = (sessionId && sessionId !== wakeGate.id) || Date.now() > wakeGate.until
-        || (!wakeGate.agent && agentLive && authed); // a plain shell: once it is live
-      if (done) endWakeGate();
+      if (sessionId && sessionId !== wakeGate.id) endWakeGate(false); // left for another: what was typed was for this one
+      else if (!wakeGate.agent && agentLive && authed) endWakeGate(true); // a plain shell: once it is live
       return !!wakeGate;
     }
-    function endWakeGate() {
+    const wakeSlow = () => !!wakeGate && Date.now() - wakeGate.since > WAKE_SLOW_MS;
+    // endWakeGate ends the hold of a wake: what was held is sent (send), or
+    // dropped (it was for a session no longer shown).
+    function endWakeGate(send) {
       if (!wakeGate) return;
       wakeGate = null;
       hideWakeScreen();
+      if (!send) { dropHeldInput(); return; }
       if (heldInput.length) heldSince = Date.now(); // held while it woke: not late
       updateHeldChip();
       flushHeldInput();
     }
+    // An agent back and ready for what is typed: at its prompt, or held back by
+    // its service's limit (still at its prompt). Not one asking something
+    // ("input": a question, a folder to trust), which the held keys would answer.
+    const WAKE_READY = ['done', 'limited'];
     // wakeAgentBack is told each attention state the woken session reports:
-    // its agent back at its prompt lets the held keys go.
+    // its agent back and ready lets the held keys go.
+    // Back asking something, it is shown, and what was typed for its prompt
+    // is not sent as the answer: said, never lost silently.
     function wakeAgentBack(id, attn) {
-      if (wakeGate && wakeGate.agent && wakeGate.id === id && ['done', 'input', 'limited'].includes(attn)) endWakeGate();
+      if (!wakeGate || !wakeGate.agent || wakeGate.id !== id) return;
+      if (WAKE_READY.includes(attn)) endWakeGate(true);
+      else if (attn === 'input') {
+        const k = heldCount();
+        endWakeGate(false);
+        if (k) viewerNote(heldChars(k) + ' typed while it woke ' + (k === 1 ? 'was' : 'were') + ' not sent: it is asking you something.');
+      }
     }
     function showWakeScreen(name, screen) {
       const el = document.getElementById('wake-screen');
@@ -5523,7 +5541,8 @@
       try {
         const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { sleep: { id: s.id, act: 'wake' }, timeout: DIR_SPAWN_TIMEOUT_MS });
         if (r && r.screen) showWakeScreen(name, r.screen);
-        wakeGate = { id: s.id.toUpperCase(), agent: !!s.fg, until: Date.now() + WAKE_HOLD_MS };
+        wakeGate = { id: s.id.toUpperCase(), agent: !!s.fg, since: Date.now() };
+        setTimeout(updateHeldChip, WAKE_SLOW_MS + 100); // the chip says when it is taking long
         connectOwned(s.id);
         renderMachines();
       } catch (e) {
@@ -8462,7 +8481,7 @@
       // large to hold, on an empty queue, went with no word at all.
       const text = !k ? (heldOverflow ? 'A paste too large to hold was not sent' : '') : late
         ? heldChars(k) + ' typed while it was not connected will not be sent: they waited too long'
-        : heldChars(k) + (wakeGate ? ' typed, waiting for it to wake' : ' typed, waiting for it to connect') + (heldOverflow ? ' (some too many to hold will not be sent)' : '');
+        : heldChars(k) + (wakeSlow() ? ' typed, held: it is taking long to wake' : wakeGate ? ' typed, waiting for it to wake' : ' typed, waiting for it to connect') + (heldOverflow ? ' (some too many to hold will not be sent)' : '');
       document.getElementById('held-chip-text').textContent = text;
       chip.hidden = !text;
     }

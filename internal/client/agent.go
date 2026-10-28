@@ -1464,6 +1464,7 @@ func (a *Agent) afterAttempt(err error) {
 // already exited) is logged but doesn't break the headless agent.
 func (a *Agent) writeHandshake() {
 	StartMark("register") // reachable (or the relay found unreachable)
+	a.markAwake()
 	payload := map[string]any{
 		"id":       a.sessionID,
 		"pin":      a.pin,
@@ -1662,6 +1663,7 @@ func (a *Agent) noteInput(data []byte) {
 func (a *Agent) feedTyping(keys []byte) {
 	a.metaMu.Lock()
 	a.typing.feed(keys)
+	a.typing.at = time.Now()
 	a.metaMu.Unlock()
 }
 

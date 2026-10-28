@@ -70,6 +70,45 @@ func MarkWaking(id string, at time.Time) error {
 	return writeSidecar(id, sufWaking, []byte(at.UTC().Format(time.RFC3339Nano)))
 }
 
+// ErrNotAsleep: the session is not asleep (it woke, or it was ended).
+// ErrWaking: a wake of it is under way.
+var (
+	ErrNotAsleep = errors.New("not asleep")
+	ErrWaking    = errors.New("waking")
+)
+
+// BeginWake marks a wake of sleeping session id begun at at (MarkWaking),
+// unless it is no longer asleep: ended meanwhile (ForgetAsleep), its record
+// is gone and there is nothing to wake. Under the record's lock, as
+// ForgetAsleep is, so a wake and an end never cross: one comes first, and
+// the other sees it.
+func BeginWake(id string, at time.Time) error {
+	unlock, err := lockSession(strings.ToUpper(id))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if !IsAsleep(id) {
+		return ErrNotAsleep
+	}
+	return MarkWaking(id, at)
+}
+
+// ForgetAsleep ends sleeping session id for good (ClearRestore), unless a
+// wake of it began within recent: it may be coming up on its record, and
+// ending it then would leave it running with none (ErrWaking).
+func ForgetAsleep(id string, recent time.Duration) error {
+	return clearRestoreIf(id, func() error {
+		if !IsAsleep(id) {
+			return ErrNotAsleep
+		}
+		if t, ok := WakingSince(id); ok && time.Since(t) < recent {
+			return ErrWaking
+		}
+		return nil
+	})
+}
+
 // WakingSince is when a wake of session id began, if one is under way.
 func WakingSince(id string) (time.Time, bool) {
 	b, err := readSidecar(id, sufWaking)

@@ -4,6 +4,7 @@
 package client
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ import (
 // What may sleep, what never may, and what a sleep would end — said, never
 // lost silently.
 func TestSleepVerdict(t *testing.T) {
-	idle := sleepFacts{Headless: true, Saved: true, Fg: "claude", Conv: "conv-0123456789ab", Attn: "done", BgSaid: true}
+	idle := sleepFacts{Headless: true, Saved: true, Fg: "claude", Conv: "conv-0123456789ab", Attn: "done", BgSaid: true, ConvFile: true}
 	with := func(f func(*sleepFacts)) sleepFacts { c := idle; f(&c); return c }
 	cases := []struct {
 		name   string
@@ -113,5 +114,71 @@ func TestInputLine(t *testing.T) {
 		if l.draft != c.draft {
 			t.Errorf("%s: draft %v, want %v", c.name, l.draft, c.draft)
 		}
+	}
+}
+
+// A restored session clears its own sleep marks once it is up: a waker that
+// ended before it could leaves no running session marked asleep. One that
+// was not restored (started anew) leaves them be.
+func TestARestoredSessionMarksItselfAwake(t *testing.T) {
+	const id = "WAKEME01"
+	for _, restoring := range []bool{false, true} {
+		_ = session.MarkAsleep(id, session.Asleep{SleptAt: time.Now(), Why: "asked"})
+		_ = session.MarkWaking(id, time.Now())
+		(&Agent{sessionID: id, restoring: restoring}).markAwake()
+		_, waking := session.WakingSince(id)
+		if asleep := session.IsAsleep(id); asleep == restoring || waking == restoring {
+			t.Errorf("restoring=%v: asleep %v, waking %v after markAwake", restoring, asleep, waking)
+		}
+	}
+	session.ClearAsleep(id)
+}
+
+// Claude's files are looked for where it keeps them: CLAUDE_CONFIG_DIR when
+// set. A sleep that could not be woken on its conversation is refused.
+func TestClaudeConversationFileFollowsItsConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	const conv = "conv-0123456789ab"
+	if claudeConvSize(conv) != 0 {
+		t.Fatal("found before written")
+	}
+	p := dir + "/projects/-work/" + conv + ".jsonl"
+	if err := os.MkdirAll(dir+"/projects/-work", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if claudeConvSize(conv) != 3 {
+		t.Fatalf("size %d, want 3", claudeConvSize(conv))
+	}
+	if claudeConvSize("../x") != 0 {
+		t.Fatal("a pattern read as an id")
+	}
+	block, _ := sleepVerdict(sleepFacts{Headless: true, Saved: true, Fg: "claude", Conv: conv, BgSaid: true})
+	if !strings.Contains(block, "can't find claude's file") {
+		t.Fatalf("no file: block %q", block)
+	}
+}
+
+// Keys typed after a sleep was asked for are someone using the session.
+func TestKeysSince(t *testing.T) {
+	a := &Agent{}
+	asked := time.Now()
+	if a.keysSince(asked) {
+		t.Fatal("keys before any were typed")
+	}
+	time.Sleep(time.Millisecond)
+	a.feedTyping([]byte("x"))
+	if !a.keysSince(asked) {
+		t.Fatal("keys typed after the ask not seen")
+	}
+}
+
+// Keep awake from another device names a session there is, never any id.
+func TestKeepAwakeNeedsASession(t *testing.T) {
+	if _, err := sleepAct("NOSUCH01", "keep_awake"); err == nil || session.AwakePinned("NOSUCH01") {
+		t.Fatalf("pinned a session that is not there: %v", err)
 	}
 }

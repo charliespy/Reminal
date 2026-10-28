@@ -6,6 +6,7 @@ package client
 import (
 	"bytes"
 	"regexp"
+	"time"
 )
 
 // terminalReplyRe matches what a terminal sends on its own, not a person:
@@ -38,7 +39,8 @@ func personKeys(b []byte) []byte { return terminalReplyRe.ReplaceAll(b, nil) }
 // turn, so a sleep asks rather than drops what was typed.
 type inputLine struct {
 	draft bool
-	paste bool // inside a bracketed paste
+	paste bool      // inside a bracketed paste
+	at    time.Time // when keys last came (Agent.feedTyping)
 }
 
 func (l *inputLine) feed(b []byte) {
