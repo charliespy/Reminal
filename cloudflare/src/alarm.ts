@@ -2,12 +2,13 @@
 //
 // An alarm is the one way a Durable Object runs with nobody asking it to, and
 // one that keeps re-arming itself bills for every run with no ceiling:
-// Cloudflare has no spend cap. The rooms here arm only on a socket closing,
-// a room expiring and an owner record running out, a few times in a room's
-// life. armAlarm makes that a bound rather than a property of today's code:
-// no alarm sooner than ALARM_MIN_GAP_MS from now, and past ALARM_MAX_PER_HOUR
-// arms in an hour none sooner than the hour's end, with one RUNAWAY line in
-// the log. The room still expires; it just cannot spin.
+// Cloudflare has no spend cap. The rooms here arm only on an agent
+// authenticating and a socket closing, on a room expiring and an owner record
+// running out, and once a day while an agent stays connected: a few times in
+// a room's life. armAlarm makes that a bound rather than a property of today's
+// code: no alarm sooner than ALARM_MIN_GAP_MS from now, and past
+// ALARM_MAX_PER_HOUR arms in an hour none sooner than the hour's end, with one
+// RUNAWAY line in the log. The room still expires; it just cannot spin.
 
 export const ALARM_MIN_GAP_MS = 1000;
 export const ALARM_MAX_PER_HOUR = 500;

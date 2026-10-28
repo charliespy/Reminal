@@ -93,6 +93,7 @@ func (a *Agent) handleKeysControl(b64 string) error {
 	if len(raw) > maxInjectBytes {
 		return fmt.Errorf("keys too long (max %d bytes)", maxInjectBytes)
 	}
+	a.awaitTyped() // a restored session's resume first (holdTyped)
 	return a.injectKeys(raw)
 }
 
@@ -104,9 +105,15 @@ func InjectAgentKeys(pid int, data []byte) error {
 	if len(data) > maxInjectBytes {
 		return fmt.Errorf("keys too long (max %d bytes)", maxInjectBytes)
 	}
-	_, err := sendControlToDeadline(pid, "keys "+base64.StdEncoding.EncodeToString(data), searchControlWait)
+	_, err := sendControlToDeadline(pid, "keys "+base64.StdEncoding.EncodeToString(data), keysControlWait())
 	return err
 }
+
+// keysControlWait is how long the keys verb is given: a restored session
+// may hold them until its resume is typed (awaitTyped, typedHoldMax), so
+// longer than that, or the caller is told it timed out while they are still
+// to be typed, and types them again.
+func keysControlWait() time.Duration { return typedHoldMax + searchControlWait }
 
 // SendKeysPIN types into any reminal session you have the id and PIN for,
 // the same path `reminal connect` uses (EKE, then encrypted TypeData). No
