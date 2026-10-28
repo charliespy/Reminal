@@ -1,6 +1,3 @@
-// A row whose first half is itself a whole row a CLI draws
-// ("Waiting for authentication" of "… callback...") reads as
-// that row, wrapped or not: nothing on a screen tells them apart.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Harshal Gajjar
 
@@ -459,6 +456,7 @@ func TestLoginStatusHowToEndsTheRow(t *testing.T) {
 	const notice = "Login expired · Please run /login"
 	for _, tail := range []string{
 		" so I paused the deploy.",
+		", then retry.",
 		" so I paused the deploy and will pick the work up again after lunch.",
 	} {
 		for _, glyph := range []string{"", "● ", "  ⎿  ", "• "} {
@@ -475,16 +473,26 @@ func TestLoginStatusHowToEndsTheRow(t *testing.T) {
 		" Login expired · Please run /login",
 		" Login expired. Please run /login.",
 		" Login required · run `codex login`",
+		" Not logged in. Run `agent login` first.",
+		" Not logged in. Run `cursor-agent login` first.",
 		" Not logged in · Run /login to sign in again",
 		" Authentication required: use /auth",
 		" Authentication required · Please re-authenticate",
 		" Authentication required · Sign in again to continue      ? for shortcuts",
 		" Authentication required (press Enter to sign in)",
 	} {
-		for _, prog := range []string{"claude", ""} {
-			if !harnessProblemIn("● Done.\n────\n❯ \n────\n"+row, prog) {
-				t.Errorf("as %q: its status row not read as logged out: %q", prog, row)
+		for _, prog := range []string{"claude", "cursor-agent", ""} {
+			for _, screen := range []string{row, "● Done.\n────\n❯ \n────\n" + row} {
+				if !harnessProblemIn(screen, prog) {
+					t.Errorf("as %q: its status row not read as logged out: %q", prog, screen)
+				}
 			}
+		}
+	}
+	// A command's "first" ends the row too; what goes on after it does not.
+	for _, prog := range []string{"codex", "cursor-agent", ""} {
+		if screen := " Login required · run `codex login` first, then retry"; harnessProblemIn(screen, prog) {
+			t.Errorf("as %q: read as logged out: %q", prog, screen)
 		}
 	}
 }

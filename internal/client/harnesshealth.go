@@ -560,12 +560,13 @@ var harnessLoginLines = loginBottom(
 // /login", "… (press Enter to sign in)", "… - please sign in"), then
 // perhaps a hint the status row carries ("? for shortcuts"), then the row's
 // end. Only those words: a command and its own ("run /login", "run `codex
-// login`", "use /auth"), signing in or logging in again, re-authenticating.
+// login`", "use /auth", Cursor's "Run `cursor-agent login` first."),
+// signing in or logging in again, re-authenticating.
 // A line that goes on in words of its own ("Authentication required for MCP
 // Server: github", "… Please run /login so I paused the deploy.") is another
 // login, or an agent's sentence, not the agent's status (review).
 const loginHowTo = `(?:[·.:\-—(][^a-z0-9]*(?:please)?(?:` +
-	`(?:run|use)['"` + "`" + `]?` + loginCommand + `['"` + "`" + `]?(?:to(?:signin(?:again)?|authenticate|continue))?` +
+	`(?:run|use)['"` + "`" + `]?` + loginCommand + `['"` + "`" + `]?(?:to(?:signin(?:again)?|authenticate|continue)|first)?` +
 	`|(?:signin|login)(?:again)?(?:tocontinue)?|re-?auth(?:enticate)?|pressentertosignin` +
 	`)[.)]*(?:\?forshortcuts)?)?`
 
