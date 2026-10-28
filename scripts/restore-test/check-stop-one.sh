@@ -17,7 +17,18 @@ send() { box "mcp.sh send $1 '$2' >/dev/null"; }
 newsession() { box "mkdir -p $2 && cd $2 && reminal new $1 2>&1"; }
 idof()  { echo "$1" | sed -n 's/^ *Session: *\([A-Z0-9]*\).*/\1/p' | head -1; }
 pidof() { box "sed -n 's/.*\"pid\": *\([0-9]*\).*/\1/p' /root/.reminal/active-$1.json | head -1"; }
-alive() { box "kill -0 $1 2>/dev/null"; }
+# Running: there, and not a zombie (State Z: ended, not yet reaped). The
+# box has an init (run.sh: --init), so an ended process does not linger.
+state() { box "sed -n 's/^State:[[:space:]]*\([A-Z]\).*/\1/p' /proc/$1/status 2>/dev/null"; }
+alive() { s=$(state $1); [ -n "$s" ] && [ "$s" != Z ]; }
+
+# With no init as PID 1, an ended session stays a zombie (State Z) until
+# reaped, and could read as running: the box must have one.
+p1=$(box 'cat /proc/1/comm')
+case "$p1" in
+docker-init|tini|init|systemd) ok "PID 1 is $p1" ;;
+*) fail "PID 1 is $p1, no init: run the box with --init (run.sh does)"; exit 1 ;;
+esac
 
 one=$(idof "$(newsession one /root/one)")
 other=$(idof "$(newsession other /root/other)")
@@ -43,6 +54,7 @@ for i in $(seq 1 50); do
     if ! alive $pid; then gone=$i; break; fi
     sleep 0.1
 done
+echo "     its process $pid: state '$(state $pid)', its shell $shell: state '$(state $shell)', PID 1: $(box 'cat /proc/1/comm')"
 if [ -n "$gone" ]; then ok "SIGTERM alone ended it, in about ${gone}00 ms"; else fail "SIGTERM alone: still running 5 s later"; fi
 if alive $shell; then fail "its shell ($shell) still running"; else ok "its shell hung up"; fi
 if box "test -s /root/.reminal/restore/$one.sealed"; then ok "its restore record kept"; else fail "its restore record lost"; fi
