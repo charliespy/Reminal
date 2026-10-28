@@ -22,7 +22,7 @@ func handshakeOf(t *testing.T, cg *pty.ShellCgroup) (SpawnedSession, map[string]
 		t.Fatal(err)
 	}
 	defer r.Close()
-	a := &Agent{handshakeFD: int(w.Fd()), sessionID: "S1", pin: "12345678", webURL: "http://x", shellCgroup: cg}
+	a := &Agent{handshakeFD: handshakeFDOf(t, w), sessionID: "S1", pin: "12345678", webURL: "http://x", shellCgroup: cg}
 	a.writeHandshake()
 	line, err := bufio.NewReader(r).ReadString('\n')
 	if err != nil {
