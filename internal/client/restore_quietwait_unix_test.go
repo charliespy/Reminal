@@ -32,7 +32,6 @@ func quietShell(t *testing.T, body string) *Agent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = term.Close() })
 	key, err := crypto.NewSessionKey()
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +41,11 @@ func quietShell(t *testing.T, body string) *Agent {
 		t.Fatal(err)
 	}
 	a := &Agent{box: box, buf: newScrollback(1 << 20), term: term, restoreRun: "echo resumed-42", screen: vt.NewEmulator(80, 24)}
-	go a.pumpPTY()
+	pumped := make(chan struct{})
+	go func() { a.pumpPTY(); close(pumped) }()
+	// Hung up first: a close alone does not end the read under way
+	// (Session.Hangup), and the pump is this test's to end.
+	t.Cleanup(func() { term.Hangup(); _ = term.Close(); <-pumped })
 	return a
 }
 
