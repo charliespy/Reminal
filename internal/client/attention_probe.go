@@ -650,6 +650,7 @@ func (a *Agent) setAttnState(state string) {
 		a.attnSince = time.Now()
 		if state == "working" {
 			a.attnTurnAt = a.attnSince
+			a.typing.draft = false // what was typed went in (a turn began on it)
 		}
 	}
 	a.metaMu.Unlock()

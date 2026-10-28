@@ -11,28 +11,36 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"reminal/internal/proc"
 	"reminal/internal/pty"
+	"reminal/internal/session"
 )
 
-// otherJobs are the programs running in term's shell besides its foreground
-// job: a server started with &, a build left going. Sleep closes the
-// terminal, which would end them, so a session with any stays awake. Only
-// the shell's own children count: everything under the foreground job is
-// the agent's (its tool commands, its MCP servers, which a wake starts
-// again), and a process that left the session (setsid, a daemon) is not in
-// the shell's tree to be ended.
-func otherJobs(term *pty.Session) []string {
-	shell, fg := term.Pid(), term.ForegroundPgrp()
+// otherJobs are the programs running in term's shell besides agent, the
+// coding agent its record wakes ("" for none): a server started with &, a
+// build left going, or whatever is in front when that is not the agent (a
+// command run after quitting it). Sleep closes the terminal, which would end
+// them, so a session with any stays awake. Only the shell's own children
+// count: everything under the agent is its own (its tool commands, its MCP
+// servers, which a wake starts again), and a process that left the session
+// (setsid, a daemon) is not in the shell's tree to be ended.
+func otherJobs(term *pty.Session, agent string) []string {
+	prog, _, fg, _ := restoreForeground(term)
+	return shellJobs(listProcs(), term.Pid(), fg, agent != "" && prog == agent)
+}
+
+// shellJobs are the names of shell's live children, those in process group
+// fg left out when fgIsAgent, each named once.
+func shellJobs(procs []procRow, shell, fg int, fgIsAgent bool) []string {
 	var out []string
-	for _, p := range listProcs() {
-		if p.ppid != shell || p.zombie {
+	seen := map[string]bool{}
+	for _, p := range procs {
+		if p.ppid != shell || p.zombie || fgIsAgent && fg > 0 && p.pgid == fg || seen[p.comm] {
 			continue
 		}
-		if fg > 0 && fg != shell && p.pgid == fg {
-			continue // the foreground job: the agent
-		}
+		seen[p.comm] = true
 		out = append(out, p.comm)
 	}
 	return out
@@ -136,4 +144,54 @@ func exited(pid int) bool {
 		}
 	}
 	return true
+}
+
+// agentShells counts the shells running under agent, when it is the program
+// in front of term, that it started after its own start-up: at rest an agent
+// runs none but what its MCP servers were launched through (npx's sh), all
+// started with it, so a later one is a command it left going in the
+// background, whether or not it said so.
+func agentShells(term *pty.Session, agent string) int {
+	prog, _, pid, _ := restoreForeground(term)
+	if agent == "" || prog != agent {
+		return 0
+	}
+	began, ok := session.ProcStartTime(pid)
+	if !ok {
+		return 0
+	}
+	n := 0
+	for _, s := range shellsUnder(listProcs(), pid) {
+		if t, ok := session.ProcStartTime(s); ok && t.After(began.Add(agentStartup)) {
+			n++
+		}
+	}
+	return n
+}
+
+// agentStartup is how long after an agent starts the shells it starts with
+// (its MCP servers') are taken to come.
+const agentStartup = 30 * time.Second
+
+// shellsUnder are the live shells among root's descendants.
+func shellsUnder(procs []procRow, root int) []int {
+	kids := map[int][]procRow{}
+	for _, p := range procs {
+		kids[p.ppid] = append(kids[p.ppid], p)
+	}
+	var out []int
+	for todo := []int{root}; len(todo) > 0; {
+		pid := todo[len(todo)-1]
+		todo = todo[:len(todo)-1]
+		for _, k := range kids[pid] {
+			if k.pid == pid {
+				continue
+			}
+			if !k.zombie && isLoginShell(k.comm) {
+				out = append(out, k.pid)
+			}
+			todo = append(todo, k.pid)
+		}
+	}
+	return out
 }

@@ -151,8 +151,15 @@ func main() {
 		if !hooks {
 			return
 		}
+		// A turn's end says what it left running in the background, as
+		// claude's Stop does (not with FAKE_CLAUDE_BG_SAID=0, as an older
+		// build that does not).
+		bg := ""
+		if event == "Stop" && os.Getenv("FAKE_CLAUDE_BG_SAID") != "0" {
+			bg = `,"background_tasks":[]`
+		}
 		c := exec.Command("reminal", "hook", state)
-		c.Stdin = strings.NewReader(fmt.Sprintf(`{"session_id":%q,"hook_event_name":%q}`, id, event))
+		c.Stdin = strings.NewReader(fmt.Sprintf(`{"session_id":%q,"hook_event_name":%q%s}`, id, event, bg))
 		_ = c.Run()
 	}
 	hook := func(state, event string) { hookAs(state, event, conv) }
@@ -162,6 +169,11 @@ func main() {
 	in := bufio.NewScanner(os.Stdin)
 	for fmt.Print("claude> "); in.Scan(); fmt.Print("claude> ") {
 		hook("working", "UserPromptSubmit")
+		if in.Text() == "bg" {
+			// A command left going in the background through a shell, its
+			// hook none the wiser.
+			_ = exec.Command("sh", "-c", "sleep 633; true").Start()
+		}
 		line := "you said: " + in.Text()
 		fmt.Println(line)
 		if f, err := os.OpenFile(path(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {

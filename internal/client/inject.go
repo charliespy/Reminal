@@ -81,7 +81,9 @@ func (a *Agent) injectKeys(data []byte) error {
 	if a == nil || a.term == nil {
 		return fmt.Errorf("no pty")
 	}
-	_, err := a.term.Write(a.wrapPaste(data))
+	data = a.wrapPaste(data)
+	a.feedTyping(data) // keys typed for someone are unsent the same until a Return
+	_, err := a.term.Write(data)
 	return err
 }
 

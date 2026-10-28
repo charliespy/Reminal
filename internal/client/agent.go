@@ -284,6 +284,9 @@ type Agent struct {
 	bracketedPaste atomic.Bool
 	pasteCarry     []byte
 	lastInput      time.Time // a person typing, not programs printing (session.Active.LastInput)
+	// typing is whether keys left something unsent on the input line, for a
+	// sleep to name as a loss (inputLine). Under metaMu.
+	typing inputLine
 	// attnState is the detected attention state of the foreground agent —
 	// "working", "input" (awaiting the user), "done", or "" (no agent / bare
 	// shell). Written by the attention detector goroutine, read by activeRecord
@@ -1634,9 +1637,17 @@ func (a *Agent) markActivity(now time.Time) {
 // around them left one site marking input unconditionally, which cancels
 // typedByPerson while every test still passes.
 func (a *Agent) noteInput(data []byte) {
-	if typedByPerson(data) {
+	if keys := personKeys(data); len(keys) > 0 {
 		a.markInput()
+		a.feedTyping(keys)
 	}
+}
+
+// feedTyping follows what keys did to the input line (inputLine).
+func (a *Agent) feedTyping(keys []byte) {
+	a.metaMu.Lock()
+	a.typing.feed(keys)
+	a.metaMu.Unlock()
 }
 
 // markInput stamps when a person last typed, for the record; throttled to

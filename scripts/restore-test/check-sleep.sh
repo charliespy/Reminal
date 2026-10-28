@@ -111,11 +111,42 @@ box "pkill -f 'reminal connect $ID'; true"
 o2=$(newsession plain /root); P=$(idof "$o2"); sleep 2
 o=$(box "reminal sleep $P 2>&1"); echo "$o" | grep -q "typed into its shell by hand" && ok "a plain shell refuses: typed-by-hand state would go" || fail "plain shell: $o"
 
+# What runs in front and is not the agent it wakes with is a job a sleep
+# would end: a command in a plain shell, or one run after quitting claude
+# (its record still holding claude, to wake with).
+send $P 'sleep 611'; sleep 1
+o=$(box "reminal sleep $P 2>&1"); echo "$o" | grep -q "sleep, running in it" && ok "a command in front of a shell refuses the sleep: $(echo "$o" | head -1)" || fail "command in front of a shell: $o"
+send $P "$(printf '\\u0003')"
+send $ID "$(printf '\\u0004')"; sleep 1          # leave claude
+send $ID 'sleep 622'; sleep 2
+o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "sleep, running in it" && ! echo "$o" | grep -q "didn't say" && ok "a command run after quitting claude refuses the sleep: $(echo "$o" | head -1)" || fail "command after quitting claude: $o"
+running $ID || fail "slept with a command in front"
+send $ID "$(printf '\\u0003')"; sleep 1
+send $ID 'claude'; sleep 2; send $ID "hello once more"; sleep 2
+
+# Typed and not sent: a sleep would drop it, so it asks; cleared, it sleeps.
+box "mcp.sh type $ID 'half a thought' >/dev/null"; sleep 1
+o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "typed and not sent" && ok "an unsent draft refuses the sleep: $(echo "$o" | head -1)" || fail "draft: $o"
+box "mcp.sh type $ID '$(printf '\\u0015')' >/dev/null"; sleep 1
+o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "asleep" && ok "the draft cleared, it sleeps: $o" || fail "after clearing the draft: $o"
+
+# Background work its agent left without saying: a shell under it, started
+# after its own start-up.
+box "reminal wake $ID >/dev/null 2>&1"
+for i in $(seq 1 40); do [ "$(claudes)" -gt 0 ] && break; sleep 1; done; sleep 32   # claude back, and past its start-up
+send $ID 'bg'; sleep 2
+o=$(box "reminal sleep $ID 2>&1"); echo "$o" | grep -q "its agent's background work" && ok "a shell left under claude refuses the sleep: $(echo "$o" | head -1)" || fail "shell under claude: $o; $(box "ps -eo pid,ppid,lstart,comm" | tail -12)"
+
 # A conversation gone while asleep: it says so, never a silent fresh start.
 CONV=$(box "ls -t /root/.fake-claude/*.conv | head -1 | xargs basename | sed 's/.conv$//'")   # the conversation it is in now
 o=$(box "reminal sleep $ID --anyway 2>&1")
 box "rm -f /root/.claude/projects/*/$CONV.jsonl"
 o=$(box "reminal wake $ID 2>&1"); echo "$o" | grep -q "conversation $CONV is gone" && ok "a lost conversation: $o" || fail "wake with its conversation gone: $o"
 box "reminal list" | grep -q "$ID.*asleep" && ok "…and it stays asleep" || fail "not asleep after a refused wake"
+
+# An agent that never says what it left running (an older build): asked.
+o3=$(newsession unsaid /root/unsaid); G=$(idof "$o3")
+send $G 'FAKE_CLAUDE_BG_SAID=0 claude'; sleep 2; send $G "hi"; sleep 2
+o=$(box "reminal sleep $G 2>&1"); echo "$o" | grep -q "it didn't say" && ok "an agent that never said what it left: $(echo "$o" | head -1)" || fail "unsaid background: $o"
 
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

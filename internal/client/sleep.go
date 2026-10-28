@@ -33,6 +33,8 @@ type sleepFacts struct {
 	Attn     string   // its agent's attention state
 	Shells   int      // background shells its agent said it left running
 	Agents   int      // background subagents
+	BgSaid   bool     // its agent's hook said what it left running (none, too)
+	Draft    bool     // something typed on its input line, not sent
 	Jobs     []string // other programs running in its shell
 	Attached int      // `reminal connect` terminals attached to it
 	Fg       string   // its coding agent, as the saved record names it
@@ -67,8 +69,16 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 	case "input":
 		losses = append(losses, "the question it was waiting on you for")
 	}
-	if f.Shells > 0 || f.Agents > 0 {
+	switch {
+	case f.Shells > 0 || f.Agents > 0:
 		losses = append(losses, "its agent's background work")
+	case f.Fg != "" && !f.NoTurn && !f.BgSaid:
+		// An agent that ran turns and never said what it left running may
+		// have left something.
+		losses = append(losses, "any background work its agent left (it didn't say)")
+	}
+	if f.Draft {
+		losses = append(losses, "what was typed and not sent")
 	}
 	for _, j := range f.Jobs {
 		losses = append(losses, j+", running in it")
@@ -106,20 +116,31 @@ func (a *Agent) sleepNow(anyway bool) error {
 	f := sleepFacts{
 		Pinned: session.AwakePinned(a.sessionID), Headless: a.headless,
 		Attn: a.attnState, Shells: a.attnShells, Agents: a.attnAgents,
+		Draft: a.typing.draft,
 	}
+	fgAt := a.attnFGAt
 	a.metaMu.Unlock()
 	a.currentConnMu.Lock()
 	f.Attached = len(a.localConns)
 	a.currentConnMu.Unlock()
-	if a.term != nil {
-		f.Jobs = otherJobs(a.term)
-	}
 	before := time.Now()
 	a.saveRestore()
 	r, err := session.ReadRestore(a.sessionID)
 	f.Saved = err == nil && r != nil && !r.SavedAt.Before(before)
 	if f.Saved {
 		f.Fg, f.Conv, f.NoTurn = r.Fg, r.Conv, r.NoTurn
+	}
+	// An agent that is not running (quit, something else in front) has no
+	// background work of its own left to lose.
+	f.BgSaid = true
+	if a.term != nil {
+		// After the save: only the agent it wakes with is not a job (a record
+		// can hold an agent that was quit, with something else now in front).
+		f.Jobs = otherJobs(a.term, f.Fg)
+		f.Shells = max(f.Shells, agentShells(a.term, f.Fg))
+		if prog, _, _, _ := restoreForeground(a.term); f.Fg != "" && prog == f.Fg {
+			f.BgSaid = attnHookBackground(true, session.ReadHookStateAnyAge(a.sessionID), fgAt) != nil
+		}
 	}
 	block, losses := sleepVerdict(f)
 	if block != "" {
