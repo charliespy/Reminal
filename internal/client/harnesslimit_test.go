@@ -849,6 +849,51 @@ func TestHarnessLimitQuotedInAnAnswer(t *testing.T) {
 	}
 }
 
+// A notice Claude Code draws as an answer (●) is that answer's last row: an
+// answer that quotes one and goes on, below it or after a blank row, is not
+// it; nor is one quoted or under an answer's own words (review).
+func TestHarnessLimitAnswerDrawnNoticeIsItsLastRow(t *testing.T) {
+	for _, tc := range []struct {
+		screen string
+		want   bool
+	}{
+		{"● You've hit your limit · resets 11:15am (America/Los_Angeles)\n❯ ", true},
+		{"● You've hit your weekly limit · /usage-credits to keep using Claude\n❯ ", true},
+		{"● You've hit your session limit · resets 3pm\n\n✻ Churned for 0s\n\n" + claudeBoxWith(""), true},
+		{"● You've hit your session limit · resets 3pm", true},
+		{"● You've hit your session limit · resets 3pm (America/Los_Angeles)\n  That is the row it drew before it stopped.\n❯ ", false},
+		{"● You've hit your session limit · resets 3pm\n\n  So the review waits until then.\n❯ ", false},
+		{"● You've hit your session limit · resets 3pm\n● Next I'll pick up the deploy.\n❯ ", false},
+		{"● Here is what it showed:\n\n  You've hit your session limit · resets 3pm (America/Los_Angeles)\n❯ ", false},
+		{"● `You've hit your session limit · resets 3pm`\n❯ ", false},
+		{"● \"You've hit your session limit · resets 3pm\"\n❯ ", false},
+	} {
+		if hit, _ := harnessLimitIn(tc.screen, "claude", limitTestNow); hit != tc.want {
+			t.Errorf("hit=%v, want %v: %q", hit, tc.want, tc.screen)
+		}
+	}
+}
+
+// OpenCode's notice may start with a model's id in lower case: one with a
+// digit, or a known maker's, not any hyphenated word (review).
+func TestHarnessLimitModelLedNotice(t *testing.T) {
+	for _, tc := range []struct {
+		screen string
+		want   bool
+	}{
+		{"┃  gpt-5 usage limit reached. It will reset in 2 hours.\n┃", true},
+		{"┃  claude-sonnet usage limit reached. It will reset in 2 hours.\n┃", true},
+		{"┃  qwen3-coder usage limit reached. It will reset in 2 hours.\n┃", true},
+		{"┃  re-run usage limit reached. It will reset in 2 hours.\n┃", false},
+		{"┃  a-b usage limit reached. It will reset in 2 hours.\n┃", false},
+		{"┃  gpt-5 usage limit reached is what it printed earlier.", false},
+	} {
+		if hit, _ := harnessLimitIn(tc.screen, "opencode", limitTestNow); hit != tc.want {
+			t.Errorf("hit=%v, want %v: %q", hit, tc.want, tc.screen)
+		}
+	}
+}
+
 // claudeBoxWith is Claude Code's input box holding draft, and the footer
 // under it (claudeBox, in attention_probe_test.go, is the box alone).
 func claudeBoxWith(draft string) string {

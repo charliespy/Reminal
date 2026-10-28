@@ -54,6 +54,11 @@ type limitNotice struct {
 	// the CLI writes it ("gpt-5 usage limit reached."): a whole notice's
 	// capital-first rule then allows a row that starts with one (review).
 	modelLead bool
+	// last: the notice is its answer's last row. Under the rows it took, up
+	// to the prompt, only blank rows, a box rule or a turn's time line: an
+	// answer that quotes a notice drawn as one (●) and goes on is not it
+	// (review).
+	last bool
 }
 
 // modelLed is ns, each allowed to start with a model's id in lower case.
@@ -64,8 +69,28 @@ func modelLed(ns []limitNotice) []limitNotice {
 	return ns
 }
 
-// modelLeadRe is a row, as drawn, that starts with a model's id and a space.
+// modelLeadRe is a row, as drawn, that starts with a hyphenated word and a
+// space: a model's id, if modelLeads says so.
 var modelLeadRe = regexp.MustCompile(`^[a-z][a-z0-9.]{0,11}(?:-[a-z0-9.]{1,12}){1,5}\s`)
+
+// modelVendorRe opens a model's id that may have no digit in it.
+var modelVendorRe = regexp.MustCompile(`^(?:gpt|claude|gemini|qwen|o\d|llama|mistral|deepseek|grok|kimi|glm|codestral|devstral)`)
+
+// modelLeads reports whether row, as drawn, starts with a model's id: a
+// hyphenated word with a digit in it, or one a known maker's id opens
+// ("gpt-5", "claude-opus-4"); never a word like "re-run" (review).
+func modelLeads(row string) bool {
+	m := modelLeadRe.FindString(row)
+	return m != "" && (strings.ContainsAny(m, "0123456789") || modelVendorRe.MatchString(m))
+}
+
+// asLast is ns, each counted only as its answer's last row.
+func asLast(ns []limitNotice) []limitNotice {
+	for i := range ns {
+		ns[i].last = true
+	}
+	return ns
+}
 
 // onCased is ns, each matched only on a row that writes lit as it is.
 func onCased(lit string, ns []limitNotice) []limitNotice {
@@ -178,7 +203,7 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// budget, credits run out, and the plain headings. Whole rows: what is
 	// read here may be acted on, so a sentence that only starts with them is
 	// never one.
-	"claude": append(append(append(onGlyph("⎿", wholeNotices(claudeHitLimit...)), onGlyph("●", wholeRows(claudeEndTold, claudeHitLimit...))...), wholeNotices(
+	"claude": append(append(append(onGlyph("⎿", wholeNotices(claudeHitLimit...)), onGlyph("●", asLast(wholeRows(claudeEndTold, claudeHitLimit...)))...), wholeNotices(
 		// Claude Code 2.1.312: what to do next after it ("You're out of
 		// usage credits. /model to switch models.").
 		`you.?reoutofusagecredits(?:\.(?:/modeltoswitchmodels|switchtoanothermodel))?`,
@@ -387,7 +412,7 @@ func harnessLimitNoticesIn(tail, prog string, now time.Time) (int, time.Time, bo
 		for _, next := range below[:min(limitWrapRows, len(below))] {
 			more = append(more, strings.ToLower(strings.Join(strings.Fields(next), "")))
 		}
-		ok, used := limitRowIn(flat[:lead], core, row, more, below, prog)
+		ok, used := limitRowIn(flat[:lead], core, row, more, rows[i+1:], prog)
 		if !ok {
 			continue
 		}
@@ -447,6 +472,25 @@ func firstRune(s string) string {
 	return ""
 }
 
+// limitAnswerEnds says whether rows, those under a notice, end its answer:
+// up to the prompt, or the screen's end, only blank rows, a box rule or a
+// turn's time line ("✻ Churned for 0s"). A row of words, the answer going
+// on, says not.
+func limitAnswerEnds(rows []string) bool {
+	for _, r := range rows {
+		t := strings.TrimSpace(r)
+		switch {
+		case t == "", strings.HasPrefix(t, "✻"):
+			continue
+		case attnIsRule(r), strings.ContainsAny(firstRune(t), limitPromptGlyphs):
+			return true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // limitEchoRow says whether a row at a prompt's mark, with below rows,
 // echoes a message sent — not the input box. A message's rows go on as
 // plain text either way; under an echo comes what answered it, a row
@@ -483,15 +527,16 @@ const limitJoinMax = 320
 // limitRowIn reports whether a row (core: from its first letter or digit;
 // lead: the marks before it; row: as drawn) is a limit notice of prog; of
 // any CLI when prog is "". more are the rows below it, flattened, that a
-// whole notice may wrap onto; used, how many it did. below are those rows
-// as drawn, and the one after them.
+// whole notice may wrap onto; used, how many it did. rest are the rows
+// under it as drawn.
 //
 // A whole notice is a CLI's own row: it starts with a capital or a digit (a
 // row that starts in lower case goes on a sentence from the row above), and
 // the row after it does not go on in lower case — that is a sentence
 // wrapping on, unless it is a hint the CLI draws under its notice ("esc to
 // interrupt", "run /usage-credits …").
-func limitRowIn(lead, core, row string, more, below []string, prog string) (bool, int) {
+func limitRowIn(lead, core, row string, more, rest []string, prog string) (bool, int) {
+	below := rest[:min(limitWrapRows+1, len(rest))]
 	first := strings.IndexFunc(row, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) })
 	ownRow := first >= 0 && !unicode.IsLower([]rune(row[first:])[0])
 	drawn := strings.Join(strings.Fields(row), " ")
@@ -530,12 +575,12 @@ func limitRowIn(lead, core, row string, more, below []string, prog string) (bool
 				}
 				continue
 			}
-			own := ownRow || n.modelLead && first >= 0 && modelLeadRe.MatchString(row[first:])
+			own := ownRow || n.modelLead && first >= 0 && modelLeads(row[first:])
 			if !own || (n.cased != "" && !strings.Contains(drawn, n.cased)) {
 				continue
 			}
 			for used, j := range joins {
-				if n.re.MatchString(j) && !goesOn(used) {
+				if n.re.MatchString(j) && !goesOn(used) && (!n.last || limitAnswerEnds(rest[min(used, len(rest)):])) {
 					return true, used
 				}
 			}
