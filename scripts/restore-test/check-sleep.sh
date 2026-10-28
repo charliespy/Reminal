@@ -95,6 +95,18 @@ box "reminal sleep $ID --anyway >/dev/null 2>&1"
 box "timeout 8 script -qec 'reminal connect $ID $PIN' /dev/null >/dev/null 2>&1; true"
 running $ID && ok "reminal connect woke it" || fail "reminal connect did not wake it: $(box 'reminal list')"
 
+# A terminal attached ACROSS a sleep waits, says it is asleep, and is back
+# after the wake: never a misleading error and an exit.
+docker exec -d $BOX sh -c "sleep 3600 | script -qfc 'reminal connect $ID $PIN' /tmp/conn.log"; sleep 4   # stdin open and empty: script's EOF would type logout
+box "reminal sleep $ID --anyway >/dev/null 2>&1"; sleep 20
+box "pgrep -f 'reminal connect $ID' >/dev/null" && ok "a terminal attached across the sleep is still there 20 s on" || fail "the attached terminal exited: $(box 'tail -c 400 /tmp/conn.log')"
+box "grep -q 'it is asleep' /tmp/conn.log" && ok "…and says it is asleep" || fail "no asleep word: $(box 'tail -c 400 /tmp/conn.log')"
+box "grep -q 'older than 3.15.6' /tmp/conn.log" && fail "the misleading old-version error" || ok "…no misleading error"
+box "reminal wake $ID >/dev/null 2>&1"; sleep 15   # past the restore's wait before it types the resume
+send $ID "echo back-after-the-wake-$$"; sleep 3
+box "grep -q 'back-after-the-wake-' /tmp/conn.log" && ok "after the wake it is live in that terminal again" || fail "the attached terminal did not come back: woke=$(box 'grep -c "woke from sleep" /tmp/conn.log') tail=$(box 'tail -c 3500 /tmp/conn.log | cat -v | tr -d '\r'')"
+box "pkill -f 'reminal connect $ID'; true"
+
 # A plain shell: refused unless --anyway (what was typed by hand is lost).
 o2=$(newsession plain /root); P=$(idof "$o2"); sleep 2
 o=$(box "reminal sleep $P 2>&1"); echo "$o" | grep -q "typed into its shell by hand" && ok "a plain shell refuses: typed-by-hand state would go" || fail "plain shell: $o"

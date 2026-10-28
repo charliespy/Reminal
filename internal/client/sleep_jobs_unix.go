@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"reminal/internal/proc"
 	"reminal/internal/pty"
 )
 
@@ -120,4 +121,19 @@ func parsePS(s string) []procRow {
 		out = append(out, procRow{pid: pid, ppid: ppid, pgid: pgid, comm: filepath.Base(comm), zombie: strings.HasPrefix(f[3], "Z")})
 	}
 	return out
+}
+
+// exited says process pid has ended: gone, or a zombie no one has reaped
+// yet (in a container whose first process does not reap, an ended session
+// stays one, and is still "alive" to a signal).
+func exited(pid int) bool {
+	if !proc.Alive(pid) {
+		return true
+	}
+	for _, p := range listProcs() {
+		if p.pid == pid {
+			return p.zombie
+		}
+	}
+	return true
 }

@@ -499,6 +499,9 @@ type Agent struct {
 	// outSinceFree counts PTY output since memory was last handed back to
 	// the OS (releaseAfterBurst).
 	outSinceFree atomic.Int64
+	// sleeping: this session is going to sleep (control "sleep"): a terminal
+	// attaching now is told so and turned away, not let in to hold it open.
+	sleeping atomic.Bool
 	// attnKick wakes the detector (kickAttention), made on first use.
 	attnKick     chan struct{}
 	attnKickOnce sync.Once
@@ -3250,6 +3253,10 @@ func (a *Agent) serveConn(conn *websocket.Conn, shellExit <-chan struct{}, local
 	}()
 	defer conn.Close()
 	conn.SetReadLimit(maxRelayMessageBytes) // untrusted peer — bound frame size
+	if local && a.sleeping.Load() {
+		closeRelayConn(conn, "asleep") // going to sleep: it waits for the wake
+		return nil
+	}
 	if local {
 		a.addLocalConn(conn)
 		defer a.removeLocalConn(conn)

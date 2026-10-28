@@ -8,6 +8,7 @@ package client
 import (
 	"strings"
 
+	"reminal/internal/proc"
 	"reminal/internal/pty"
 )
 
@@ -25,3 +26,6 @@ func otherJobs(term *pty.Session) []string {
 	}
 	return out
 }
+
+// exited says process pid has ended.
+func exited(pid int) bool { return !proc.Alive(pid) }

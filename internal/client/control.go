@@ -359,6 +359,15 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 		_, _ = fmt.Fprintln(conn, "ok")
 		_ = conn.Close()
 		a.stopSignal.Store(true) // settleRestore keeps the record, as for a shutdown
+		a.sleeping.Store(true)
+		// Terminals attached here (reminal connect, attach) are told it sleeps,
+		// and wait for it to wake; their sockets are closed now, not left to
+		// hold the way out open.
+		a.currentConnMu.Lock()
+		for c := range a.localConns {
+			closeRelayConn(c, "asleep")
+		}
+		a.currentConnMu.Unlock()
 		a.requestShutdown()
 		return
 	case line == "pause":

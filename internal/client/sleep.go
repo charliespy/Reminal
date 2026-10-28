@@ -156,16 +156,34 @@ func SleepSession(id string, anyway bool) error {
 		}
 		return errors.New(msg)
 	}
-	// It said yes and is ending itself.
-	deadline := time.Now().Add(10 * time.Second)
-	for proc.Alive(a.PID) && time.Now().Before(deadline) {
-		time.Sleep(100 * time.Millisecond)
+	// It said yes, has saved its record and marked itself asleep, and is
+	// ending itself. If its way out hangs (a session with a terminal attached
+	// can be held up closing its terminal), it is ended from outside: first
+	// asked (SIGTERM), then for sure. Either way its record and mark stay,
+	// so it wakes the same; ending it hangs up its shell, as a shutdown does.
+	gone := func(d time.Duration) bool {
+		for deadline := time.Now().Add(d); !exited(a.PID) && time.Now().Before(deadline); {
+			time.Sleep(100 * time.Millisecond)
+		}
+		return exited(a.PID)
 	}
-	if proc.Alive(a.PID) {
-		return fmt.Errorf("%s said it would sleep but is still running (PID %d)", a.ID, a.PID)
+	if gone(sleepExitWait) {
+		return nil
 	}
-	return nil
+	_ = proc.Terminate(a.PID)
+	if gone(3 * time.Second) {
+		return nil
+	}
+	_ = proc.Kill(a.PID)
+	if gone(3 * time.Second) {
+		return nil
+	}
+	return fmt.Errorf("%s said it would sleep but is still running (PID %d)", a.ID, a.PID)
 }
+
+// sleepExitWait is how long a session saying it will sleep is given to end
+// itself before it is ended from outside.
+const sleepExitWait = 5 * time.Second
 
 // sleepAct does what an owner asked of session id from another device
 // (dir_sleep): "sleep", "sleep_anyway", "wake", "keep_awake",
