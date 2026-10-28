@@ -20,12 +20,9 @@ type loginRowCase struct {
 
 var loginRowCases = []loginRowCase{
 	{prog: "agy", row: " Welcome to the Antigravity CLI. You are currently not signed in."},
-	{prog: "agy", row: " You are currently not signed in."},
 	{prog: "agy", row: " Sign in required", bottom: true},
 
 	{prog: "codex", row: "  Sign in with ChatGPT to use Codex as part of your paid plan"},
-	{prog: "codex", row: "› 1. Sign in with ChatGPT"},
-	{prog: "codex", row: "  3. Provide your own API key"},
 	{prog: "codex", row: "■ Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again."},
 	{prog: "codex", row: "■ Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again."},
 	{prog: "codex", row: "■ Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again."},
@@ -38,7 +35,7 @@ var loginRowCases = []loginRowCase{
 	{prog: "amp", row: "API key required. Please run `amp login` first."},
 	{prog: "amp", row: "API key required for headless mode. Please run `amp login` first."},
 	{prog: "amp", row: "Session expired and could not be refreshed. Run 'amp login' to authenticate."},
-	{prog: "amp", row: "Your session has expired. You need to log in again."},
+	{prog: "amp", row: "Your session has expired. You need to log in again.", bottom: true},
 	{prog: "amp", row: "Access token expired. Run 'amp login' to refresh."},
 	{prog: "amp", row: "Invalid or missing API key. Run 'amp login' to authenticate."},
 
@@ -69,7 +66,7 @@ var loginRowCases = []loginRowCase{
 	{prog: "goose", row: "Meta session expired. Sign in to Muse Code again."},
 
 	{prog: "crush", row: `Please sign in to Hyper again. You can also run "crush login hyper --force".`},
-	{prog: "crush", row: "You are not logged in to any platform."},
+	{prog: "crush", row: "You are not logged in to any platform.", bottom: true},
 
 	{prog: "cursor-agent", row: "                                               Press any key to log in..."},
 	{prog: "cursor-agent", row: " If your browser didn't open, click this link to log in:"},
@@ -77,7 +74,7 @@ var loginRowCases = []loginRowCase{
 	{prog: "cursor-agent", row: "Authentication required. Please run 'cursor-agent login' to authenticate."},
 	{prog: "cursor-agent", row: "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable."},
 	{prog: "cursor-agent", row: "Authentication failed: your Cursor credentials or API key are invalid or expired. If you set CURSOR_API_KEY, check that it is correct, or run `cursor-agent login` to re-authenticate."},
-	{prog: "cursor-agent", row: "Your stored authentication is invalid. Please log in again."},
+	{prog: "cursor-agent", row: "Your stored authentication is invalid. Please log in again.", bottom: true},
 	{prog: "cursor-agent", row: "⚠ Warning: The provided API key is invalid.", refused: true},
 
 	{prog: "pi", row: " Error: No API key found for the selected model."},
@@ -90,7 +87,7 @@ var loginRowCases = []loginRowCase{
 	{prog: "gemini", row: "│   How would you like to authenticate for this project?                       │"},
 	{prog: "gemini", row: "│   No authentication method selected.                                         │"},
 	{prog: "gemini", row: "Please visit the following URL to authorize the application:"},
-	{prog: "gemini", row: "Enter the authorization code:"},
+	{prog: "gemini", row: "Enter the authorization code:", bottom: true},
 	{prog: "gemini", row: "│ Enter Gemini API Key                                                         │"},
 	{prog: "qwen", row: "  │ Alibaba ModelStudio · Access Method                                      │"},
 	{prog: "qwen", row: "  │ Connect a Provider                                                       │"},
@@ -148,15 +145,28 @@ func (c loginRowCase) words() string {
 	return strings.TrimLeftFunc(c.row, func(r rune) bool { return strings.ContainsRune(" ■●⎿✕✢›⚠│┃", r) })
 }
 
-// halves splits the row's words at the space nearest their middle.
+// halves splits the row's words where a terminal would wrap them: at the
+// space nearest their middle that does not end a sentence (a row that ends
+// one is never read as wrapping onto the next).
 func (c loginRowCase) halves() (string, string) {
 	w := strings.TrimRight(c.words(), " │")
-	mid := len(w) / 2
-	at := strings.LastIndex(w[:mid], " ")
-	if after := strings.Index(w[mid:], " "); at < 0 || (after >= 0 && after < mid-at) {
-		at = mid + after
+	best := -1
+	for i := 1; i < len(w)-1; i++ {
+		if w[i] != ' ' || strings.ContainsAny(w[i-1:i], ".!?") {
+			continue
+		}
+		if best < 0 || abs(i-len(w)/2) < abs(best-len(w)/2) {
+			best = i
+		}
 	}
-	return w[:at], w[at+1:]
+	return w[:best], w[best+1:]
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // Each CLI's own row is read as it is drawn, and wrapped at the terminal's
@@ -265,5 +275,105 @@ func TestABottomRowHigherUpIsNotALogin(t *testing.T) {
 		if loggedOutBy(harnessTail("● Done.\n"+c.row+loginRowFrame, harnessRows), c.prog) {
 			t.Errorf("%s: above its input box, read as logged out: %q", c.prog, c.row)
 		}
+	}
+}
+
+// Codex's sign-in menu is its items together: its first, then the next
+// below it (its own description between). One numbered item alone is an
+// agent's list ("1. Sign in with ChatGPT" in its answer), not the menu.
+func TestCodexsLoginMenuIsItsItemsTogether(t *testing.T) {
+	menu := "> 1. Sign in with ChatGPT\n     Usage included with Plus, Pro, Business, and Enterprise plans\n" +
+		"  2. Sign in with Device Code\n     Sign in from another device with a one-time code\n  3. Provide your own API key"
+	if !harnessProblemIn(menu+loginRowFrame, "codex") {
+		t.Error("its menu, items together, was not read as logged out")
+	}
+	for _, answer := range []string{
+		"● To get going:\n\n  1. Sign in with ChatGPT\n\n  Then run the tests again.",
+		"● Two ways to set it up:\n  1. Provide your own API key\n  2. Ask an admin for one",
+		"  3. Provide your own API key",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "codex") {
+			t.Errorf("an answer's numbered item read as Codex's menu:\n%s", answer)
+		}
+	}
+}
+
+// Antigravity's "You are currently not signed in." is its screen's only after
+// its heading's words: alone, it is a sentence anyone may write.
+func TestAntigravitysLoginHeadingIsItsOnlyWhole(t *testing.T) {
+	if harnessProblemIn("● Done.\n You are currently not signed in."+loginRowFrame, "agy") {
+		t.Error("the words alone read as its sign-in screen")
+	}
+}
+
+// What an agent writes that reads like a CLI's login lines and is not: a
+// code block or a table quoting Claude Code's, two sentences on two rows,
+// rows of two paragraphs, a CLI's plain words with neither its mark nor a
+// place on its status rows, and a word in pi's that is no provider of pi's.
+func TestAnAgentsOwnTextIsNotALoginAfterAll(t *testing.T) {
+	for _, c := range []struct{ name, prog, screen string }{
+		{"a code block quoting Claude Code", "claude", "● Here is what it prints:\n\n      Not signed in to Claude. Run /login first.\n\n  That is the old build."},
+		{"two sentences on two rows", "claude", "● It said:\n  Not signed in to Claude.\n  Run /login first.\n  So I signed in."},
+		{"a table's cell", "claude", "  │ Not signed in to Claude. Run /login first. │ old build │"},
+		{"a box's one cell", "claude", "  │ Not signed in to Claude. Run /login first. │"},
+		{"Claude's words on a row of their own, no mark", "claude", "  Failed to authenticate: OAuth session expired and could not be refreshed"},
+		{"a row and the next paragraph's", "codex", "■ Your access token could not be refreshed because your refresh token\n\nhas expired. Please log out and sign in again."},
+		{"Amp's two sentences on two rows", "amp", "● Authentication failed.\n  Run amp login and try again."},
+		{"Amp's plain words in an answer", "amp", "  Your session has expired. You need to log in again."},
+		{"Cursor's plain words in an answer", "cursor-agent", "  Your stored authentication is invalid. Please log in again."},
+		{"Crush's plain words in an answer", "crush", "  You are not logged in to any platform"},
+		{"Qwen's words with no mark of its own", "qwen", "  Refresh token expired or invalid. Please use /auth to re-authenticate."},
+		{"Codex's words with no mark of its own", "codex", "  Your session has expired. Please reauthenticate."},
+		{"pi's words with no Error: of its own", "pi", "  Your session has expired. Please reauthenticate."},
+		{"pi naming no provider of its own", "pi", " Error: No API key found for staging-server"},
+	} {
+		for _, prog := range []string{c.prog, ""} {
+			if loggedOutBy(c.screen+loginRowFrame, prog) {
+				t.Errorf("%s (as %q): read as logged out:\n%s", c.name, prog, c.screen)
+			}
+		}
+	}
+	// On the status rows: words that open what follows (a list, a form).
+	for _, c := range []struct{ prog, screen string }{
+		{"agy", "● Done.\n Sign in required:\n❯"},
+		{"claude", "● Done.\n Login expired:\n❯"},
+	} {
+		if loggedOutBy(c.screen, c.prog) {
+			t.Errorf("%s: read as logged out:\n%s", c.prog, c.screen)
+		}
+	}
+	// Through what the probe reads: a paragraph's end kept, so a row is not
+	// read with the next paragraph's.
+	a := &Agent{}
+	screen := "■ Your access token could not be refreshed because your refresh token\n\nhas expired. Please log out and sign in again." + loginRowFrame
+	a.noteHarnessHealth(screen, "codex", false)
+	a.noteHarnessHealth(screen, "codex", false)
+	if a.harnessDown() {
+		t.Error("two paragraphs, read through the probe's tail, were read as one notice")
+	}
+}
+
+// A server's login on the status rows does not hide the agent's own: each
+// row is read for itself.
+func TestAServersLoginDoesNotHideTheAgentsOwn(t *testing.T) {
+	screen := "● Done.\n Authentication required for MCP Server: github\n Authentication required.\n❯"
+	for _, prog := range []string{"gemini", ""} {
+		if !harnessProblemIn(screen, prog) {
+			t.Errorf("as %q: the agent's own \"Authentication required.\" was missed", prog)
+		}
+	}
+}
+
+// A screen's worth of rows, many times over: reading it costs no more than
+// the rows it has, and a row too long to be a notice is not read as one.
+func BenchmarkHarnessLoginRowsOnAHugeTail(b *testing.B) {
+	tail := strings.Repeat("● The build passed; the deploy step signs in to the registry and pushes the image, then waits.\n\n", 400) +
+		strings.Repeat("x", 20000) + loginRowFrame
+	for _, prog := range []string{"opencode", ""} {
+		b.Run("as "+prog, func(b *testing.B) {
+			for b.Loop() {
+				harnessProblemIn(tail, prog)
+			}
+		})
 	}
 }

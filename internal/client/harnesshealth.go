@@ -62,14 +62,28 @@ type loginRow struct {
 	// bottom: only on the last few rows (harnessLineRows), the CLI's own
 	// status: words plain enough for an agent to end a line with.
 	bottom bool
+	// marks: words an agent could write as a sentence of its own ("Your
+	// session has expired. Please reauthenticate."), so the CLI's only on a
+	// row led by one of these marks — the one it draws its notices with —
+	// or on the last few rows.
+	marks string
+	// then: a row that is the CLI's only with another of its own below it,
+	// within the next few: a menu's first item, with the next ("1. Sign in
+	// with ChatGPT", then "2. Sign in with Device Code") — one numbered item
+	// alone is an agent's list.
+	then *regexp.Regexp
 }
 
-// loginRows are rows read whole: each's words, then only the marks a row may
-// end with ("…", ":", a dialog's "│").
+// loginRowEnd is what a whole row may end on after its words: a full stop,
+// an ellipsis, "!" — not ":", which opens what an agent goes on to write.
+// A row whose CLI ends it on ":", "?" or ">" says so in its pattern.
+const loginRowEnd = `(?:\.|…|!)*$`
+
+// loginRows are rows read whole: each's words, then only loginRowEnd.
 func loginRows(res ...string) []loginRow {
 	out := make([]loginRow, len(res))
 	for i, r := range res {
-		out[i] = loginRow{re: regexp.MustCompile("^(?:" + r + ")[^a-z0-9]*$"), whole: true}
+		out[i] = loginRow{re: regexp.MustCompile("^(?:" + r + ")" + loginRowEnd), whole: true}
 	}
 	return out
 }
@@ -80,6 +94,24 @@ func loginBottom(res ...string) []loginRow {
 	for i := range out {
 		out[i].bottom = true
 	}
+	return out
+}
+
+// loginMarked are loginRows read only on a row led by one of marks, or on
+// the bottom rows.
+func loginMarked(marks string, res ...string) []loginRow {
+	out := loginRows(res...)
+	for i := range out {
+		out[i].marks = marks
+	}
+	return out
+}
+
+// loginThen is a loginRow read only with a row matching then (whole) among
+// the few below it.
+func loginThen(re, then string) []loginRow {
+	out := loginRows(re)
+	out[0].then = regexp.MustCompile("^(?:" + then + ")" + loginRowEnd)
 	return out
 }
 
@@ -109,7 +141,7 @@ var harnessLoginScreens = map[string][]loginRow{
 	// Antigravity CLI: its sign-in screen's heading ("Welcome to the
 	// Antigravity CLI. You are currently not signed in."), and its status.
 	"agy": loginAll(loginRows(
-		`(?:welcometotheantigravitycli\.|welcomeback!|noauthenticationmethodsavailable\.+)?youarecurrentlynotsignedin`,
+		`(?:welcometotheantigravitycli\.|welcomeback!|noauthenticationmethodsavailable\.+)youarecurrentlynotsignedin`,
 	), loginBottom(
 		`signinrequired`,
 	)),
@@ -123,38 +155,40 @@ var harnessLoginScreens = map[string][]loginRow{
 	"gemini": loginAll(loginOpen(`message[\\"]*:[\\"]*apikeynotvalid\.please`), loginRows(
 		`howwouldyouliketoauthenticateforthisproject\?`,
 		`noauthenticationmethodselected`,
-		`pleasevisitthefollowingurltoauthorizetheapplication`,
-		`entertheauthorizationcode`,
+		`pleasevisitthefollowingurltoauthorizetheapplication:?`,
 		`entergeminiapikey`,
 		`geminiapikeyismissingornotconfigured`,
+	), loginBottom(
+		`entertheauthorizationcode:?`,
 	)),
 	// Amp: its question before it signs in, and what it says of a login it
 	// has not got or that lapsed, each with the command it names.
-	"amp": loginRows(
-		`wouldyouliketologintoamp\?\[\(y\)es,\(n\)o\]`,
+	"amp": loginAll(loginRows(
+		`wouldyouliketologintoamp\?\[\(y\)es,\(n\)o\]:?`,
 		`noapikeyfound\.(?:startingloginflow|run.?amplogin.?first)`,
 		`authenticationfailed\.run.?amplogin.?andtryagain`,
 		`apikeyrequired(?:for(?:--no-tui|headlessmode))?\.pleaserun.?amplogin.?first`,
 		`sessionexpiredandcouldnotberefreshed\.run.?amplogin.?toauthenticate`,
-		`yoursessionhasexpired\.youneedtologinagain`,
 		`accesstokenexpired\.run.?amplogin.?torefresh`,
 		`invalidormissingapikey\.run.?amplogin.?toauthenticate`,
-	),
-	// Codex: its sign-in menu (its heading, and its items by their numbers:
-	// "› 1. Sign in with ChatGPT"), signing in through the browser, and a
-	// login it can no longer refresh.
-	"codex": loginRows(
+	), loginBottom(
+		`yoursessionhasexpired\.youneedtologinagain`,
+	)),
+	// Codex: its sign-in menu (its heading, and its first item with the next
+	// below it: "› 1. Sign in with ChatGPT", "2. Sign in with Device Code"),
+	// signing in through the browser, and a login it can no longer refresh
+	// (its errors led by "■").
+	"codex": loginAll(loginRows(
 		`finishsigninginviayourbrowser`,
 		`signinwithchatgpttousecodexaspartofyourpaidplan`,
-		`\d\.signinwithchatgpt`,
-		`\d\.provideyourownapikey`,
 		`youraccesstokencouldnotberefreshedbecause(?:youhavesinceloggedoutorsignedintoanotheraccount|yourrefreshtoken(?:hasexpired|wasalreadyused|wasrevoked))\.please(?:logoutand)?signinagain`,
+	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`), loginMarked("■",
 		`yoursessionhasexpired\.pleasereauthenticate`,
-	),
+	)),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), the steps of
 	// setting one up, and a login that lapsed.
-	"qwen": loginRows(
+	"qwen": loginAll(loginRows(
 		`alibabamodelstudio.{0,3}accessmethod`,
 		`finishprovidersetup`,
 		`connectaprovider`,
@@ -163,8 +197,9 @@ var harnessLoginScreens = map[string][]loginRow{
 		`connectwithanexistingmodelstudioapikey`,
 		`noapikeyfound:setopenai_api_keyorsecurity\.auth\.apikey\.?`,
 		`qwenoauthcredentialsexpired\.pleaseuse/authtore-authenticatewithqwen-oauth`,
+	), loginMarked("✕",
 		`refreshtokenexpiredorinvalid\.pleaseuse.?/auth.?tore-authenticate`,
-	),
+	)),
 	// goose 1.55 with no provider: "error: No provider configured. Run
 	// 'goose configure' first." (it exits); a provider whose key the service
 	// refused; and its Muse Code sign-in lapsed.
@@ -178,13 +213,14 @@ var harnessLoginScreens = map[string][]loginRow{
 	// Crush 0.98 with no provider: its first screen ("To start, let's choose
 	// a provider and model."), signing in to Hyper, and `crush run`'s error;
 	// and a platform's login gone.
-	"crush": loginRows(
+	"crush": loginAll(loginRows(
 		`tostart,let.?schooseaproviderandmodel`,
 		`let.?sauthenticatewithhyper`,
 		`(?:error:)?noprovidersconfigured-pleaserun.?crush.?tosetupaproviderinteractively`,
 		`pleasesigninto[a-z0-9.\-]+again\.youcanalsorun"crushlogin[a-z0-9.\-]+--force"`,
+	), loginBottom(
 		`youarenotloggedintoanyplatform`,
-	),
+	)),
 	// OpenCode runs on a free built-in model with no login at all; a
 	// provider it was set up for and has no key for says so ("Anthropic API
 	// key is missing. Pass it using the 'apiKey' parameter or the
@@ -200,14 +236,15 @@ var harnessLoginScreens = map[string][]loginRow{
 	// cannot use is read apart (harnessKeyRefusals): its words are common
 	// enough to come from anything. Its own name in the command is
 	// "cursor-agent" or "agent", as it was run.
-	"cursor-agent": loginRows(
+	"cursor-agent": loginAll(loginRows(
 		`pressanykeytologin`,
-		`ifyourbrowserdidn.?topen,clickthislinktologin`,
+		`ifyourbrowserdidn.?topen,clickthislinktologin:?`,
 		`pressqtoshowaqrcodetologinfromanotherdevice`,
 		`(?:error:)?authenticationrequired(?:tousecursoragent)?\.pleaserun.?(?:cursor-)?agentlogin.?(?:toauthenticate|first,orsetcursor_api_keyenvironmentvariable)`,
 		`authenticationfailed:yourcursorcredentialsorapikeyareinvalidorexpired\.ifyousetcursor_api_key,checkthatitiscorrect,orrun.?cursor-agentlogin.?tore-authenticate`,
+	), loginBottom(
 		`yourstoredauthenticationisinvalid\.pleaseloginagain`,
-	),
+	)),
 	// pi with no model to run on (no provider logged in) says so on its own
 	// status line, the last on its screen: its context "0" and its model
 	// "unknown" ("0.0%/0 (auto)   unknown"). A message sent it is turned away
@@ -219,9 +256,9 @@ var harnessLoginScreens = map[string][]loginRow{
 	// (harnessKeyRefusals).
 	"pi": loginRows(
 		`\d+(?:\.\d+)?%/0(?:\([a-z]+\))?unknown`,
-		`error:noapikeyfoundfor(?:"[a-z0-9.\-_/]{1,48}"|theselectedmodel|[a-z0-9]+(?:-[a-z0-9]+)*)`,
+		`error:noapikeyfoundfor(?:"[a-z0-9.\-_/]{1,48}"|theselectedmodel|`+piProviders+`)`,
 		`(?:error:)?authenticationfailedfor"[a-z0-9.\-_/]{1,48}"\.credentialsmayhaveexpiredornetworkisunavailable\.run'/login[a-z0-9.\-_/]{1,48}'tore-authenticate`,
-		`(?:error:)?yoursessionhasexpired\.pleasereauthenticate`,
+		`error:yoursessionhasexpired\.pleasereauthenticate`,
 	),
 	// Claude Code's own login menu (a fresh machine shows it before anything
 	// else), and its sign-in step once a way is picked: "Opening browser to
@@ -232,18 +269,24 @@ var harnessLoginScreens = map[string][]loginRow{
 	// Not seen during the spinner, a logged-out Claude Code was read as at
 	// work, then done. And the notices it turns a message away with that are
 	// not harnessLoginNotice's shape.
-	"claude": loginRows(
-		`selectloginmethod`,
+	"claude": loginAll(loginRows(
+		`selectloginmethod:?`,
 		`(?:\d\.)?claudeaccountwithsubscription·pro,max,team,orenterprise`,
 		`(?:\d\.)?anthropicconsoleaccount·apiusagebilling`,
-		`pastecodehereifprompted`,
+		`pastecodehereifprompted>?`,
 		`openingbrowsertosignin`,
 		`browserdidn.?topen\?usetheurl(?:belowtosignin)?(?:\(c(?:to)?(?:copy)?\)?)?`,
+	), loginMarked("●⎿",
 		`loginexpired·run/logintosigninagain,orre-authenticateyouranthropicprofile`,
 		`notsignedintoclaude\.run/loginfirst`,
 		`failedtoauthenticate:(?:oauthtokenrevoked\.pleaseloginagainorcontactyouradministrator|oauthsessionexpiredandcouldnotberefreshed)`,
-	),
+	)),
 }
+
+// piProviders are pi's providers by their ids (pi 1.4.0's own list): what
+// its "No API key found for anthropic." names. Any other word there is not
+// pi's ("No API key found for staging-server", from a tool).
+const piProviders = `amazon-bedrock|ant-ling|anthropic|openai|azure|openai-codex|radius|nvidia|deepseek|google|google-vertex|github-copilot|openrouter|vercel-ai-gateway|xai|groq|cerebras|zai|zai-coding-cn|mistral|minimax|minimax-cn|moonshotai|moonshotai-cn|huggingface|fireworks|together|baseten|opencode|opencode-go|kimi-coding|meta|cloudflare-workers-ai|cloudflare-ai-gateway|qwen-token-plan|qwen-token-plan-cn|qwen-token-plan-individual|xiaomi|xiaomi-token-plan-cn|xiaomi-token-plan-ams|xiaomi-token-plan-sgp`
 
 // cursorKeyRefused is Cursor CLI turning away the API key it was given, its
 // own row: "⚠ Warning: The provided API key is invalid.", then where the key
@@ -264,7 +307,7 @@ var harnessKeyRefusals = map[string][]loginRow{
 	// and it was refused — not one it never had. A line of its own, from
 	// its start, as harnessLoginRefused reads it. And a key from outside it
 	// ("Invalid API key · Fix external API key").
-	"claude": loginAll(loginOpen(`^[^a-z0-9]*(please)?run/login[·:.,\-]*apierror:40[13]([^0-9]|$)`), loginRows(
+	"claude": loginAll(loginOpen(`^[^a-z0-9]*(please)?run/login[·:.,\-]*apierror:40[13]([^0-9]|$)`), loginMarked("●⎿",
 		`invalidapikey·fixexternalapikey`,
 	)),
 	// pi with a login its provider refuses (a token gone stale, a wrong key):
@@ -285,22 +328,70 @@ var harnessKeyRefusals = map[string][]loginRow{
 	// Qwen Code with a key its service refuses, by the plan the key is for,
 	// and its provider's credentials refused; in an API error
 	// ("API Error: … (Status: 401)").
-	"qwen": loginRows(
-		`(?:apierror:)?invalidapikey\.(?:codingplanapikeysstartwith"sk-sp-"\.pleasecheck|pay-as-you-gokeysstartwith"sk-"or"sk-ws-"\.tokenplankeys\("sk-sp-"\)needthetokenplanentryinstead|tokenplanapikeysstartwith"sk-sp-"\.generateonefromthetokenplanconsole,orusethestandardapikeyentryforapay-as-you-gokey)\.?(?:\(status:40[13]\))?`,
-		`(?:apierror:)?modelapiauthenticationfailed\(http401\)\.checktheconfiguredprovidercredentials\.?(?:\(status:40[13]\))?`,
-	),
+	"qwen": loginAll(loginRows(
+		`(?:apierror:)?invalidapikey\.(?:codingplanapikeysstartwith"sk-sp-"\.pleasecheck|pay-as-you-gokeysstartwith"sk-"or"sk-ws-"\.tokenplankeys\("sk-sp-"\)needthetokenplanentryinstead|tokenplanapikeysstartwith"sk-sp-"\.generateonefromthetokenplanconsole,orusethestandardapikeyentryforapay-as-you-gokey)\.?(?:\(status:40[13]\))?\]?`,
+	), loginMarked("✕",
+		`(?:apierror:)?modelapiauthenticationfailed\(http401\)\.checktheconfiguredprovidercredentials\.?(?:\(status:40[13]\))?\]?`,
+	)),
 }
 
 // harnessFrameGlyphs are the sides a dialog draws its rows between: not the
 // row's words, so a row that wraps inside one is read as one.
 const harnessFrameGlyphs = "│┃║"
 
-// harnessLoginRowIn reports whether rows[i] is one of rs. bottom: it is one
-// of the last few rows. A whole row is read alone, then with the one or two
-// rows below it: a long notice wraps at the terminal's width.
-func harnessLoginRowIn(rows []string, i int, rs []loginRow, bottom bool) bool {
-	flat := rows[i]
-	lead := strings.IndexFunc(flat, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) })
+// harnessLoginRowMax is the longest a whole row is read at, with the rows it
+// wraps onto: the longest notice is a few rows' worth. Past it a row is not
+// one, and reading one past it costs every pattern a pass.
+const harnessLoginRowMax = 320
+
+// loginLines is a tail's rows, each with all whitespace removed and in lower
+// case, the blank ones kept: a blank row ends a paragraph, and a wrapped row
+// is never joined across one.
+type loginLines struct {
+	rows []string
+	// bottomFrom is where the last harnessLineRows rows with anything on
+	// them start.
+	bottomFrom int
+}
+
+func harnessFlatRows(tail string) loginLines {
+	var l loginLines
+	for _, row := range strings.Split(tail, "\n") {
+		l.rows = append(l.rows, strings.ToLower(strings.Join(strings.Fields(row), "")))
+	}
+	l.bottomFrom = len(l.rows)
+	for n := 0; l.bottomFrom > 0 && n < harnessLineRows; {
+		if l.bottomFrom--; l.rows[l.bottomFrom] != "" {
+			n++
+		}
+	}
+	return l
+}
+
+// core is row i from its first letter or digit, its dialog's side gone, and
+// what leads it; ok false if it is no row of a CLI's (blank, or opened by a
+// quote, a list item or a heading: an agent's own text).
+func (l loginLines) core(i int) (lead, core string, ok bool) {
+	flat := l.rows[i]
+	at := strings.IndexFunc(flat, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) })
+	if at < 0 || strings.ContainsAny(flat[:at], limitQuoteGlyphs+limitProseGlyphs) {
+		return "", "", false
+	}
+	return flat[:at], strings.TrimRight(flat[at:], harnessFrameGlyphs), true
+}
+
+// harnessLoginRowIn reports whether row i is one of rs. A whole row is read
+// alone, then with the one or two rows below it — a long notice wraps at the
+// terminal's width — but only where it wraps: never past a blank row, nor
+// past a row that ends a sentence (". ", "!", "?"): two rows "Not signed in
+// to Claude." and "Run /login first." in an answer are two sentences.
+func harnessLoginRowIn(l loginLines, i int, rs []loginRow) bool {
+	flat := l.rows[i]
+	if flat == "" {
+		return false
+	}
+	bottom := i >= l.bottomFrom
+	lead, core, ok := l.core(i)
 	for _, r := range rs {
 		if r.bottom && !bottom {
 			continue
@@ -311,33 +402,45 @@ func harnessLoginRowIn(rows []string, i int, rs []loginRow, bottom bool) bool {
 			}
 			continue
 		}
-		// A quote, a list item or a heading is an agent's own text.
-		if lead < 0 || strings.ContainsAny(flat[:lead], limitQuoteGlyphs+limitProseGlyphs) {
+		if !ok || len(core) > harnessLoginRowMax {
 			continue
 		}
-		row := strings.TrimRight(flat[lead:], harnessFrameGlyphs)
-		if r.re.MatchString(row) {
-			return true
+		if r.marks != "" && !bottom && !strings.ContainsAny(lead, r.marks) {
+			continue
 		}
-		for _, next := range rows[i+1 : min(i+3, len(rows))] {
-			if row += strings.Trim(next, harnessFrameGlyphs); r.re.MatchString(row) {
+		if r.re.MatchString(core) {
+			if r.then == nil || l.followedBy(i, r.then) {
 				return true
+			}
+			continue
+		}
+		row := core
+		for j := i + 1; j < min(i+3, len(l.rows)); j++ {
+			next := strings.Trim(l.rows[j], harnessFrameGlyphs)
+			if next == "" || strings.ContainsAny(row[len(row)-1:], ".!?") || len(row)+len(next) > harnessLoginRowMax {
+				break
+			}
+			if row += next; r.re.MatchString(row) {
+				return r.then == nil || l.followedBy(j, r.then)
 			}
 		}
 	}
 	return false
 }
 
-// harnessFlatRows are a tail's rows with anything on them, each with all
-// whitespace removed, in lower case.
-func harnessFlatRows(tail string) []string {
-	var rows []string
-	for _, row := range strings.Split(tail, "\n") {
-		if flat := strings.ToLower(strings.Join(strings.Fields(row), "")); flat != "" {
-			rows = append(rows, flat)
+// followedBy reports whether one of the few rows with anything on them
+// below row i is then, whole.
+func (l loginLines) followedBy(i int, then *regexp.Regexp) bool {
+	for j, seen := i+1, 0; j < len(l.rows) && seen < 4; j++ {
+		if l.rows[j] == "" {
+			continue
+		}
+		seen++
+		if _, core, ok := l.core(j); ok && then.MatchString(core) {
+			return true
 		}
 	}
-	return rows
+	return false
 }
 
 // harnessKeyRefusedBy reports whether the bottom of a screen has prog saying
@@ -347,9 +450,9 @@ func harnessKeyRefusedBy(tail, prog string) bool {
 	if rs == nil {
 		return false
 	}
-	rows := harnessFlatRows(tail)
-	for i := range rows {
-		if harnessLoginRowIn(rows, i, rs, i >= len(rows)-harnessLineRows) {
+	l := harnessFlatRows(tail)
+	for i := range l.rows {
+		if harnessLoginRowIn(l, i, rs) {
 			return true
 		}
 	}
@@ -368,10 +471,10 @@ func harnessKeyRefusedBy(tail, prog string) bool {
 // read OpenCode's refusal as Codex's half the time). Which of them it was
 // is the program's in front, asked by name (harnessKeyRefusedBy).
 func harnessKeyRefusedIn(tail string) string {
-	rows := harnessFlatRows(tail)
-	for i := range rows {
+	l := harnessFlatRows(tail)
+	for i := range l.rows {
 		for _, prog := range harnessKeyRefusalOrder {
-			if harnessLoginRowIn(rows, i, harnessKeyRefusals[prog], i >= len(rows)-harnessLineRows) {
+			if harnessLoginRowIn(l, i, harnessKeyRefusals[prog]) {
 				return prog
 			}
 		}
@@ -390,19 +493,19 @@ var harnessKeyRefusalOrder = func() []string {
 	return ps
 }()
 
-// harnessLoginScreenIn reports whether rows[i] is a sign-in screen's or a
+// harnessLoginScreenIn reports whether row i is a sign-in screen's or a
 // login notice's row of prog, the program here; of any of them when it is
 // not known.
-func harnessLoginScreenIn(rows []string, i int, prog string, bottom bool) bool {
+func harnessLoginScreenIn(l loginLines, i int, prog string) bool {
 	if prog == "" {
 		for _, rs := range harnessLoginScreens {
-			if harnessLoginRowIn(rows, i, rs, bottom) {
+			if harnessLoginRowIn(l, i, rs) {
 				return true
 			}
 		}
 		return false
 	}
-	return harnessLoginRowIn(rows, i, harnessLoginScreens[prog], bottom)
+	return harnessLoginRowIn(l, i, harnessLoginScreens[prog])
 }
 
 // harnessLoginLines are other CLIs' notices, the same from any of them: only
@@ -414,7 +517,7 @@ var harnessLoginLines = loginBottom(
 	`pleaselogin(?:tocontinue|withapermittedorganization:claudeauthlogin)?`,
 	`pleasesignin(?:tocontinue)?`,
 	`loginrequired(?:—run/login)?`,
-	`waitingforauth(?:entication(?:callback)?|orization(?:tocomplete)?)?[^a-z0-9]*(?:\((?:esctocancel|pressescorctrl\+ctocancel|\^ctocancel)\))?`,
+	`waitingforauth(?:entication(?:callback)?|orization(?:tocomplete)?)?(?:\.|…)*(?:\((?:esctocancel|pressescorctrl\+ctocancel|\^ctocancel)\))?`,
 	`pleasesetanauthmethodinyour.{1,80}?orspecifyoneofthefollowingenvironmentvariablesbeforerunning:gemini_api_key,google_genai_use_vertexai,google_genai_use_gca`,
 	`loginexpired`,
 	`notloggedin`,
@@ -472,6 +575,23 @@ type harnessHealth struct {
 	refused string
 }
 
+// harnessHealthTail is harnessTail with the blank rows between the rows it
+// keeps: where a paragraph ends, so a row is not read as wrapping onto the
+// next paragraph's first.
+func harnessHealthTail(render string, n int) string {
+	rows := strings.Split(render, "\n")
+	at, kept := len(rows), 0
+	for at > 0 && kept < n {
+		if at--; strings.TrimSpace(rows[at]) != "" {
+			kept++
+		}
+	}
+	for at < len(rows) && strings.TrimSpace(rows[at]) == "" {
+		at++
+	}
+	return strings.Join(rows[at:], "\n")
+}
+
 // harnessTail is the last n rows of a screen that have anything on them.
 func harnessTail(render string, n int) string {
 	var rows []string
@@ -497,13 +617,16 @@ func harnessProblemIn(tail, prog string) bool {
 		// CLI's sign-in screen and notice count, as before.
 		prog = ""
 	}
-	rows := harnessFlatRows(tail)
-	for i, flat := range rows {
-		bottom := i >= len(rows)-harnessLineRows
-		if harnessLoginScreenIn(rows, i, prog, bottom) || ((prog == "" || prog == "claude") && harnessNoticeRow(flat, bottom)) {
+	l := harnessFlatRows(tail)
+	for i, flat := range l.rows {
+		if flat == "" {
+			continue
+		}
+		bottom := i >= l.bottomFrom
+		if harnessLoginScreenIn(l, i, prog) || ((prog == "" || prog == "claude") && harnessNoticeRow(flat, bottom)) {
 			return true
 		}
-		if bottom && harnessLoginRowIn(rows, i, harnessLoginLines, bottom) {
+		if harnessLoginRowIn(l, i, harnessLoginLines) {
 			return true // the CLI's own status, not the conversation
 		}
 	}
@@ -561,7 +684,7 @@ const harnessTurnProof = 10 * time.Second
 func (a *Agent) noteHarnessHealth(render, prog string, atWork bool) {
 	// The render carries its styling — "\x1b[1mLogin\x1b[m \x1b[1mexpired" —
 	// which would sit between the words; the text is what is read.
-	tail := harnessTail(stripANSI(render), harnessRowsFor(prog))
+	tail := harnessHealthTail(stripANSI(render), harnessRowsFor(prog))
 	a.metaMu.Lock()
 	prev := a.attnPrevFG
 	a.metaMu.Unlock()
