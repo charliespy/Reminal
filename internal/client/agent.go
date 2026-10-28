@@ -1146,6 +1146,9 @@ func (a *Agent) Run() error {
 			}
 			agentNotify("\n  [%s] %s received, shutting down… (press again to force exit)\n",
 				time.Now().Format("15:04:05"), sig)
+			// Its terminal hung up, as a machine going down hangs it up:
+			// closing it alone does not end a shell idle at its prompt.
+			a.term.Hangup()
 			_ = a.term.Close()
 		}
 	}()
