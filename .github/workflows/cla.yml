@@ -21,7 +21,11 @@ jobs:
         # Runs on PR open/sync, the sign phrase, and `recheck`. Omitting
         # recheck makes that comment a no-op: the step is skipped, the job
         # goes green, and the PR's actual CLA check stays failed.
-        if: (github.event.comment.body == 'recheck') || (github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        # contains(), not ==: a comment can carry a trailing newline (a
+        # Windows "\r\n" from a paste), and an exact match then skips the
+        # step the same silent way. The action itself still decides: it
+        # trims and lowercases each comment before comparing the phrase.
+        if: github.event_name == 'pull_request_target' || (github.event.issue.pull_request && (contains(github.event.comment.body, 'recheck') || contains(github.event.comment.body, 'I have read the CLA Document and I hereby sign the CLA')))
         uses: contributor-assistant/github-action@v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

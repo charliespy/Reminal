@@ -38,6 +38,18 @@ var limitScreens = []struct {
 	{"claude", "  ⎿  Usage limit reached · limit resets 4pm\n❯ ", limitLA(2026, 10, 19, 16, 0)},
 	{"claude", "  ⎿  You've hit your org's monthly spend limit\n❯ ", time.Time{}},
 	{"claude", "  ⎿  You've hit your session limit · resets 3pm\n     (America/Los_Angeles)\n❯ ", limitLA(2026, 10, 19, 15, 0)},
+	// Seen on real screens, 2026-10-27: the command to get more after it, on
+	// one row or wrapped onto the next.
+	{"claude", "  ⎿  You've hit your individual spend limit · run /usage-credits to ask your admin for more\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You've hit your individual spend limit · run /usage-credits to ask y\n     our admin for more\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You've hit your weekly limit · resets 6am (America/Los_Angeles) · /usage-credits to keep using Claude\n❯ ", limitLA(2026, 10, 20, 6, 0)},
+	// Claude Code 2.1.312's wording.
+	{"claude", "  ⎿  Out of usage credits\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You've hit your channel's monthly spend limit.\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Couldn't reset your 5-hour limit with this login · run /login, then try again\n❯ ", time.Time{}},
+	{"claude", "  ⎿  A 5-hour limit reset isn't available right now.\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Automatic continue stopped after repeated usage limit hits · This task will not resume on its own (/rate-limit-options to try again)\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Automatic continue stopped after repeated usage limit hits · This task will not resume on its own (/rate-limit-op\n     tions to try again)\n❯ ", time.Time{}},
 	{"codex", "■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit\nhttps://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.\n\n› ", limitLA(2026, 10, 19, 15, 5)},
 	{"codex", "■ You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 21st, 2026 3:05 PM.\n› ", limitLA(2026, 10, 21, 15, 5)},
 	{"codex", "■ You’ve hit your usage limit. To get more access now, send a request to your admin or try again later.\n› ", time.Time{}},
@@ -100,9 +112,27 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		{"claude", "  you've hit your limit · resets 4pm is all it answers.", "wrapped prose"},
 		{"claude", "  ⎿  \"Usage limit reached · resets 4pm\",", "a test's string, in a tool's output"},
 		{"claude", "● You've hit your session limit · resets 3pm, and the next window\n  opens then.", "a sentence that wraps on"},
+		// Claude Code 2.1.312: rows that leave the agent working, and its
+		// notices quoted in answers that go on.
+		{"claude", "  ⎿  Fast mode disabled · Out of usage credits", "fast mode off, the session carries on"},
+		// Bare words at the start of a row with no ⎿ before them (review).
+		{"claude", "● It stopped because the review session had run\n  out of usage credits.", "an answer's wrapped last row"},
+		{"claude", "  ⎿  Fast mode disabled ·\n     Out of usage credits", "fast mode off, wrapped on a narrow screen"},
+		{"claude", "● It prints this:\n\n  Out of usage credits", "shown in an answer"},
+		{"claude", "● The banner it showed said its\n  usage limit reached.", "an answer's wrapped last row"},
+		{"claude", "  ⎿  Continue now at lower priority after reaching your 5-hour limit; run again to stop", "an option that keeps it going"},
+		{"claude", "● Out of usage credits is what it shows when the balance runs out.", "an answer quoting the notice"},
+		{"claude", "● You've hit your channel's monthly spend limit. That row is new in this version.", "an answer quoting the notice"},
+		{"claude", "● Couldn't reset your 5-hour limit with this login · run /login, then try again, is the row it prints.", "an answer quoting the notice"},
+		{"claude", "● A 5-hour limit reset isn't available right now, so I waited.", "an answer quoting the notice"},
+		{"claude", "● Automatic continue stopped after repeated usage limit hits · This task will not resume on its own (/rate-limit-options to try again) is the new row.", "an answer quoting the notice"},
 		{"claude", "  - You've hit your session limit · resets 3pm", "a list item"},
 		{"claude", "  ## You've hit your session limit", "a heading"},
 		{"claude", "  | You've hit your session limit · resets 3pm |", "a table cell"},
+		// The notice and its command, quoted at the start of an answer that
+		// goes on (review).
+		{"claude", "● You've hit your weekly limit · /usage-credits to keep using Claude is the row I added a test for; all 40 tests pass.", "an answer quoting the notice and its command"},
+		{"claude", "● You've hit your individual spend limit · run /usage-credits to ask your admin for more, that is what it shows.", "an answer quoting the notice and its command"},
 		{"codex", "› You’ve hit your usage limit. Try again at 3:05 PM.", "typed at Codex's prompt"},
 		{"codex", "• Codex prints “You’ve hit your usage limit” when the plan runs out.", "an answer about it"},
 		{"gemini", "│ > Usage limit reached for gemini-2.5-pro. │", "typed at Gemini's prompt"},
@@ -716,4 +746,68 @@ func TestLimitEchoRowEndsOnlyAtAnAnswer(t *testing.T) {
 			t.Errorf("%q: echo %v, want %v", c.below, got, c.echo)
 		}
 	}
+}
+
+// Claude Code at an individual spend limit, as three sessions showed it
+// (2026-10-27): the notice, the command it points to on a row of its own,
+// the turn's time ("· done"), and the input box empty, with a draft, or with
+// an attachment chip. Each read as limited, though its turn ended with an
+// ordinary Stop and the screen looks done; with the message it answered in
+// view, and scrolled away.
+func TestHarnessLimitSpendScreens(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	notice := "  ⎿  You've hit your individual spend limit · run /usage-credits to ask your admin for a higher limit\n" +
+		"     /usage-credits to request more usage from your admin.\n\n" +
+		"✻ Churned for 1s · done 12:34 PM\n\n"
+	for _, echo := range []string{"❯ continue\n\n", ""} {
+		for _, draft := range []string{"", "c", "[⧉ In Untitled-1]"} {
+			screen := echo + notice + claudeBoxWith(draft)
+			if !limitedAfterTurn(t, screen) {
+				t.Errorf("not limited (echo %q, draft %q):\n%s", echo, draft, screen)
+			}
+		}
+	}
+}
+
+// An answer that quotes the notice and its command, then goes on, is the
+// agent talking, not the limit: its session is not limited (review).
+func TestHarnessLimitQuotedInAnAnswer(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	for _, row := range []string{
+		"● You've hit your weekly limit · /usage-credits to keep using Claude is the row I added a test for; all 40 tests pass.",
+		"● You've hit your individual spend limit · run /usage-credits to ask your admin for more, that is what it shows.",
+	} {
+		screen := "❯ what did you change?\n\n" + row + "\n\n✻ Churned for 3s · done\n\n" + claudeBoxWith("")
+		if limitedAfterTurn(t, screen) {
+			t.Errorf("read as limited:\n%s", screen)
+		}
+	}
+}
+
+// claudeBoxWith is Claude Code's input box holding draft, and the footer
+// under it (claudeBox, in attention_probe_test.go, is the box alone).
+func claudeBoxWith(draft string) string {
+	return "────────────────────────────────\n❯ " + draft + "\n────────────────────────────────\n  ⏵⏵ bypass permissions on"
+}
+
+// limitedAfterTurn is whether a Claude session whose turn ended with screen
+// on show reads as at its limit: the screen seen twice, then once more after
+// the notice has held for harnessUpFor.
+func limitedAfterTurn(t *testing.T, screen string) bool {
+	t.Helper()
+	now := limitTestNow
+	defer func() { harnessNow = time.Now }()
+	harnessNow = func() time.Time { return now }
+	a := &Agent{}
+	turn, end := now.Add(-2*time.Second), now.Add(-time.Second)
+	a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+	a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+	now = now.Add(harnessUpFor)
+	a.noteHarnessLimit(screen, "claude", false, turn, end, "")
+	l, _ := a.harnessLimitedNow()
+	return l
 }

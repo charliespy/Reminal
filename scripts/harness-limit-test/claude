@@ -1,0 +1,24 @@
+#!/bin/bash
+# A stand-in for Claude Code: takes one message, then draws the screen the
+# real one drew for it, its hooks saying what the real one's said. $1 picks
+# the screen. Then it waits at its prompt, as Claude Code does.
+rule() { printf '%s\n' "────────────────────────────────────────────────────────"; }
+reminal hook working </dev/null
+printf '\033[2J\033[H'
+printf '❯ continue\n\n'
+case "$1" in
+spend)
+  printf "  ⎿  You've hit your individual spend limit · run /usage-credits to ask your admin for a higher limit\n"
+  printf '     /usage-credits to request more usage from your admin.\n\n'
+  printf '✻ Churned for 1s · done 12:34 PM\n\n' ;;
+weekly)
+  printf "  ⎿  You've hit your weekly limit · resets 6am (America/Los_Angeles) · /usage-credits to keep using Claude\n\n"
+  printf '✻ Brewed for 0s · done 12:34 PM\n\n' ;;
+*)
+  printf '● Done. The report is in out/summary.md.\n\n'
+  printf '✻ Cooked for 9s · done 12:45 PM\n\n' ;;
+esac
+reminal hook done </dev/null
+rule; printf '❯ %s\n' "$2"; rule; printf '  ⏵⏵ bypass permissions on\n'
+stty -echo -icanon 2>/dev/null
+while :; do read -r -n1 _ || sleep 1; done

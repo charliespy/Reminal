@@ -422,7 +422,7 @@
       if (info.pin && /^\d{6,8}$/.test(info.pin)) {
         sharePinFromAgent = { sid: sessionId, pin: info.pin };
         const modal = document.getElementById('share-modal');
-        if (modal && modal.style.display === 'flex') fillShare();
+        if ((modal && modal.style.display === 'flex') || document.querySelector('.mo-sheet.open')) fillShare();
       }
       // The connected session's own attention state rides host_info, and the
       // agent pushes a fresh one on every change — so the pill for the session
@@ -430,7 +430,10 @@
       // directory's slower poll. 'attn' present (even "") is authoritative for
       // this session; absent means an older host that can't report it, so leave
       // whatever the poll last knew.
-      if (sessionId && ('attn' in info)) setLiveAttn(sessionId, info.attn || '');
+      if (sessionId && ('attn' in info)) {
+        setLiveAttn(sessionId, info.attn || '');
+        if (window.reminalMoments) try { reminalMoments.attn(sessionId, info.attn || ''); } catch (_) {}
+      }
       renderHost();
     }
 
@@ -5016,6 +5019,7 @@
       // done, which also just means "online"). Offline/checking set above.
       const agg = machineAttn(list);
       if (agg === 'logged-out') { dot.className = 'machine-dot attn-input'; dot.title = 'its agent is logged out'; }
+      else if (agg === 'limited') { dot.className = 'machine-dot attn-input'; dot.title = 'its agent is at its usage limit'; }
       else if (agg === 'input') { dot.className = 'machine-dot attn-input'; dot.title = 'needs you'; }
       else if (agg === 'working') { dot.className = 'machine-dot attn-working'; dot.title = 'working'; }
       // Remember this snapshot so the NEXT time the panel opens it paints these
@@ -5143,7 +5147,7 @@
     }
 
     // Attention state → the word shown in the session's state chip.
-    const ATTN_LABELS = { input: 'needs you', working: 'working', done: 'done', 'logged-out': 'logged out' };
+    const ATTN_LABELS = { input: 'needs you', working: 'working', done: 'done', 'logged-out': 'logged out', limited: 'limited' };
 
     // attnChipEl builds the little state pill shown beside a session name in the
     // Recents dropdown and the mobile dock, or null for an idle/unknown state.
@@ -5421,19 +5425,22 @@
     }
 
     // machineAttn rolls a machine's sessions up to one dot state: 'logged-out'
-    // if an agent there cannot work at all, else 'input' if any session needs
+    // if an agent there cannot work at all, else 'limited' if one is held back
+    // by its usage limit, else 'input' if any session needs
     // you, else 'working' if any is working, else '' (idle / all done → the
     // plain online-green dot). Port forwards don't count. Reads through attnOf
     // so a live push colours the dot too.
     function machineAttn(list) {
-      let working = false, needs = false;
+      let working = false, needs = false, limited = false;
       for (const s of (list || [])) {
         if (s.kind === 'port') continue;
         const a = attnOf(s.id, s.attn);
         if (a === 'logged-out') return 'logged-out';
+        if (a === 'limited') limited = true;
         if (a === 'input') needs = true;
         if (a === 'working') working = true;
       }
+      if (limited) return 'limited';
       if (needs) return 'input';
       return working ? 'working' : '';
     }
@@ -6042,6 +6049,8 @@
       // the visible character.
       const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
       lastDataAt = Date.now();
+      // Moments only watches: nothing it does may stop a chunk reaching the screen.
+      if (window.reminalMoments) try { reminalMoments.output(sessionId, u8); } catch (_) {}
       const after = reconcilePredictions(u8);
       if (after.byteLength === 0) return;
       pendingChunks.push(after);
@@ -8271,6 +8280,7 @@
       // redone): held, and sent once it is. Dropped here, the keys vanished
       // with nothing to say so. Behind keys already held, so nothing typed
       // overtakes them.
+      if (window.reminalMoments) try { reminalMoments.input(sessionId, data); } catch (_) {}
       const n = ++inputSerial;
       if (!inputLive() || heldInput.length) {
         holdInput(data, n);
@@ -9013,6 +9023,8 @@
       if (!sessionId) return;
       fillShare();
       if (!sharePin() && typeof sendWin === 'function') sendWin('host_info', { pin: true });
+      // The share sheet (moments.js) holds the invite beside the pictures and clips.
+      if (window.reminalMoments) { reminalMoments.open('home'); return; }
       shareModal.style.display = 'flex';
     }
     function closeShare() {
@@ -9701,7 +9713,11 @@
         const GRIP = 22, GAP = 12, HEADER = 48;
         toolbar.classList.add('visible');
         const th = toolbar.offsetHeight || 36;
-        const clampX = x => Math.min(window.innerWidth - 60, Math.max(60, x));
+        // Held inside the screen by its real width (Copy · Select all · Meme
+        // is wider than the 120px this once assumed, and ran off the left
+        // edge for a selection that starts there), 8px from either side.
+        const half = (toolbar.offsetWidth || 120) / 2 + 8;
+        const clampX = x => Math.max(half, Math.min(window.innerWidth - half, x));
         const startOn = s.vrow >= 0 && s.vrow < rows, endOn = e.vrow >= 0 && e.vrow < rows;
         if (startOn && s.y - GRIP - GAP - th >= HEADER) {
           toolbar.style.transform = 'translate(-50%, -100%)';
@@ -9717,6 +9733,12 @@
           toolbar.style.top = (s.y + s.h + GAP) + 'px';
         } else {
           toolbar.classList.remove('visible');
+        }
+        // And never below the visible screen (the keyboard, the key bar).
+        if (toolbar.classList.contains('visible')) {
+          const r = toolbar.getBoundingClientRect();
+          const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+          if (r.bottom > vh - 8) toolbar.style.top = (parseFloat(toolbar.style.top) - (r.bottom - (vh - 8))) + 'px';
         }
       }
       function placeHandle(el, pt, visible, yOff) {
@@ -13676,6 +13698,7 @@
         const el = document.activeElement;
         const busy = document.querySelector('details[open]') ||
           ($('share-modal') && getComputedStyle($('share-modal')).display !== 'none') ||
+          (window.reminalMoments && reminalMoments.isOpen()) ||
           Date.now() - lastTermKeyAt < TOUR_TYPING_PAUSE_MS ||
           (!connected() && isField(el) && !isTermKeys(el) && el.value !== '');
         const ready = !waitForSession || connected() || Date.now() - t0 > 6000;

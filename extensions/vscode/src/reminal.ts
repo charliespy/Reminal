@@ -47,6 +47,7 @@ export function statusOf(attn: string | undefined): Status | undefined {
   switch (attn) {
     case "input":
     case "logged-out":
+    case "limited":
       return "needs";
     case "working":
       return "working";

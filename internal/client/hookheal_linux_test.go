@@ -11,27 +11,42 @@ import (
 	"time"
 )
 
-// The session asks the agent it runs, by the binary its process was started
-// from: a native build named for the agent is that binary itself.
-func TestTheAgentsOwnBinaryIsWhatIsAsked(t *testing.T) {
-	sleep, err := exec.LookPath("sleep")
+// standIn writes a copy of this test binary to file and runs it from run (the
+// file, or a link to it), with argv0 as its command line's first word ("" for
+// run): a process that only sleeps (TestMain's REMINAL_TEST_STAND_IN). Not a
+// copy of the system's sleep: on Ubuntu 26.04 that is one multi-call binary
+// which, named claude or node, refuses to run at all.
+func standIn(t *testing.T, file, run, argv0 string) *exec.Cmd {
+	t.Helper()
+	self, err := os.Executable()
 	if err != nil {
-		t.Skip("no sleep")
-	}
-	raw, err := os.ReadFile(sleep)
-	if err != nil {
-		t.Skip(err)
-	}
-	claude := filepath.Join(t.TempDir(), "claude")
-	if err := os.WriteFile(claude, raw, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(claude, "30")
+	raw, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, raw, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(run)
+	if argv0 != "" {
+		cmd.Args[0] = argv0
+	}
+	cmd.Env = append(os.Environ(), "REMINAL_TEST_STAND_IN=1")
 	if err := cmd.Start(); err != nil {
-		t.Skip(err)
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	time.Sleep(50 * time.Millisecond) // its exec done
+	return cmd
+}
+
+// The session asks the agent it runs, by the binary its process was started
+// from: a native build named for the agent is that binary itself.
+func TestTheAgentsOwnBinaryIsWhatIsAsked(t *testing.T) {
+	claude := filepath.Join(t.TempDir(), "claude")
+	cmd := standIn(t, claude, claude, "")
 	if got := agentCommandOf(cmd.Process.Pid, "claude"); len(got) != 1 || got[0] != claude {
 		t.Fatalf("asked %q, want %q", got, claude)
 	}
@@ -45,14 +60,6 @@ func TestTheAgentsOwnBinaryIsWhatIsAsked(t *testing.T) {
 // named for its version: started by the agent's name, it is the agent's
 // binary all the same (review).
 func TestANativeInstallsVersionedBinaryIsAsked(t *testing.T) {
-	sleep, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("no sleep")
-	}
-	raw, err := os.ReadFile(sleep)
-	if err != nil {
-		t.Skip(err)
-	}
 	home := t.TempDir()
 	versioned := filepath.Join(home, ".local", "share", "claude", "versions", "2.1.77")
 	link := filepath.Join(home, ".local", "bin", "claude")
@@ -61,18 +68,10 @@ func TestANativeInstallsVersionedBinaryIsAsked(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(versioned, raw, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Symlink(versioned, link); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(link, "30")
-	if err := cmd.Start(); err != nil {
-		t.Skip(err)
-	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	time.Sleep(50 * time.Millisecond)
+	cmd := standIn(t, versioned, link, "")
 	if got := agentCommandOf(cmd.Process.Pid, "claude"); len(got) != 1 || got[0] != versioned {
 		t.Fatalf("asked %q, want %q", got, versioned)
 	}
@@ -104,25 +103,8 @@ func TestAnAgentBinaryIsKeptByItsFile(t *testing.T) {
 // An npm install's node names its process "claude" (process.title): its
 // interpreter is never asked as if it were claude (review).
 func TestAnInterpreterNamedForTheAgentIsNotAsked(t *testing.T) {
-	sleep, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("no sleep")
-	}
-	raw, err := os.ReadFile(sleep)
-	if err != nil {
-		t.Skip(err)
-	}
 	node := filepath.Join(t.TempDir(), "node")
-	if err := os.WriteFile(node, raw, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(node, "30")
-	cmd.Args[0] = "claude"
-	if err := cmd.Start(); err != nil {
-		t.Skip(err)
-	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	time.Sleep(50 * time.Millisecond)
+	cmd := standIn(t, node, node, "claude")
 	if got := agentCommandOf(cmd.Process.Pid, "claude"); got != nil {
 		t.Fatalf("node asked as claude: %q", got)
 	}

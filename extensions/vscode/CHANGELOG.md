@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4
+
+- A terminal whose agent has hit its usage limit is marked as needing you,
+  not as done.
+
 ## 0.2.3
 
 - The pictures on this page show again.

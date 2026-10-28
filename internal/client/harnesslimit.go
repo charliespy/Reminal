@@ -40,6 +40,20 @@ type limitNotice struct {
 	// (review): "You've hit your session limit · resets 3pm — the agent
 	// now waits."
 	whole bool
+	// glyph, if set, must be among the marks the row leads with. Words
+	// plain enough to end anyone's sentence ("out of usage credits") are the
+	// notice only on the row Claude Code draws a notice on (⎿): a wrapped
+	// answer's last row has no glyph, nor does a narrow screen's second row
+	// of "Fast mode disabled · Out of usage credits" (review).
+	glyph string
+}
+
+// onGlyph is ns, each matched only on a row led by glyph.
+func onGlyph(glyph string, ns []limitNotice) []limitNotice {
+	for i := range ns {
+		ns[i].glyph = glyph
+	}
+	return ns
 }
 
 func notices(res ...string) []limitNotice {
@@ -50,11 +64,22 @@ func notices(res ...string) []limitNotice {
 	return out
 }
 
+// limitCommand is the command a notice may end on, as its row reads with
+// spaces gone and in lower case: "· /usage-credits to keep using Claude",
+// "· run /usage-credits to ask your admin for more" (or "for a higher
+// limit"), "· /usage-credits to request more usage from your admin".
+const limitCommand = `(?:·(?:run)?/usage-credits(?:tokeepusingclaude|toaskyouradminfor(?:more|ahigherlimit)|torequestmoreusagefromyouradmin)?)?`
+
 // wholeNotices are notices read as whole rows: each's words, then perhaps
-// when it resets ("· resets 3pm (America/Los_Angeles)", "resets at 1:30pm")
-// and "· progress saved", then the row's end.
+// when it resets ("· resets 3pm (America/Los_Angeles)", "resets at 1:30pm"),
+// "· progress saved", and the command it points to ("· /usage-credits to
+// keep using Claude", "· run /usage-credits to ask your admin for more"),
+// then the row's end. A row that goes on in words of its own is a sentence,
+// not the notice; so the command's words are only the ones the notice uses,
+// never any words after a command (an agent's answer that quotes the notice
+// and goes on is not the notice).
 func wholeNotices(res ...string) []limitNotice {
-	end := `(?:·?(?:limit)?resets?(?:at)?` + limitWhen + `)?(?:·progresssaved)?\.?$`
+	end := `(?:·?(?:limit)?resets?(?:at)?` + limitWhen + `)?(?:·progresssaved)?` + limitCommand + `\.?$`
 	out := make([]limitNotice, len(res))
 	for i, r := range res {
 		out[i] = limitNotice{re: regexp.MustCompile("^(?:" + r + ")" + end), whole: true}
@@ -81,16 +106,31 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// budget, credits run out, and the plain headings. Whole rows: what is
 	// read here may be acted on, so a sentence that only starts with them is
 	// never one.
-	"claude": wholeNotices(
-		`you.?vehityour(?:session|weekly|opus|sonnet|fable|usagecredit|usage|monthlyspend|fast)?limit`,
+	"claude": append(wholeNotices(
+		// Later, also a daily or an individual spend limit, and the command
+		// to get more after it ("· /usage-credits to keep using Claude").
+		`you.?vehityour(?:session|weekly|daily|opus|sonnet|fable|usagecredit|usage|monthlyspend|individualspend|spend|fast)?limit`,
 		`you.?vehityour(?:team|org).?s(?:shared|monthly)[a-z]{0,16}(?:limit|budget)`,
+		`you.?vehityourchannel.?smonthly[a-z]{0,16}(?:limit|budget)`,
 		`you.?reoutofusagecredits`,
+		// Claude Code 2.1.312: a limit that could not be lifted, and the
+		// automatic continue that gave up. Each with its own row ending only.
+		// ("Fast mode disabled · Out of usage credits" is not one: fast mode
+		// goes off and the session carries on; nor is "Continue now at lower
+		// priority …", an option that keeps it going.)
+		`couldn.?tresetyour5-hourlimitwiththislogin(?:·run/login,thentryagain)?`,
+		`a5-hourlimitresetisn.?tavailablerightnow`,
+		`automaticcontinuestoppedafterrepeatedusagelimithits(?:·thistaskwillnotresumeonitsown\(/rate-limit-optionstotryagain\))?`,
 		`yourorgisoutofusage(?:credits)?`,
-		`usagelimitreached`,
 		`paused·usagelimit`,
 		`fastlimitreachedandtemporarilydisabled`,
 		`goalpaused·usagelimitreached`,
 	),
+		// Bare words that could end any sentence: only on the notice's own row.
+		onGlyph("⎿", wholeNotices(
+			`outofusagecredits`,
+			`usagelimitreached`,
+		))...),
 	// Codex 0.163: "You’ve hit your usage limit. … or try again at 3:05 PM."
 	// (the time on the next row when it wraps), its workspace's limit and
 	// credits, and the service's quota.
@@ -214,7 +254,7 @@ func harnessLimitNoticesIn(tail, prog string, now time.Time) (int, time.Time, bo
 		for _, next := range rows[i+1 : min(i+3, len(rows))] {
 			more = append(more, strings.ToLower(strings.Join(strings.Fields(next), "")))
 		}
-		ok, used := limitRowIn(core, more, prog)
+		ok, used := limitRowIn(flat[:lead], core, more, prog)
 		if !ok {
 			continue
 		}
@@ -296,12 +336,16 @@ func limitEchoRow(below []string) bool {
 	return false
 }
 
-// limitRowIn reports whether a row (from its first letter or digit) is a
-// limit notice of prog; of any CLI when prog is "". more are the rows below
-// it, flattened, that a whole notice may wrap onto; used, how many it did.
-func limitRowIn(core string, more []string, prog string) (bool, int) {
+// limitRowIn reports whether a row (core: from its first letter or digit;
+// lead: the marks before it) is a limit notice of prog; of any CLI when prog
+// is "". more are the rows below it, flattened, that a whole notice may wrap
+// onto; used, how many it did.
+func limitRowIn(lead, core string, more []string, prog string) (bool, int) {
 	match := func(ns []limitNotice) (bool, int) {
 		for _, n := range ns {
+			if n.glyph != "" && !strings.Contains(lead, n.glyph) {
+				continue
+			}
 			if !n.whole {
 				if n.re.MatchString(core) {
 					return true, 0
