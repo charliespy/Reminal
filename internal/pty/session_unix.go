@@ -111,6 +111,30 @@ func (s *Session) Close() error {
 	return s.ptmx.Close()
 }
 
+// Hangup does to the session's terminal what closing it does when nothing
+// else holds its master: its shell and the program in front are sent SIGHUP,
+// then SIGCONT so a stopped one sees it, as the kernel sends them on a
+// hangup. Close alone does not, while the master is read: it is a blocking
+// descriptor (its Fd is taken), and the kernel keeps it open under the read
+// under way, so the terminal is never hung up and an idle shell runs on — a
+// stop sent to the session alone left it running. A job told to outlive its
+// terminal (nohup) goes on, as after any hangup. Before Close: its
+// foreground is asked of the master.
+func (s *Session) Hangup() {
+	fg := s.pgrp()
+	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGCONT} {
+		if fg > 0 {
+			_ = unix.Kill(-fg, sig)
+		}
+		switch {
+		case s.cmd != nil && s.cmd.Process != nil:
+			_ = s.cmd.Process.Signal(sig) // never one reaped, whose pid may be reused
+		case s.ShellPid() > 0:
+			_ = unix.Kill(s.shell, sig)
+		}
+	}
+}
+
 // withFd runs f on the master's fd while the file holds it (SyscallConn's
 // Control): a Close meanwhile waits for f, and f never runs on an fd that
 // was destroyed, or reused, underneath it. A session can be closed from a
