@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/vt"
+
 	"reminal/internal/crypto"
 	"reminal/internal/pty"
 )
@@ -38,7 +40,7 @@ func quietShell(t *testing.T, body string) *Agent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &Agent{box: box, buf: newScrollback(1 << 20), term: term, restoreRun: "echo resumed-42"}
+	a := &Agent{box: box, buf: newScrollback(1 << 20), term: term, restoreRun: "echo resumed-42", screen: vt.NewEmulator(80, 24)}
 	go a.pumpPTY()
 	return a
 }
@@ -100,5 +102,41 @@ func TestARestoreWaitsForTheShellsPromptBeforeTypingItsResume(t *testing.T) {
 	out := a.shown(t)
 	if p, r := strings.Index(out, "ready$ "), strings.Index(out, "echo resumed-42"); p < 0 || r < p {
 		t.Fatalf("the resume was typed before the shell's prompt: %q", out)
+	}
+}
+
+// A shell that prints a line, then goes on starting (an nvm, conda or pyenv
+// set-up after "Last login: …") before it draws its prompt: quiet for a
+// moment, but no prompt yet. The resume waits for the prompt.
+func TestARestoreWaitsForThePromptPastALineAndAPause(t *testing.T) {
+	a := quietShell(t, `printf 'Last login: Tue Oct 27 on ttys001\n'; sleep 1.5; printf 'ready$ '`)
+	a.signalRegistered()
+	a.restoreStart()
+	waitShown(t, a, "echo resumed-42", 2*time.Second)
+	out := a.shown(t)
+	if p, r := strings.Index(out, "ready$ "), strings.Index(out, "echo resumed-42"); p < 0 || r < p {
+		t.Fatalf("the resume was typed before the shell's prompt: %q", out)
+	}
+}
+
+// What a person types while the resume waits for the prompt (a viewer who
+// opened the session at once) is kept, and typed after the resume, never
+// into the middle of it.
+func TestWhatIsTypedWhileARestoreWaitsIsTypedAfterItsResume(t *testing.T) {
+	a := quietShell(t, `sleep 1.5; printf 'ready$ '`)
+	a.holdTyped() // as Run does for a restored session
+	a.signalRegistered()
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		_, _ = a.typeIn([]byte("zq-typed")) // a viewer's keys, as serveConn types them
+	}()
+	a.restoreStart()
+	waitShown(t, a, "zq-typed", 2*time.Second)
+	out := a.shown(t)
+	// First on the shell's line, the resume; then what was typed (cat then
+	// echoes the resume's line after them, as a shell would run it).
+	r, h := strings.Index(out, "echo resumed-42"), strings.Index(out, "zq-typed")
+	if r < 0 || h < r {
+		t.Fatalf("what was typed meanwhile was not typed after the resume: %q", out)
 	}
 }
