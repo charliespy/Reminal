@@ -849,9 +849,10 @@ func TestHarnessLimitQuotedInAnAnswer(t *testing.T) {
 	}
 }
 
-// A notice Claude Code draws as an answer (●) is that answer's last row: an
-// answer that quotes one and goes on, below it or after a blank row, is not
-// it; nor is one quoted or under an answer's own words (review).
+// A notice Claude Code draws as an answer (●) or as a tool's output (⎿) is
+// that answer's last row, with only its hint under it: one that quotes a
+// notice and goes on, below it, after a blank row or after an indented "> "
+// quote, is not it; nor is one quoted or under an answer's own words (review).
 func TestHarnessLimitAnswerDrawnNoticeIsItsLastRow(t *testing.T) {
 	for _, tc := range []struct {
 		screen string
@@ -867,6 +868,17 @@ func TestHarnessLimitAnswerDrawnNoticeIsItsLastRow(t *testing.T) {
 		{"● Here is what it showed:\n\n  You've hit your session limit · resets 3pm (America/Los_Angeles)\n❯ ", false},
 		{"● `You've hit your session limit · resets 3pm`\n❯ ", false},
 		{"● \"You've hit your session limit · resets 3pm\"\n❯ ", false},
+		{"● You've hit your session limit · resets 3pm\n  > quoted from the log\n  and so it stopped.\n❯ ", false},
+		{"  ⎿  You've hit your session limit · resets 3pm\n     /upgrade to increase your usage limit.\n❯ ", true},
+		{"  ⎿  Usage limit reached\n\n✻ Churned for 0s\n\n" + claudeBoxWith(""), true},
+		{"  ⎿  You've hit your session limit.\n  That row is new.\n❯ ", false},
+		{"  ⎿  Usage limit reached\n\n  So the tests wait.\n❯ ", false},
+		// A hint is the notice's own, named: a sentence that starts with a
+		// command is the answer going on.
+		{"  ⎿  You've hit your session limit · resets 3pm\n     Run /usage-credits to ask your admin for more\n❯ ", true},
+		{"● You've hit your session limit · resets 3pm (America/Los_Angeles)\n  /usage shows how much is left, so I'll wait.\n❯ ", false},
+		{"● You've hit your session limit · resets 3pm (America/Los_Angeles)\n  Run /review once it resets and we're done.\n❯ ", false},
+		{"  ⎿  You've hit your session limit · resets 3pm\n     /usage shows the rest of the week.\n❯ ", false},
 	} {
 		if hit, _ := harnessLimitIn(tc.screen, "claude", limitTestNow); hit != tc.want {
 			t.Errorf("hit=%v, want %v: %q", hit, tc.want, tc.screen)
@@ -875,7 +887,8 @@ func TestHarnessLimitAnswerDrawnNoticeIsItsLastRow(t *testing.T) {
 }
 
 // OpenCode's notice may start with a model's id in lower case: one with a
-// digit, or a known maker's, not any hyphenated word (review).
+// digit, a known maker's or one OpenCode serves by name, not any
+// hyphenated word (review).
 func TestHarnessLimitModelLedNotice(t *testing.T) {
 	for _, tc := range []struct {
 		screen string
@@ -884,6 +897,7 @@ func TestHarnessLimitModelLedNotice(t *testing.T) {
 		{"┃  gpt-5 usage limit reached. It will reset in 2 hours.\n┃", true},
 		{"┃  claude-sonnet usage limit reached. It will reset in 2 hours.\n┃", true},
 		{"┃  qwen3-coder usage limit reached. It will reset in 2 hours.\n┃", true},
+		{"┃  big-pickle usage limit reached. It will reset in 2 hours.\n┃", true},
 		{"┃  re-run usage limit reached. It will reset in 2 hours.\n┃", false},
 		{"┃  a-b usage limit reached. It will reset in 2 hours.\n┃", false},
 		{"┃  gpt-5 usage limit reached is what it printed earlier.", false},
