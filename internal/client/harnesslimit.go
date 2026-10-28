@@ -476,10 +476,18 @@ func firstRune(s string) string {
 // limitUnderNotice says whether t, a row trimmed, is one drawn under a
 // notice before its prompt: a turn's time line ("✻ Churned for 0s"), or the
 // notice's own hint ("/upgrade to increase your usage limit.", "Run
-// /usage-credits to ask your admin for more").
+// /usage-credits to ask your admin for more"), named and whole: a sentence
+// that starts with a command ("/usage shows how much is left") is not one
+// (review).
 func limitUnderNotice(t string) bool {
-	return strings.HasPrefix(t, "✻") || strings.HasPrefix(t, "/") || strings.HasPrefix(strings.ToLower(t), "run /")
+	return strings.HasPrefix(t, "✻") || limitHintRe.MatchString(strings.ToLower(strings.Join(strings.Fields(t), "")))
 }
+
+// limitHintRe is a notice's hint on a row of its own, flattened: the
+// commands limitCommand names, with only their own words, or "/upgrade to
+// increase your usage limit."
+var limitHintRe = regexp.MustCompile(`^(?:run)?(?:/upgradetoincreaseyourusagelimit|` +
+	strings.TrimSuffix(strings.TrimPrefix(limitCommand, `(?:[·.](?:run)?`), `)?`) + `)\.?$`)
 
 // limitAnswerEnds says whether rows, those under a notice, end its answer:
 // up to the prompt (its mark at the row's start, not an answer's indented

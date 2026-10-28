@@ -873,6 +873,12 @@ func TestHarnessLimitAnswerDrawnNoticeIsItsLastRow(t *testing.T) {
 		{"  ⎿  Usage limit reached\n\n✻ Churned for 0s\n\n" + claudeBoxWith(""), true},
 		{"  ⎿  You've hit your session limit.\n  That row is new.\n❯ ", false},
 		{"  ⎿  Usage limit reached\n\n  So the tests wait.\n❯ ", false},
+		// A hint is the notice's own, named: a sentence that starts with a
+		// command is the answer going on.
+		{"  ⎿  You've hit your session limit · resets 3pm\n     Run /usage-credits to ask your admin for more\n❯ ", true},
+		{"● You've hit your session limit · resets 3pm (America/Los_Angeles)\n  /usage shows how much is left, so I'll wait.\n❯ ", false},
+		{"● You've hit your session limit · resets 3pm (America/Los_Angeles)\n  Run /review once it resets and we're done.\n❯ ", false},
+		{"  ⎿  You've hit your session limit · resets 3pm\n     /usage shows the rest of the week.\n❯ ", false},
 	} {
 		if hit, _ := harnessLimitIn(tc.screen, "claude", limitTestNow); hit != tc.want {
 			t.Errorf("hit=%v, want %v: %q", hit, tc.want, tc.screen)
