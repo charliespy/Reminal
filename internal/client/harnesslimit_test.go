@@ -93,8 +93,6 @@ var limitScreens = []struct {
 	{"amp", "  You are out of credits. Add paid credits or choose a paid tier.\n", time.Time{}},
 	{"amp", "  Add credits to keep using Amp right now, or wait until the next hour starts for more free usage.\n", time.Time{}},
 	{"amp", "  Upgrade to a paid tier, or add credits to keep using Amp.\n", time.Time{}},
-	{"amp", "  You've reached your free usage limit\n", time.Time{}},
-	{"amp", "  You've exceeded your usage limit of $20.\n", time.Time{}},
 	{"amp", "  Rate limit exceeded. Try again shortly.\n", time.Time{}},
 	{"amp", "  Usage Quota Exceeded\n", time.Time{}},
 	{"pi", "  Monthly usage limit reached\n", time.Time{}},
@@ -102,6 +100,9 @@ var limitScreens = []struct {
 	{"pi", "  You have hit your ChatGPT usage limit.\n", time.Time{}},
 	{"pi", "  Hugging Face rate limit reached; retry in 30s\n", limitLA(2026, 10, 19, 10, 0).Add(30 * time.Second)},
 	{"agy", "  AI: Out of credits\n", time.Time{}},
+	// With the hint the CLI draws under it, in lower case (review).
+	{"claude", "  ⎿  You've hit your session limit · resets 3pm\n     run /usage-credits to ask your admin for more\n❯ ", limitLA(2026, 10, 19, 15, 0)},
+	{"codex", "■ You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.\nesc to interrupt\n› ", limitLA(2026, 10, 19, 15, 5)},
 	{"codex", "■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit\nhttps://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.\n\n› ", limitLA(2026, 10, 19, 15, 5)},
 	{"codex", "■ You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 21st, 2026 3:05 PM.\n› ", limitLA(2026, 10, 21, 15, 5)},
 	{"codex", "■ You’ve hit your usage limit. To get more access now, send a request to your admin or try again later.\n› ", time.Time{}},
@@ -912,8 +913,6 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"goose", "", "Rate limited — wait a moment and try again.", false},
 		{"amp", "", "You are out of credits. Add paid credits or choose a paid tier.", false},
 		{"amp", "", "Add credits to keep using Amp right now, or wait until the next hour starts for more free usage.", false},
-		{"amp", "", "You've reached your free usage limit", false},
-		{"amp", "", "You've exceeded your usage limit of $20.", false},
 		{"amp", "", "Rate limit exceeded. Try again shortly.", false},
 		{"amp", "", "Usage Quota Exceeded", false},
 		{"pi", "", "Monthly usage limit reached", false},
@@ -944,6 +943,26 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 			}
 		}
 	}
+	// Found in review: a sentence's wrapped last row, Claude Code's new
+	// forms in an answer or a code block, a Codex bullet, an answer naming a
+	// sum, a status word in a sentence.
+	for _, tc := range []struct{ prog, screen string }{
+		{"claude", "● I looked at the billing page. For your account it now says that\n  you're out of extra usage."},
+		{"goose", "  The provider said the account's\n  credits exhausted."},
+		{"amp", "  The dashboard shows the\n  usage quota exceeded."},
+		{"pi", "  It stopped once the\n  monthly usage limit reached."},
+		{"agy", "  The status bar then read\n  AI: out of credits."},
+		{"claude", "● You've reached your usage limit."},
+		{"claude", "  You've reached your monthly limit."},
+		{"claude", "● The message is:\n\n      Your organization is out of usage credits. Contact your admin to add more."},
+		{"codex", "• Your workspace is out of credits. Add credits to continue."},
+		{"amp", "  You've exceeded your usage limit of $20."},
+		{"amp", "  You've reached your free usage limit"},
+	} {
+		if hit, _ := harnessLimitIn(tc.screen, tc.prog, limitTestNow); hit {
+			t.Errorf("%s: read as at its limit: %q", tc.prog, tc.screen)
+		}
+	}
 	// What leaves the agent going: Claude Code going on now on another
 	// model, or once its limit has reset.
 	for _, screen := range []string{
@@ -954,5 +973,21 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		if hit, _ := harnessLimitIn(screen, "claude", limitTestNow); hit {
 			t.Errorf("claude: read as at its limit: %q", screen)
 		}
+	}
+}
+
+// A screen of long rows, as fast to read as one of short ones: notices are
+// joined with the rows under them only up to the longest a notice reads
+// (review: 200 rows of 2,220 characters took 438 ms for OpenCode, 747 ms
+// with the program not known).
+func BenchmarkHarnessLimitLongRows(b *testing.B) {
+	row := strings.Repeat("word ", 444)
+	screen := strings.Repeat(row+"\n", 200)
+	for _, prog := range []string{"opencode", ""} {
+		b.Run("prog="+prog, func(b *testing.B) {
+			for b.Loop() {
+				harnessLimitIn(screen, prog, limitTestNow)
+			}
+		})
 	}
 }

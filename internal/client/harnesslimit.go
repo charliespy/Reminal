@@ -46,6 +46,18 @@ type limitNotice struct {
 	// answer's last row has no glyph, nor does a narrow screen's second row
 	// of "Fast mode disabled · Out of usage credits" (review).
 	glyph string
+	// cased, if set, is how the notice's words are written, capitals and
+	// all, which the row must show: Antigravity's "AI: Out of credits", not
+	// a sentence's "AI: out of credits" (review).
+	cased string
+}
+
+// onCased is ns, each matched only on a row that writes lit as it is.
+func onCased(lit string, ns []limitNotice) []limitNotice {
+	for i := range ns {
+		ns[i].cased = lit
+	}
+	return ns
 }
 
 // onGlyph is ns, each matched only on a row led by one of glyph's marks.
@@ -141,12 +153,8 @@ var harnessLimitNotices = map[string][]limitNotice{
 		`you.?vehityour(?:team|org).?s(?:shared|monthly)[a-z]{0,16}(?:limit|budget)`,
 		`you.?vehityourchannel.?smonthly[a-z]{0,16}(?:limit|budget)`,
 		// Claude Code 2.1.312: what to do next after it ("You're out of
-		// usage credits. /model to switch models."), extra usage, a model's
-		// own limit, and its organization's.
+		// usage credits. /model to switch models.").
 		`you.?reoutofusagecredits(?:\.(?:/modeltoswitchmodels|switchtoanothermodel))?`,
-		`you.?reoutofextrausage`,
-		`you.?vereachedyour(?:session|weekly|daily|monthly|opus|sonnet|fable|usage)?limit`,
-		`yourorganizationisoutofusagecredits(?:\.contactyouradmintoaddmore)?`,
 		// Claude Code 2.1.312: a limit that could not be lifted, and the
 		// automatic continue that gave up. Each with its own row ending only.
 		// ("Fast mode disabled · Out of usage credits" is not one: fast mode
@@ -169,6 +177,11 @@ var harnessLimitNotices = map[string][]limitNotice{
 			`outofusagecredits`,
 			`usagelimitreached(?:again)?(?:·continuingautomatically(?:at`+limitWhen+`|in`+limitWait+`)?·esctocancel)?`,
 			`(?:fable|opus|sonnet)limitreached`,
+			// Claude Code 2.1.312: extra usage, a model's own limit, and its
+			// organization's — words an answer may say too (review).
+			`you.?reoutofextrausage`,
+			`you.?vereachedyour(?:session|weekly|daily|monthly|opus|sonnet|fable|usage)?limit`,
+			`yourorganizationisoutofusagecredits(?:\.contactyouradmintoaddmore)?`,
 		))...),
 	// Codex 0.163–0.165: "You’ve hit your usage limit. … try again at 3:05
 	// PM." (the time on the next row when it wraps), its workspace's limit
@@ -242,15 +255,15 @@ var harnessLimitNotices = map[string][]limitNotice{
 	"cursor-agent": wholeRows(`\.?`,
 		`upgradeyourplantocontinue`,
 	),
-	// Amp 0.0.1793131239: out of credits, a free tier's limit, a usage limit
-	// of a sum, its rate limit.
+	// Amp 0.0.1793131239: out of credits, what to do about it, its rate
+	// limit and quota. ("You've reached your free usage limit" and "You've
+	// exceeded your usage limit of $20" are words an answer may say too, and
+	// the mark Amp draws before its notices is not known: not read.)
 	"amp": wholeRows(`\.?`,
 		`youareoutofcredits\.addpaidcreditsorchooseapaidtier`,
 		`addcreditstokeepusingamp(?:rightnow,orwaituntilthenexthourstartsformorefreeusage)?`,
 		`upgradetoapaidtier,oraddcreditstokeepusingamp`,
 		`upgradetogigawattformoreincludedusage,oraddcreditstokeepusingamp`,
-		`you.?vereachedyourfreeusagelimit`,
-		`you.?veexceededyourusagelimitof\$?[0-9][0-9.,]*`,
 		`ratelimitexceeded\.tryagainshortly`,
 		`usagequotaexceeded`,
 	),
@@ -259,13 +272,13 @@ var harnessLimitNotices = map[string][]limitNotice{
 	"pi": wholeRows(`\.?`,
 		`monthlyusagelimitreached`,
 		`you(?:have|.?ve)hityourchatgptusagelimit`,
-		`you.?vereachedyourchatgptworkspace.?susagelimit(?:\.askyourworkspaceadmintoincreaseitatadmin\.openai\.com→workspace→usagelimits)?`,
+		`you.?vereachedyourchatgptworkspace.?susagelimit\.askyourworkspaceadmintoincreaseitatadmin\.openai\.com→workspace→usagelimits`,
 		`huggingfaceratelimitreached(?:;retryin`+limitWait+`)?`,
 	),
 	// Antigravity 1.4: out of credits, as its status row says it.
-	"agy": wholeRows(`\.?`,
+	"agy": onCased("AI: Out of credits", wholeRows(`\.?`,
 		`ai:outofcredits`,
-	),
+	)),
 }
 
 // limitPromptGlyphs are what an input prompt, or a person's message echoed
@@ -277,9 +290,9 @@ const limitPromptGlyphs = ">›❯"
 // (an agent's answer, a test's string), never is one.
 const limitQuoteGlyphs = "\"'`“”‘’«"
 
-// limitProseGlyphs open a list item, a heading or a table cell: an agent's
-// own text, never a notice (review).
-const limitProseGlyphs = "-*#|"
+// limitProseGlyphs open a list item (Codex's "•" too), a heading or a table
+// cell: an agent's own text, never a notice (review).
+const limitProseGlyphs = "-*#|•"
 
 // limitAnswerGlyphs open what answers a message: Claude Code's reply ("●")
 // and its tool's or notice's output ("⎿"). Only they end an echo.
@@ -347,7 +360,7 @@ func harnessLimitNoticesIn(tail, prog string, now time.Time) (int, time.Time, bo
 		for _, next := range below[:min(limitWrapRows, len(below))] {
 			more = append(more, strings.ToLower(strings.Join(strings.Fields(next), "")))
 		}
-		ok, used := limitRowIn(flat[:lead], core, more, below, prog)
+		ok, used := limitRowIn(flat[:lead], core, row, more, below, prog)
 		if !ok {
 			continue
 		}
@@ -431,20 +444,53 @@ func limitEchoRow(below []string) bool {
 	return false
 }
 
+// limitHintStarts open a row a CLI draws under its notice, in lower case:
+// a key to press, a command to run (review).
+var limitHintStarts = []string{"esc ", "ctrl", "run /", "press ", "enter to", "tab to", "shift+"}
+
+// limitJoinMax is the longest a notice reads, flattened, with the rows it
+// wraps onto (Codex's, with its links, is under 250): rows are joined only
+// up to it, so a screen of long rows is read as fast as one of short ones.
+const limitJoinMax = 320
+
 // limitRowIn reports whether a row (core: from its first letter or digit;
-// lead: the marks before it) is a limit notice of prog; of any CLI when prog
-// is "". more are the rows below it, flattened, that a whole notice may wrap
-// onto; used, how many it did. below are those rows as drawn, and the one
-// after them: a whole notice is not one when the row after it goes on in
-// lower case — that is a sentence wrapping on, not the next thing drawn.
-func limitRowIn(lead, core string, more, below []string, prog string) (bool, int) {
+// lead: the marks before it; row: as drawn) is a limit notice of prog; of
+// any CLI when prog is "". more are the rows below it, flattened, that a
+// whole notice may wrap onto; used, how many it did. below are those rows
+// as drawn, and the one after them.
+//
+// A whole notice is a CLI's own row: it starts with a capital or a digit (a
+// row that starts in lower case goes on a sentence from the row above), and
+// the row after it does not go on in lower case — that is a sentence
+// wrapping on, unless it is a hint the CLI draws under its notice ("esc to
+// interrupt", "run /usage-credits …").
+func limitRowIn(lead, core, row string, more, below []string, prog string) (bool, int) {
+	first := strings.IndexFunc(row, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) })
+	ownRow := first >= 0 && !unicode.IsLower([]rune(row[first:])[0])
+	drawn := strings.Join(strings.Fields(row), " ")
 	goesOn := func(used int) bool {
 		if used >= len(below) {
 			return false
 		}
 		t := strings.TrimSpace(below[used])
 		r := []rune(t)
-		return len(r) > 0 && unicode.IsLower(r[0])
+		if len(r) == 0 || !unicode.IsLower(r[0]) {
+			return false
+		}
+		for _, h := range limitHintStarts {
+			if strings.HasPrefix(t, h) {
+				return false
+			}
+		}
+		return true
+	}
+	joins := []string{core}
+	for _, m := range more {
+		j := joins[len(joins)-1] + m
+		if len(j) > limitJoinMax {
+			break
+		}
+		joins = append(joins, j)
 	}
 	match := func(ns []limitNotice) (bool, int) {
 		for _, n := range ns {
@@ -457,13 +503,12 @@ func limitRowIn(lead, core string, more, below []string, prog string) (bool, int
 				}
 				continue
 			}
-			row := core
-			if n.re.MatchString(row) && !goesOn(0) {
-				return true, 0
+			if !ownRow || (n.cased != "" && !strings.Contains(drawn, n.cased)) {
+				continue
 			}
-			for i, m := range more {
-				if row += m; n.re.MatchString(row) && !goesOn(i+1) {
-					return true, i + 1
+			for used, j := range joins {
+				if n.re.MatchString(j) && !goesOn(used) {
+					return true, used
 				}
 			}
 		}
