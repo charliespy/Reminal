@@ -438,9 +438,10 @@ func harnessLoginRowIn(l loginLines, i int, rs []loginRow) bool {
 
 // inAnswer reports whether row i is a person's text at the prompt ("❯ …"),
 // or in the same paragraph as one or as an answer's first row ("●", "⏺",
-// "⎿", Codex's "•", Gemini CLI's "✦"): the rows above it, up to a blank row or a row with no words (an
-// input box's rule, an empty prompt). "● The staging API returned 401:" then "Authentication
-// required." is an agent's answer, not a CLI's status line.
+// "⎿", Codex's "•", Gemini CLI's "✦"): the rows above it, up to a blank
+// row or a row with no words (an input box's rule, an empty prompt).
+// "● The staging API returned 401:" then "Authentication required." is an
+// agent's answer, not a CLI's status line.
 func (l loginLines) inAnswer(i int) bool {
 	for j := i; j >= 0; j-- {
 		flat := l.rows[j]
