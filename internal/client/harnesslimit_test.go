@@ -24,6 +24,11 @@ import (
 //	crush         0.98.1    inferred: no notice of its own; the service's words under "Provider Error"
 //	cursor-agent  2026.10.18 source "Upgrade your plan to continue" (the limit's words are its service's)
 //
+// Later releases' own words, from their bundles and binaries the same way
+// (2026-10-28): claude 2.1.312, codex 0.165.0, gemini 0.66.0, qwen 0.26.2,
+// opencode 1.19.4, goose 1.56.0, amp 0.0.1793131239, pi 1.4.0, agy 1.4.8.
+// Where a CLI's glyph before its notice is not known, the screen has none.
+//
 // The logged-out screens (TestHarnessLoggedOutScreens) were each captured
 // from the CLI itself, run with no login.
 var limitScreens = []struct {
@@ -50,6 +55,54 @@ var limitScreens = []struct {
 	{"claude", "  ⎿  A 5-hour limit reset isn't available right now.\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Automatic continue stopped after repeated usage limit hits · This task will not resume on its own (/rate-limit-options to try again)\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Automatic continue stopped after repeated usage limit hits · This task will not resume on its own (/rate-limit-op\n     tions to try again)\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You're out of usage credits. /model to switch models.\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You're out of usage credits. Run /usage-credits to keep using Claude\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Your org is out of usage · add funds to continue\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Your org is out of usage · contact your admin\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You're out of extra usage\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You've reached your Fable limit.\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Fable limit reached\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Your organization is out of usage credits. Contact your admin to add more.\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You've hit your monthly limit · run /usage-credits to adjust\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You've hit your team's shared budget. Run /usage-credits to raise it and keep using Claude or switch models to continue this chat.\n❯ ", time.Time{}},
+	// Held until the time it says, then going on by itself.
+	{"claude", "  ⎿  Usage limit reached · continuing automatically at 3pm · esc to cancel\n❯ ", limitLA(2026, 10, 19, 15, 0)},
+	{"claude", "  ⎿  Usage limit reached again · continuing automatically in 2h 5m · esc to cancel\n❯ ", limitLA(2026, 10, 19, 12, 5)},
+	{"codex", "■ Your workspace is out of credits. Add credits to continue.\n› ", time.Time{}},
+	{"codex", "■ You're out of credits. Your workspace is out of credits. Add credits to continue using Codex.\n› ", time.Time{}},
+	{"codex", "■ Your workspace is out of credits. Ask your workspace owner to refill in order to continue.\n› ", time.Time{}},
+	{"codex", "■ You've reached your workspace credit limit\n› ", time.Time{}},
+	{"codex", "■ Your included usage is exhausted. Choose an option below to continue.\n› ", time.Time{}},
+	// On a phone's narrow screen: four rows.
+	{"codex", "■ You’ve hit your usage limit. Upgrade to Pro\n(https://chatgpt.com/explore/pro), visit\nhttps://chatgpt.com/settings/usage to purchase\nmore credits or try again at 3:05 PM.\n\n› ", limitLA(2026, 10, 19, 15, 5)},
+	{"gemini", "✕ Rate limit exceeded. Try again later.\n│ > │", time.Time{}},
+	{"gemini", "✕ Rate limit exceeded\n│ > │", time.Time{}},
+	{"gemini", "✕ Please wait and try again later. To increase your limits, request a quota increase through AI Studio, or switch to another /auth method\n│ > │", time.Time{}},
+	{"qwen", "✕ Quota exhausted\n│ > │", time.Time{}},
+	{"qwen", "✕ [API Error: Quota exhausted]\n│ > │", time.Time{}},
+	{"qwen", "✕ Rate limit exceeded. Please wait and try again.\n│ > │", time.Time{}},
+	{"qwen", "✕ Model API rate limit exceeded (HTTP 429). Wait and try again later.\n│ > │", time.Time{}},
+	{"qwen", "✕ Qwen OAuth quota exceeded\n│ > │", time.Time{}},
+	{"opencode", "┃  Usage limit reached. To continue using this model now, enable usage from your available balance\n┃", time.Time{}},
+	{"opencode", "┃  Free limit reached\n┃", time.Time{}},
+	{"opencode", "┃  Go limit reached\n┃", time.Time{}},
+	{"opencode", "┃  Free usage exceeded, subscribe to Go\n┃", time.Time{}},
+	{"goose", "  Credits exhausted\n( O)> ", time.Time{}},
+	{"goose", "  Ran into this error: Credits exhausted.\n( O)> ", time.Time{}},
+	{"goose", "  Please add credits to your account, then resend your message to continue.\n( O)> ", time.Time{}},
+	{"amp", "  You are out of credits. Add paid credits or choose a paid tier.\n", time.Time{}},
+	{"amp", "  Add credits to keep using Amp right now, or wait until the next hour starts for more free usage.\n", time.Time{}},
+	{"amp", "  Upgrade to a paid tier, or add credits to keep using Amp.\n", time.Time{}},
+	{"amp", "  Rate limit exceeded. Try again shortly.\n", time.Time{}},
+	{"amp", "  Usage Quota Exceeded\n", time.Time{}},
+	{"pi", "  Monthly usage limit reached\n", time.Time{}},
+	{"pi", "  You've reached your ChatGPT workspace's usage limit. Ask your workspace admin to increase it at admin.openai.com → Workspace → Usage limits.\n", time.Time{}},
+	{"pi", "  You have hit your ChatGPT usage limit.\n", time.Time{}},
+	{"pi", "  Hugging Face rate limit reached; retry in 30s\n", limitLA(2026, 10, 19, 10, 0).Add(30 * time.Second)},
+	{"agy", "  AI: Out of credits\n", time.Time{}},
+	// With the hint the CLI draws under it, in lower case (review).
+	{"claude", "  ⎿  You've hit your session limit · resets 3pm\n     run /usage-credits to ask your admin for more\n❯ ", limitLA(2026, 10, 19, 15, 0)},
+	{"codex", "■ You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.\nesc to interrupt\n› ", limitLA(2026, 10, 19, 15, 5)},
 	{"codex", "■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit\nhttps://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.\n\n› ", limitLA(2026, 10, 19, 15, 5)},
 	{"codex", "■ You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 21st, 2026 3:05 PM.\n› ", limitLA(2026, 10, 21, 15, 5)},
 	{"codex", "■ You’ve hit your usage limit. To get more access now, send a request to your admin or try again later.\n› ", time.Time{}},
@@ -58,6 +111,9 @@ var limitScreens = []struct {
 	{"qwen", "✕ [API Error: Request failed with status code 429 (Status: 429)]\nPossible quota limitations in place or slow response times detected. Please wait and try again later.\n│ > │", time.Time{}},
 	{"opencode", "┃  Usage limit reached. It will reset in 3 hours 20 minutes. To continue using this model now, enable usage from your available balance\n┃", limitLA(2026, 10, 19, 13, 20)},
 	{"opencode", "┃  Rate limit exceeded, retry in 45s\n┃", limitLA(2026, 10, 19, 10, 0).Add(45 * time.Second)},
+	// Led by the model's id, in lower case as OpenCode writes it (review).
+	{"opencode", "┃  claude-sonnet-4 usage limit reached. It will reset in 3 hours 20 minutes.\n┃", limitLA(2026, 10, 19, 13, 20)},
+	{"opencode", "┃  gpt-5 usage limit reached. To continue using this model now, enable usage from your available balance\n┃", time.Time{}},
 	{"goose", "  Ran into this error: Rate limit exceeded: 429 Too Many Requests.\n\n  Please retry if you think this is a transient or recoverable error.\n( O)> ", time.Time{}},
 	{"goose", "  Rate limited — wait a moment and try again.\n( O)> ", time.Time{}},
 	{"crush", "  Provider Error\n  You exceeded your current quota, please check your plan and billing details.\n", time.Time{}},
@@ -123,6 +179,11 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		{"claude", "  ⎿  Continue now at lower priority after reaching your 5-hour limit; run again to stop", "an option that keeps it going"},
 		{"claude", "● Out of usage credits is what it shows when the balance runs out.", "an answer quoting the notice"},
 		{"claude", "● You've hit your channel's monthly spend limit. That row is new in this version.", "an answer quoting the notice"},
+		// An answer's own sentence, as a notice's words with nothing a notice
+		// carries after them (no reset, no command): not the notice (review).
+		{"claude", "● You've hit your session limit.", "an answer saying it, no reset or command"},
+		{"claude", "● Your org is out of usage.", "an answer saying it, no command"},
+		{"opencode", "┃  gpt-5 usage limit reached is what it printed earlier.", "a sentence that starts with a model's id and goes on"},
 		{"claude", "● Couldn't reset your 5-hour limit with this login · run /login, then try again, is the row it prints.", "an answer quoting the notice"},
 		{"claude", "● A 5-hour limit reset isn't available right now, so I waited.", "an answer quoting the notice"},
 		{"claude", "● Automatic continue stopped after repeated usage limit hits · This task will not resume on its own (/rate-limit-options to try again) is the new row.", "an answer quoting the notice"},
@@ -788,6 +849,51 @@ func TestHarnessLimitQuotedInAnAnswer(t *testing.T) {
 	}
 }
 
+// A notice Claude Code draws as an answer (●) is that answer's last row: an
+// answer that quotes one and goes on, below it or after a blank row, is not
+// it; nor is one quoted or under an answer's own words (review).
+func TestHarnessLimitAnswerDrawnNoticeIsItsLastRow(t *testing.T) {
+	for _, tc := range []struct {
+		screen string
+		want   bool
+	}{
+		{"● You've hit your limit · resets 11:15am (America/Los_Angeles)\n❯ ", true},
+		{"● You've hit your weekly limit · /usage-credits to keep using Claude\n❯ ", true},
+		{"● You've hit your session limit · resets 3pm\n\n✻ Churned for 0s\n\n" + claudeBoxWith(""), true},
+		{"● You've hit your session limit · resets 3pm", true},
+		{"● You've hit your session limit · resets 3pm (America/Los_Angeles)\n  That is the row it drew before it stopped.\n❯ ", false},
+		{"● You've hit your session limit · resets 3pm\n\n  So the review waits until then.\n❯ ", false},
+		{"● You've hit your session limit · resets 3pm\n● Next I'll pick up the deploy.\n❯ ", false},
+		{"● Here is what it showed:\n\n  You've hit your session limit · resets 3pm (America/Los_Angeles)\n❯ ", false},
+		{"● `You've hit your session limit · resets 3pm`\n❯ ", false},
+		{"● \"You've hit your session limit · resets 3pm\"\n❯ ", false},
+	} {
+		if hit, _ := harnessLimitIn(tc.screen, "claude", limitTestNow); hit != tc.want {
+			t.Errorf("hit=%v, want %v: %q", hit, tc.want, tc.screen)
+		}
+	}
+}
+
+// OpenCode's notice may start with a model's id in lower case: one with a
+// digit, or a known maker's, not any hyphenated word (review).
+func TestHarnessLimitModelLedNotice(t *testing.T) {
+	for _, tc := range []struct {
+		screen string
+		want   bool
+	}{
+		{"┃  gpt-5 usage limit reached. It will reset in 2 hours.\n┃", true},
+		{"┃  claude-sonnet usage limit reached. It will reset in 2 hours.\n┃", true},
+		{"┃  qwen3-coder usage limit reached. It will reset in 2 hours.\n┃", true},
+		{"┃  re-run usage limit reached. It will reset in 2 hours.\n┃", false},
+		{"┃  a-b usage limit reached. It will reset in 2 hours.\n┃", false},
+		{"┃  gpt-5 usage limit reached is what it printed earlier.", false},
+	} {
+		if hit, _ := harnessLimitIn(tc.screen, "opencode", limitTestNow); hit != tc.want {
+			t.Errorf("hit=%v, want %v: %q", hit, tc.want, tc.screen)
+		}
+	}
+}
+
 // claudeBoxWith is Claude Code's input box holding draft, and the footer
 // under it (claudeBox, in attention_probe_test.go, is the box alone).
 func claudeBoxWith(draft string) string {
@@ -810,4 +916,131 @@ func limitedAfterTurn(t *testing.T, screen string) bool {
 	a.noteHarnessLimit(screen, "claude", false, turn, end, "")
 	l, _ := a.harnessLimitedNow()
 	return l
+}
+
+// Each notice the later releases added, as an agent's own text: a sentence
+// that goes on after its words, its words quoted or mid-sentence, a
+// sentence that wraps on with them; and a notice whose words are plain
+// enough to end anyone's sentence, with no glyph before it, as a wrapped
+// sentence's last row. None is the notice.
+func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
+	const carryOn = ", so I paused the deploy and will pick it up after lunch."
+	for _, n := range []struct {
+		prog, glyph, text string
+		bare              bool // its words are the notice only after its glyph
+	}{
+		{"claude", "⎿  ", "You're out of usage credits. /model to switch models.", false},
+		{"claude", "⎿  ", "You're out of usage credits. Run /usage-credits to keep using Claude", false},
+		{"claude", "⎿  ", "Your org is out of usage · add funds to continue", false},
+		{"claude", "⎿  ", "Your org is out of usage · contact your admin", false},
+		{"claude", "⎿  ", "You're out of extra usage", false},
+		{"claude", "⎿  ", "You've reached your Fable limit.", false},
+		{"claude", "⎿  ", "Your organization is out of usage credits. Contact your admin to add more.", false},
+		{"claude", "⎿  ", "You've hit your monthly limit · run /usage-credits to adjust", false},
+		{"claude", "⎿  ", "Fable limit reached", true},
+		{"claude", "⎿  ", "Usage limit reached · continuing automatically at 3pm · esc to cancel", true},
+		{"codex", "■ ", "Your workspace is out of credits. Add credits to continue.", false},
+		{"codex", "■ ", "Your workspace is out of credits. Ask your workspace owner to refill in order to continue.", false},
+		{"codex", "■ ", "You've reached your workspace credit limit", false},
+		{"codex", "■ ", "Your included usage is exhausted. Choose an option below to continue.", false},
+		{"codex", "■ ", "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.", false},
+		{"gemini", "✕ ", "Rate limit exceeded. Try again later.", false},
+		{"gemini", "✕ ", "Rate limit exceeded", true},
+		{"gemini", "✕ ", "You have exhausted your daily quota on this model.", false},
+		{"gemini", "✕ ", "Usage limit reached for gemini-2.5-pro.", false},
+		{"gemini", "✕ ", "Please wait and try again later. To increase your limits, request a quota increase through AI Studio, or switch to another /auth method", false},
+		{"qwen", "✕ ", "Quota exhausted", true},
+		{"qwen", "✕ ", "Rate limit exceeded", true},
+		{"qwen", "✕ ", "Rate limit exceeded. Please wait and try again.", false},
+		{"qwen", "✕ ", "Model API rate limit exceeded (HTTP 429). Wait and try again later.", false},
+		{"qwen", "✕ ", "Qwen OAuth quota exceeded", false},
+		{"qwen", "✕ ", "Possible quota limitations in place or slow response times detected. Please wait and try again later.", false},
+		{"opencode", "┃  ", "Usage limit reached. To continue using this model now, enable usage from your available balance", false},
+		{"opencode", "┃  ", "Free limit reached", false},
+		{"opencode", "┃  ", "Go limit reached", false},
+		{"opencode", "┃  ", "Free usage exceeded, subscribe to Go", false},
+		{"opencode", "┃  ", "Quota exceeded. Check your plan and billing details.", false},
+		{"goose", "", "Credits exhausted", false},
+		{"goose", "", "Ran into this error: Credits exhausted.", false},
+		{"goose", "", "Please add credits to your account, then resend your message to continue.", false},
+		{"goose", "", "Rate limited — wait a moment and try again.", false},
+		{"amp", "", "You are out of credits. Add paid credits or choose a paid tier.", false},
+		{"amp", "", "Add credits to keep using Amp right now, or wait until the next hour starts for more free usage.", false},
+		{"amp", "", "Rate limit exceeded. Try again shortly.", false},
+		{"amp", "", "Usage Quota Exceeded", false},
+		{"pi", "", "Monthly usage limit reached", false},
+		{"pi", "", "You've reached your ChatGPT workspace's usage limit. Ask your workspace admin to increase it at admin.openai.com → Workspace → Usage limits.", false},
+		{"pi", "", "Hugging Face rate limit reached; retry in 30s", false},
+		{"agy", "", "AI: Out of credits", false},
+	} {
+		words := strings.TrimRight(n.text, ".")
+		if hit, _ := harnessLimitIn("  "+n.glyph+n.text+"\n", n.prog, limitTestNow); !hit {
+			t.Errorf("%s: the notice itself not seen: %q", n.prog, n.glyph+n.text)
+		}
+		for why, screen := range map[string]string{
+			"a sentence that goes on":       "  " + n.glyph + words + carryOn,
+			"an answer that goes on":        "● " + words + carryOn,
+			"quoted mid-sentence":           "● The screen said " + words + " and the agent stopped.",
+			"quoted at a row's start":       "  \"" + n.text + "\" is what it prints.",
+			"a sentence that wraps on":      "● It stopped after this:\n  " + words + carryOn,
+			"wrapped, going on on the next": "● It stopped after this:\n  " + words + "\n  and then the agent went on with the next file.",
+		} {
+			if hit, _ := harnessLimitIn(screen, n.prog, limitTestNow); hit {
+				t.Errorf("%s (%s): read as at its limit: %q", n.prog, why, screen)
+			}
+		}
+		if n.bare {
+			screen := "● It stopped because the review session said\n  " + strings.ToLower(n.text[:1]) + n.text[1:]
+			if hit, _ := harnessLimitIn(screen, n.prog, limitTestNow); hit {
+				t.Errorf("%s (a wrapped sentence's last row, no glyph): read as at its limit: %q", n.prog, screen)
+			}
+		}
+	}
+	// Found in review: a sentence's wrapped last row, Claude Code's new
+	// forms in an answer or a code block, a Codex bullet, an answer naming a
+	// sum, a status word in a sentence.
+	for _, tc := range []struct{ prog, screen string }{
+		{"claude", "● I looked at the billing page. For your account it now says that\n  you're out of extra usage."},
+		{"goose", "  The provider said the account's\n  credits exhausted."},
+		{"amp", "  The dashboard shows the\n  usage quota exceeded."},
+		{"pi", "  It stopped once the\n  monthly usage limit reached."},
+		{"agy", "  The status bar then read\n  AI: out of credits."},
+		{"claude", "● You've reached your usage limit."},
+		{"claude", "  You've reached your monthly limit."},
+		{"claude", "● The message is:\n\n      Your organization is out of usage credits. Contact your admin to add more."},
+		{"codex", "• Your workspace is out of credits. Add credits to continue."},
+		{"amp", "  You've exceeded your usage limit of $20."},
+		{"amp", "  You've reached your free usage limit"},
+	} {
+		if hit, _ := harnessLimitIn(tc.screen, tc.prog, limitTestNow); hit {
+			t.Errorf("%s: read as at its limit: %q", tc.prog, tc.screen)
+		}
+	}
+	// What leaves the agent going: Claude Code going on now on another
+	// model, or once its limit has reset.
+	for _, screen := range []string{
+		"  ⎿  Fable limit reached · continuing on Opus uses usage credits",
+		"  ⎿  Usage limit reset · Continuing automatically",
+		"  ⎿  [Usage limit reached — grace window active. Checkpoint now: finish the",
+	} {
+		if hit, _ := harnessLimitIn(screen, "claude", limitTestNow); hit {
+			t.Errorf("claude: read as at its limit: %q", screen)
+		}
+	}
+}
+
+// A screen of long rows, as fast to read as one of short ones: notices are
+// joined with the rows under them only up to the longest a notice reads
+// (review: 200 rows of 2,220 characters took 438 ms for OpenCode, 747 ms
+// with the program not known).
+func BenchmarkHarnessLimitLongRows(b *testing.B) {
+	row := strings.Repeat("word ", 444)
+	screen := strings.Repeat(row+"\n", 200)
+	for _, prog := range []string{"opencode", ""} {
+		b.Run("prog="+prog, func(b *testing.B) {
+			for b.Loop() {
+				harnessLimitIn(screen, prog, limitTestNow)
+			}
+		})
+	}
 }
