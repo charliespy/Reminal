@@ -825,9 +825,86 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 	return st, plan, nil
 }
 
+// maxTypedHeld is how much a person may type while a restored session's
+// resume waits, kept: past it, what was held is typed at once.
+const maxTypedHeld = 64 << 10
+
+// typedHoldMax is how long what a person typed is held at most, from their
+// first key: a resume that waits on a relay slow to answer (its first try
+// can take 45 s) does not keep someone typing at the session unanswered.
+// Past it, what was held is typed, and the resume after it when it comes.
+var typedHoldMax = 12 * time.Second
+
+// holdTyped holds what a person types until releaseTyped: a restored
+// session's resume is typed first, on a line of its own.
+func (a *Agent) holdTyped() {
+	a.typedMu.Lock()
+	a.typedHolding = true
+	a.typedDone = make(chan struct{})
+	a.typedMu.Unlock()
+}
+
+// awaitTyped waits, as long as a person's keys may be held at most, until
+// nothing is: an agent's keys (the keys control: MCP send_keys) are typed
+// after the resume too, not into the middle of it.
+func (a *Agent) awaitTyped() {
+	a.typedMu.Lock()
+	done := a.typedDone
+	a.typedMu.Unlock()
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(typedHoldMax):
+	}
+}
+
+// releaseTyped types what was held, in order, and lets what is typed next
+// go straight to the shell.
+func (a *Agent) releaseTyped() {
+	a.typedMu.Lock()
+	defer a.typedMu.Unlock()
+	a.typedHolding = false
+	if a.typedTimer != nil {
+		a.typedTimer.Stop()
+		a.typedTimer = nil
+	}
+	if len(a.typedHeld) > 0 && a.term != nil {
+		_, _ = a.term.Write(a.typedHeld)
+	}
+	a.typedHeld = nil
+	if a.typedDone != nil {
+		close(a.typedDone)
+		a.typedDone = nil
+	}
+}
+
+// typeIn is what a person typed, into the shell: held while a restored
+// session's resume waits (holdTyped), never lost.
+func (a *Agent) typeIn(data []byte) (int, error) {
+	a.typedMu.Lock()
+	if a.typedHolding && len(a.typedHeld)+len(data) <= maxTypedHeld {
+		if a.typedTimer == nil {
+			a.typedTimer = time.AfterFunc(typedHoldMax, a.releaseTyped)
+		}
+		a.typedHeld = append(a.typedHeld, data...)
+		a.typedMu.Unlock()
+		return len(data), nil
+	}
+	holding := a.typedHolding
+	a.typedMu.Unlock()
+	if holding { // more than is kept: the person's keys first, as typed
+		a.releaseTyped()
+	}
+	return a.term.Write(data)
+}
+
 // restoreStart runs once the new shell is up: the banner, then — when an
 // agent was running — the command that resumes it, typed at the prompt.
+// What a person types meanwhile is typed after it (holdTyped).
 func (a *Agent) restoreStart() {
+	defer a.releaseTyped()
 	// Not before the session's first try at the relay is over (registered,
 	// or the relay unreachable or refusing): resuming a long conversation is
 	// seconds of CPU (claude --resume of a 300 MB one is ~20 s on a quarter
@@ -850,15 +927,26 @@ func (a *Agent) restoreStart() {
 	if run == "" {
 		return
 	}
-	// The prompt is drawn when the shell has printed and gone quiet.
-	start := a.buf.LatestSeq()
-	last, quietSince := start, time.Now()
+	// The prompt is drawn when the shell has printed and gone quiet. Printed
+	// since it started, not since this began to look: its prompt is usually
+	// drawn while the session's first try at the relay is waited for, above,
+	// and this session's own lines (the banner, the note) are not the
+	// shell's. Until it has printed, it is still starting: nothing is typed.
+	// Nor while the cursor is at the start of a row: a shell that printed a
+	// line ("Last login: …", a message of the day) and is still starting
+	// (an nvm, conda or pyenv set-up) has not drawn its prompt, which leaves
+	// the cursor after it; ConPTY's first paint leaves it at home. No screen
+	// to ask: printed and quiet is enough. The deadline stands for a prompt
+	// none of this sees.
+	last, quietSince := a.buf.LatestSeq(), time.Now()
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 		if s := a.buf.LatestSeq(); s != last {
 			last, quietSince = s, time.Now()
 		}
-		if last != start && time.Since(quietSince) > 700*time.Millisecond {
-			break
+		if a.shellPrinted.Load() && time.Since(quietSince) > 700*time.Millisecond {
+			if _, col, ok := a.cursorRow(); col > 0 || !ok {
+				break
+			}
 		}
 	}
 	// Nothing but text is ever typed: the plan leaves out what holds a
