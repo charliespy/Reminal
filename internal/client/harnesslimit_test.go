@@ -1118,6 +1118,11 @@ func TestHarnessLimitClaudeWaitFooter(t *testing.T) {
 		"an editor in insert mode":   rule + "\n❯ \n" + rule + "\n" + status + "\n-- INSERT --",
 		"a pager's prompt":           rule + "\n❯ \n" + rule + "\n" + status + "\n:",
 		"a pager at its end":         rule + "\n❯ \n" + rule + "\n" + status + "\n(END)",
+		"an editor's mode, padded":   rule + "\n❯ \n" + rule + "\n" + status + "\n-- INSERT --   ",
+		"an editor recording":        rule + "\n❯ \n" + rule + "\n" + status + "\n-- INSERT --recording @q",
+		"an editor's visual line":    rule + "\n❯ \n" + rule + "\n" + status + "\n-- VISUAL LINE --",
+		"a pager's prompt, padded":   rule + "\n❯ \n" + rule + "\n" + status + "\n:   ",
+		"a pager at its end, padded": rule + "\n❯ \n" + rule + "\n" + status + "\n(END)   ",
 		"a dialog under it":          rule + "\n❯ earlier message\n" + rule + "\n" + status + "\n╭──────────────────╮\n│ Allow this?      │\n│ ❯ 1. Yes         │\n╰──────────────────╯",
 	} {
 		for _, prog := range []string{"claude", ""} {
