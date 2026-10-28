@@ -16,9 +16,6 @@ type loginRowCase struct {
 	refused   bool // a key it was given and refused (harnessKeyRefusals)
 	bottom    bool // read only on the last few rows: its status line
 	notice    bool // Claude Code's notice shape (harnessNoticeRow), read on its own row only
-	// howTo: a status line already saying what to do (loginHowTo): what
-	// follows that on its row is taken as more of it, a sentence's worth.
-	howTo bool
 }
 
 var loginRowCases = []loginRowCase{
@@ -111,9 +108,9 @@ var loginRowCases = []loginRowCase{
 
 	// What any CLI may say of its login on its own status rows.
 	{prog: "gemini", row: " Authentication required.", bottom: true},
-	{prog: "claude", row: "  Authentication required · Sign in again to continue", bottom: true, howTo: true},
+	{prog: "claude", row: "  Authentication required · Sign in again to continue", bottom: true},
 	{prog: "claude", row: " Please log in with a permitted organization: claude auth login", bottom: true},
-	{prog: "claude", row: "  login required — run /login", bottom: true, howTo: true},
+	{prog: "claude", row: "  login required — run /login", bottom: true},
 	{prog: "claude", row: " Login expired", bottom: true},
 	{prog: "claude", row: " Not logged in", bottom: true},
 	{prog: "claude", row: " Waiting for authorization… (^C to cancel)", bottom: true},
@@ -219,9 +216,6 @@ func TestLoginWordsInAnAgentsOwnTextAreNotALogin(t *testing.T) {
 			// A row whose first half is itself a whole row a CLI draws
 			// ("Waiting for authentication" of "… callback...") reads as
 			// that row, wrapped or not: nothing on a screen tells them apart.
-			if c.howTo && (s.what == "carries on" || s.what == "wrapped, carrying on") {
-				continue
-			}
 			if s.what == "wrapped, carrying on" && loggedOutBy(harnessTail(c.screenWith(lead+first), harnessRows), c.prog) {
 				t.Logf("%s: %q alone is a whole row: its wrap is not told apart", c.prog, lead+first)
 				continue
@@ -447,10 +441,58 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"Gemini CLI's answer (✦), its last row \"Authentication required.\"", "gemini", "✦ The staging API answered 401:\n  Authentication required.", false},
 		{"a tool's output's last row", "claude", "  ⎿  Fetched https://staging.example.com/api\n     Authentication required.", false},
 		{"a person's text at the prompt", "claude", "────\n❯ why does it say\n  Authentication required.\n────", false},
-		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", true},
+		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", false},
 	} {
 		if got := harnessProblemIn(c.tail, c.prog); got != c.want {
 			t.Errorf("%s (as %q): logged out %v, want %v:\n%s", c.name, c.prog, got, c.want, c.tail)
+		}
+	}
+}
+
+// A status line's "what to do" is only its command or its sign-in words, to
+// the row's end: an agent's sentence that starts as one and goes on, as the
+// bottom row or right above a bare prompt, is not a login (review).
+func TestLoginStatusHowToEndsTheRow(t *testing.T) {
+	const notice = "Login expired · Please run /login"
+	for _, tail := range []string{
+		" so I paused the deploy.",
+		", then retry.",
+		" so I paused the deploy and will pick the work up again after lunch.",
+	} {
+		for _, glyph := range []string{"", "● ", "  ⎿  ", "• "} {
+			for _, screen := range []string{glyph + notice + tail, glyph + notice + tail + "\n\n❯ "} {
+				for _, prog := range []string{"claude", "codex", ""} {
+					if harnessProblemIn(screen, prog) {
+						t.Errorf("as %q: read as logged out: %q", prog, screen)
+					}
+				}
+			}
+		}
+	}
+	for _, row := range []string{
+		" Login expired · Please run /login",
+		" Login expired. Please run /login.",
+		" Login required · run `codex login`",
+		" Not logged in. Run `agent login` first.",
+		" Not logged in. Run `cursor-agent login` first.",
+		" Not logged in · Run /login to sign in again",
+		" Authentication required: use /auth",
+		" Authentication required · Please re-authenticate",
+		" Authentication required · Sign in again to continue      ? for shortcuts",
+		" Authentication required (press Enter to sign in)",
+	} {
+		for _, prog := range []string{"claude", "cursor-agent", ""} {
+			for _, screen := range []string{row, "● Done.\n────\n❯ \n────\n" + row} {
+				if !harnessProblemIn(screen, prog) {
+					t.Errorf("as %q: its status row not read as logged out: %q", prog, screen)
+				}
+			}
+		}
+	}
+	// A command's "first" ends the row too; what goes on after it does not.
+	for _, prog := range []string{"codex", "cursor-agent", ""} {
+		if screen := " Login required · run `codex login` first, then retry"; harnessProblemIn(screen, prog) {
+			t.Errorf("as %q: read as logged out: %q", prog, screen)
 		}
 	}
 }
