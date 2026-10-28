@@ -466,10 +466,17 @@ var limitFooterGap = regexp.MustCompile(`\s{2,}`)
 // waits out, flattened, or "": read only under its input box, where an
 // answer never is, each row whole or as its status row's right-hand part
 // ("⏵⏵ auto mode on (shift+tab to cycle)    Usage limit reached · …").
+// The footer is the screen's last rows: under it, a program drawn over
+// Claude Code (an editor's "~" rows, a dialog's border, a file's name in
+// quotes) says the box above is not Claude's live one (review).
 func claudeFooterLimit(rows []string) string {
 	said := ""
 	for _, r := range rows[claudeBoxEnd(rows)+1:] {
-		parts := limitFooterGap.Split(strings.TrimSpace(r), -1)
+		t := strings.TrimSpace(r)
+		if strings.ContainsAny(firstRune(t), claudeFooterNever) {
+			return ""
+		}
+		parts := limitFooterGap.Split(t, -1)
 		if end := strings.ToLower(strings.Join(strings.Fields(parts[len(parts)-1]), "")); claudeWaitFooter.MatchString(end) {
 			said += end
 		}
@@ -477,15 +484,21 @@ func claudeFooterLimit(rows []string) string {
 	return said
 }
 
+// claudeFooterNever open rows Claude Code's footer never draws: an editor's
+// empty lines, a box's border, a quote.
+const claudeFooterNever = "~│╭╰┃┌└" + limitQuoteGlyphs
+
 // claudeBoxEnd is the row of the rule that closes Claude Code's lowest input
 // box (a rule, its prompt "❯" at the row's start, perhaps a draft's rows, a
 // rule), or the screen's last row when it shows none: nothing is under it.
+// Its end is the lowest rule under the prompt: a draft may hold rules of its
+// own (a pasted screen), and the footer draws none (review).
 func claudeBoxEnd(rows []string) int {
 	for i := len(rows) - 1; i > 0; i-- {
 		if !strings.HasPrefix(rows[i], "❯") || !attnIsRule(rows[i-1]) {
 			continue
 		}
-		for j := i + 1; j < len(rows); j++ {
+		for j := len(rows) - 1; j > i; j-- {
 			if attnIsRule(rows[j]) {
 				return j
 			}

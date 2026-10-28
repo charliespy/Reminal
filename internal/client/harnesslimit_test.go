@@ -1106,6 +1106,23 @@ func TestHarnessLimitClaudeWaitFooter(t *testing.T) {
 			t.Errorf("%s (as %q): read as at its limit:\n%s", why, tc.prog, tc.screen)
 		}
 	}
+	// A person's draft in the box, with rules of its own (a pasted screen):
+	// the box ends at its lowest rule. And a program drawn over Claude Code
+	// under a box: the footer is the screen's last rows (review).
+	shortcuts := "\n" + rule + "\n  ? for shortcuts"
+	for why, screen := range map[string]string{
+		"a draft with a rule":        "● Done.\n" + rule + "\n❯ look at this:\n  " + rule + "\n" + status + shortcuts,
+		"a draft with dashes":        "● Done.\n" + rule + "\n❯ notes\n  --------\n" + status + "\n" + next + shortcuts,
+		"a pasted screen in a draft": "● Done.\n" + rule + "\n❯ it showed:\n  " + rule + "\n  ❯\n  " + rule + "\n" + status + shortcuts,
+		"an editor over it":          rule + "\n❯ \n" + rule + "\n" + status + "\n~\n~\n\"notes.txt\" 3L, 40B",
+		"a dialog under it":          rule + "\n❯ earlier message\n" + rule + "\n" + status + "\n╭──────────────────╮\n│ Allow this?      │\n│ ❯ 1. Yes         │\n╰──────────────────╯",
+	} {
+		for _, prog := range []string{"claude", ""} {
+			if hit, _ := harnessLimitIn(screen, prog, limitTestNow); hit {
+				t.Errorf("%s (as %q): read as at its limit:\n%s", why, prog, screen)
+			}
+		}
+	}
 	if !limitedAfterTurn(t, box+status+"\n"+next) {
 		t.Error("a session waiting to go on by itself is not held as limited")
 	}
