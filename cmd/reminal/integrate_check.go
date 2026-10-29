@@ -43,7 +43,7 @@ func checkIntegration(t agentTarget, home, exe string) protocol.IntegrationStatu
 		Bin: t.Bin, Name: t.Name,
 		HooksWanted: t.hooks != nil,
 		Restart:     restartHint(t),
-		Resume:      t.resume,
+		Resume:      t.resumeHint(),
 		Since:       setUpAt(home)[t.Bin],
 	}
 	if _, err := exec.LookPath(t.Bin); err == nil {
@@ -281,10 +281,10 @@ func tildePath(home, path string) string {
 // MCP servers when it starts, so a running copy has to be quit and started
 // again — with its resume option, or the conversation is gone.
 func restartHint(t agentTarget) string {
-	if t.resume == "" {
+	if t.resumeHint() == "" {
 		return fmt.Sprintf("Quit %s and start it again so it loads the tools.", t.Name)
 	}
-	return fmt.Sprintf("Quit %s with its exit command, then run `%s` — a plain `%s` starts a new chat.", t.Name, t.resume, t.Bin)
+	return fmt.Sprintf("Quit %s with its exit command, then run `%s` — a plain `%s` starts a new chat.", t.Name, t.resumeHint(), t.Bin)
 }
 
 // ---- When each agent was set up -------------------------------------------

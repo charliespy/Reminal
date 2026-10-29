@@ -14,7 +14,7 @@ import (
 	"reminal/internal/session"
 )
 
-// convStore is where a coding agent keeps its conversations, for a sleep
+// convStore is where a coding agent keeps its conversations (resumer.store), for a sleep
 // and a wake to check the one it slept in is there: so it never sleeps on,
 // or wakes to, a conversation it could not open.
 type convStore struct {
@@ -26,28 +26,35 @@ type convStore struct {
 	has func(conv, cwd string) (there, known bool)
 }
 
-// convStores are the coding agents that sleep, by program name.
-var convStores = map[string]convStore{
-	// <its folder>/projects/<project>/<conv>.jsonl
-	"claude": {file: func(conv string) string { return underDir(claudeConfigDir(), "projects", "*", conv+".jsonl") }},
-	// <CODEX_HOME, else ~/.codex>/sessions/<year>/<month>/<day>/rollout-<when>-<conv>.jsonl
-	"codex": {file: func(conv string) string {
-		return underDir(codexHome(), "sessions", "*", "*", "*", "rollout-*-"+conv+".jsonl")
-	}},
-	// <PI_CODING_AGENT_DIR, else ~/.pi/agent>/sessions/<project>/<when>_<conv>.jsonl
-	"pi": {file: func(conv string) string { return underDir(piAgentDir(), "sessions", "*", "*_"+conv+".jsonl") }},
-	// ~/.qwen/projects/<project>/chats/<conv>.jsonl
-	"qwen": {file: func(conv string) string { return underHome(".qwen", "projects", "*", "chats", conv+".jsonl") }},
-	// a database: asked of opencode
-	"opencode": {has: opencodeHas},
+// known says the store can be looked in: an agent with one sleeps.
+func (s convStore) known() bool { return s.file != nil || s.has != nil }
+
+// claudeConvFile: <its folder>/projects/<project>/<conv>.jsonl
+func claudeConvFile(conv string) string {
+	return underDir(claudeConfigDir(), "projects", "*", conv+".jsonl")
+}
+
+// codexConvFile: <CODEX_HOME, else ~/.codex>/sessions/<year>/<month>/<day>/rollout-<when>-<conv>.jsonl
+func codexConvFile(conv string) string {
+	return underDir(codexHome(), "sessions", "*", "*", "*", "rollout-*-"+conv+".jsonl")
+}
+
+// piConvFile: <PI_CODING_AGENT_DIR, else ~/.pi/agent>/sessions/<project>/<when>_<conv>.jsonl
+func piConvFile(conv string) string {
+	return underDir(piAgentDir(), "sessions", "*", "*_"+conv+".jsonl")
+}
+
+// qwenConvFile: ~/.qwen/projects/<project>/chats/<conv>.jsonl
+func qwenConvFile(conv string) string {
+	return underHome(".qwen", "projects", "*", "chats", conv+".jsonl")
 }
 
 // convSize is the size of agent's file for conversation conv, the largest
 // if two projects have one; 0 when none, or agent keeps no files. conv must
 // be a ValidConv id, so nothing in it is read as a pattern.
 func convSize(agent, conv string) int64 {
-	s, ok := convStores[agent]
-	if !ok || s.file == nil || !session.ValidConv(conv) {
+	s := resumers[agent].store
+	if s.file == nil || !session.ValidConv(conv) {
 		return 0
 	}
 	pattern := s.file(conv)
@@ -68,10 +75,10 @@ func convSize(agent, conv string) int64 {
 // whether that could be told (known false: no file pattern, or the agent
 // could not be asked).
 func convThere(agent, conv, cwd string) (there, known bool) {
-	s, ok := convStores[agent]
+	s := resumers[agent].store
 	switch {
-	case !ok || !session.ValidConv(conv):
-		return false, ok
+	case !session.ValidConv(conv):
+		return false, s.known()
 	case s.file != nil:
 		return convSize(agent, conv) > 0, true
 	case s.has != nil:

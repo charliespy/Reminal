@@ -107,11 +107,11 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 
 // sleepsExactly says agent fg comes back on exactly its own conversation:
 // resumed by the id it reported (resumers' byID), the conversation's file
-// checked at sleep and at wake (convStores). Others ("latest in this
+// checked at sleep and at wake (its store). Others ("latest in this
 // folder") would wake on whatever ran there last.
 func sleepsExactly(fg string) bool {
-	_, stored := convStores[fg]
-	return stored && resumers[fg].byID != nil
+	rs := resumers[fg]
+	return rs.byID != nil && rs.store.known()
 }
 
 // saysBackground are the agents whose hook says, at a turn's end, what it

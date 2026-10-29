@@ -44,8 +44,8 @@ func TestConvStores(t *testing.T) {
 			t.Errorf("%s does not sleep", agent)
 		}
 	}
-	for agent, s := range convStores {
-		if _, tested := files[agent]; s.file != nil && !tested {
+	for agent, rs := range resumers {
+		if _, tested := files[agent]; rs.store.file != nil && !tested {
 			t.Errorf("%s keeps files this test does not look for", agent)
 		}
 	}

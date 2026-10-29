@@ -158,7 +158,7 @@ func TestClaudeConversationFileFollowsItsConfigDir(t *testing.T) {
 		t.Fatal("a pattern read as an id")
 	}
 	block, _ := sleepVerdict(sleepFacts{Headless: true, Saved: true, Fg: "claude", Conv: conv, BgSaid: true})
-	if !strings.Contains(block, "can't find claude's file") {
+	if !strings.Contains(block, "can't find claude's conversation") {
 		t.Fatalf("no file: block %q", block)
 	}
 }

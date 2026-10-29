@@ -360,6 +360,9 @@ type resumer struct {
 	// how says, to a person, how to find a conversation again by hand, for
 	// an agent with no list to open.
 	how string
+	// store is where it keeps its conversations (convstore.go): known for an
+	// agent that sleeps, which wakes on exactly its own.
+	store convStore
 }
 
 func plainFlags(bin string, flags []string, tail ...string) []string {
@@ -376,11 +379,13 @@ var resumers = map[string]resumer{
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
+		store:  convStore{file: claudeConvFile},
 	},
 	"codex": {
 		byID:   func(b string, f []string, c string) []string { return append(append([]string{b, "resume"}, f...), c) },
 		latest: func(b string, f []string) []string { return append(append([]string{b, "resume"}, f...), "--last") },
 		pick:   func(b string, f []string) []string { return append([]string{b, "resume"}, f...) },
+		store:  convStore{file: codexConvFile},
 	},
 	"cursor-agent": {
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
@@ -395,16 +400,19 @@ var resumers = map[string]resumer{
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
+		store:  convStore{file: qwenConvFile},
 	},
 	"opencode": {
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--session", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 		how:    "opencode session list, then opencode --session <id>",
+		store:  convStore{has: opencodeHas},
 	},
 	"pi": {
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--session", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
+		store:  convStore{file: piConvFile},
 	},
 	"agy": {
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
@@ -1204,4 +1212,15 @@ func init() {
 	// The sealing package reports a fallback taken or a record set aside —
 	// on stderr, never stdout, which `reminal mcp` speaks its protocol on.
 	atrest.Logf = func(format string, args ...any) { fmt.Fprintf(os.Stderr, "  "+format+"\n", args...) }
+}
+
+// ResumeLatest is the command that starts agent bin again on its latest
+// conversation here, as a restore types it; "" for an agent reminal does
+// not resume.
+func ResumeLatest(bin string) string {
+	rs, ok := resumers[bin]
+	if !ok || rs.latest == nil {
+		return ""
+	}
+	return shellJoin(rs.latest(bin, nil))
 }
