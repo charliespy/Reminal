@@ -72,15 +72,12 @@ esac
 [ -n "${EXTRA_SKIP:-}" ] && [ "$T" != win ] && SKIP_AGENTS="${SKIP_AGENTS:-} $EXTRA_SKIP"
 
 send()   { bx "${SLOWENTER:+SLOW_ENTER=1 }sendb.sh $1 $(printf '%s' "$2" | base64)" >/dev/null; }
-screen() { bx "mcp.sh read $1" | python3 -c 'import sys,json
-try: d=json.loads(sys.stdin.read())
-except Exception: sys.exit(0)
-for c in d.get("result",{}).get("content",[]):
-    t=c.get("text","")
-    if t.startswith("{"): print(json.loads(t).get("text",""))'; }
-since_restore() { screen "$1" | awk '/restored this session/{b=""} {b=b"\n"$0} END{print b}'; }
+screen() { bx "mcp.sh text $1"; }
+# since_restore ID — ID's screen since it was last brought back: restored
+# after a restart, or woken from sleep.
+since_restore() { screen "$1" | awk '/reminal (restored|woke) this session/{b=""} {b=b"\n"$0} END{print b}'; }
 # newsess NAME DIR — a background session started in DIR; prints its id.
-newsess() { bxl "mkdir -p $2 && cd $2 && ${NEWENV:-} reminal new $1 2>&1" | sed -n 's/.*background session · v[^ ]* · \([A-Z0-9]*\).*/\1/p'; }
+newsess() { bxl "mkdir -p $2 && cd $2 && ${NEWENV:-} reminal new $1 2>&1" | sed -n 's/^ *Session: *\([A-Z0-9]\{8\}\).*/\1/p' | head -1; }
 nsessions() { bx 'reminal list 2>/dev/null' | grep -c "[A-Z0-9]\{8\}"; }
 if [ "$T" = win ]; then
     procs() { bx 'powershell -NoProfile -c "Get-CimInstance Win32_Process | % CommandLine"'; }

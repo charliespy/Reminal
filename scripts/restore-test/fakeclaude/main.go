@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // claudeHelp is the head of Claude Code's own --help: its usage and the
@@ -106,16 +107,18 @@ func main() {
 		fmt.Fprintf(f, "start: pid %d %s\n", os.Getpid(), strings.Join(os.Args[1:], " "))
 		f.Close()
 	}
-	conv, resume, cont := "", false, false
+	conv, resume, cont, prompt := "", false, false, ""
 	for i := 1; i < len(os.Args); i++ {
-		switch os.Args[i] {
-		case "--resume":
+		switch a := os.Args[i]; {
+		case a == "--resume":
 			if i+1 < len(os.Args) {
 				conv, resume = os.Args[i+1], true
 				i++
 			}
-		case "--continue":
+		case a == "--continue":
 			conv, cont = latest(dir), true
+		case !strings.HasPrefix(a, "-") && !strings.HasPrefix(os.Args[i-1], "-"):
+			prompt = a // a word not a flag's value: its first message
 		}
 	}
 	path := func() string { return filepath.Join(dir, conv+".conv") }
@@ -151,24 +154,76 @@ func main() {
 		if !hooks {
 			return
 		}
+		// A turn's end says what it left running in the background, as
+		// claude's Stop does (not with FAKE_CLAUDE_BG_SAID=0, as an older
+		// build that does not).
+		bg := ""
+		if event == "Stop" && os.Getenv("FAKE_CLAUDE_BG_SAID") != "0" {
+			bg = `,"background_tasks":[]`
+		}
 		c := exec.Command("reminal", "hook", state)
-		c.Stdin = strings.NewReader(fmt.Sprintf(`{"session_id":%q,"hook_event_name":%q}`, id, event))
+		c.Stdin = strings.NewReader(fmt.Sprintf(`{"session_id":%q,"hook_event_name":%q%s}`, id, event, bg))
 		_ = c.Run()
 	}
 	hook := func(state, event string) { hookAs(state, event, conv) }
-	// Its first word: at rest. The rig's own, not claude's (which fires no
-	// Stop as it starts): so it names no conversation, as none ended a turn.
-	hookAs("done", "Stop", "")
-	in := bufio.NewScanner(os.Stdin)
-	for fmt.Print("claude> "); in.Scan(); fmt.Print("claude> ") {
+	// Like claude, it fires no Stop as it starts: its first rest is read off
+	// its screen, or comes with its first turn's end. FAKE_CLAUDE_START_STOP=1
+	// says "at rest" at once (naming no conversation: none ended a turn).
+	// Up and reading its input, as claude's SessionStart says with reminal's
+	// hooks installed: no turn, its conversation named.
+	hookAs("ready", "SessionStart", conv)
+	if os.Getenv("FAKE_CLAUDE_START_STOP") == "1" {
+		hookAs("done", "Stop", "")
+	}
+	// Like claude, it brings its MCP servers up after it is already at its
+	// prompt: with mcp-after in its folder holding how many seconds after,
+	// one long-lived helper of its own.
+	if b, err := os.ReadFile(filepath.Join(dir, "mcp-after")); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+			go func() {
+				time.Sleep(time.Duration(n) * time.Second)
+				_ = exec.Command("sh", "-c", "sleep 655; true").Start()
+			}()
+		}
+	}
+	turn := func(text string) {
 		hook("working", "UserPromptSubmit")
-		line := "you said: " + in.Text()
+		if text == "bg" {
+			// A command left going in the background through a shell, its
+			// hook none the wiser.
+			_ = exec.Command("sh", "-c", "sleep 633; true").Start()
+		}
+		if text == "orphan" {
+			// One started with & inside a command, which outlives it: no
+			// longer under the agent, still on its terminal.
+			_ = exec.Command("sh", "-c", "(sleep 644 &); true").Run()
+		}
+		line := "you said: " + text
 		fmt.Println(line)
 		if f, err := os.OpenFile(path(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 			fmt.Fprintln(f, line)
 			f.Close()
 		}
+		// Where Claude Code keeps it, too, which reminal reads to know a
+		// conversation is still there: ~/.claude/projects/<cwd, / as ->/<id>.jsonl.
+		if cwd, err := os.Getwd(); err == nil {
+			proj := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(cwd, "/", "-"))
+			_ = os.MkdirAll(proj, 0o700)
+			if f, err := os.OpenFile(filepath.Join(proj, conv+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+				fmt.Fprintf(f, "{\"type\":\"user\",\"text\":%q}\n", text)
+				f.Close()
+			}
+		}
 		hook("done", "Stop")
+	}
+	// A first message on its command line (claude "do X") is its first
+	// turn, begun before it ever rests.
+	if prompt != "" {
+		turn(prompt)
+	}
+	in := bufio.NewScanner(os.Stdin)
+	for fmt.Print("claude> "); in.Scan(); fmt.Print("claude> ") {
+		turn(in.Text())
 	}
 }
 

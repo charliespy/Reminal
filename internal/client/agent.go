@@ -136,6 +136,8 @@ type Agent struct {
 	// saved for a restore; stopSignal, that a signal (not the shell) ended
 	// the session, so it may come back. See restore.go.
 	restoring bool
+	// restoreWoke: what brought it back was a wake from sleep (restoreBanner).
+	restoreWoke bool
 	// restoreAgentSeen: since this restore, the agent has been seen running
 	// again — so a prompt now means it was quit, not that it is still coming
 	// back. Touched only by saveRestore, under restoreMu.
@@ -284,6 +286,19 @@ type Agent struct {
 	bracketedPaste atomic.Bool
 	pasteCarry     []byte
 	lastInput      time.Time // a person typing, not programs printing (session.Active.LastInput)
+	// typing is whether keys left something unsent on the input line, for a
+	// sleep to name as a loss (inputLine). Under metaMu.
+	typing inputLine
+	// restBase is the processes on its terminal when the agent in front
+	// (restBaseFG, its attnFGAt) first came to rest, for a sleep to tell
+	// what it left running since (noteRestBase). Under metaMu.
+	restBase   map[procKey]bool
+	restBaseFG time.Time
+	// firstTurn is when the agent run in front (its attnFGAt) began its
+	// first turn, by its hook or its screen: what it started from then is its
+	// work, never its baseline. hookTurn is the same by its hook alone, which
+	// never takes the agent starting up for a turn (ownHelpers). Under metaMu.
+	firstTurn, hookTurn runFirst
 	// attnState is the detected attention state of the foreground agent —
 	// "working", "input" (awaiting the user), "done", or "" (no agent / bare
 	// shell). Written by the attention detector goroutine, read by activeRecord
@@ -499,6 +514,9 @@ type Agent struct {
 	// outSinceFree counts PTY output since memory was last handed back to
 	// the OS (releaseAfterBurst).
 	outSinceFree atomic.Int64
+	// sleeping: this session is going to sleep (control "sleep"): a terminal
+	// attaching now is told so and turned away, not let in to hold it open.
+	sleeping atomic.Bool
 	// shellPrinted is whether the shell has printed anything since it
 	// started (pumpPTY): a restored session's resume waits for its prompt
 	// (restoreStart). Set false where a shell is started (Run).
@@ -735,6 +753,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			startedAt:      r.StartedAt,
 			resumed:        true,
 			restoring:      r.PTY == nil,
+			restoreWoke:    r.Woke,
 			restoreRun:     opts.RestoreRun,
 			restoreNote:    opts.RestoreNote,
 			restorePlan:    opts.RestorePlan,
@@ -1465,6 +1484,7 @@ func (a *Agent) afterAttempt(err error) {
 // already exited) is logged but doesn't break the headless agent.
 func (a *Agent) writeHandshake() {
 	StartMark("register") // reachable (or the relay found unreachable)
+	a.markAwake()
 	payload := map[string]any{
 		"id":       a.sessionID,
 		"pin":      a.pin,
@@ -1653,9 +1673,27 @@ func (a *Agent) markActivity(now time.Time) {
 // around them left one site marking input unconditionally, which cancels
 // typedByPerson while every test still passes.
 func (a *Agent) noteInput(data []byte) {
-	if typedByPerson(data) {
+	if keys := personKeys(data); len(keys) > 0 {
 		a.markInput()
+		a.feedTyping(keys)
 	}
+}
+
+// feedTyping follows what keys did to the input line (inputLine).
+func (a *Agent) feedTyping(keys []byte) {
+	a.metaMu.Lock()
+	a.typing.feed(keys)
+	a.typing.at = time.Now()
+	a.metaMu.Unlock()
+}
+
+// noteTurn is a turn the agent's hook said began at t (inputLine.turnBegan).
+func (a *Agent) noteTurn(t time.Time) {
+	a.metaMu.Lock()
+	a.typing.turnBegan(t)
+	a.noteFirstTurnLocked(t)
+	a.hookTurn.note(t, a.attnFGAt)
+	a.metaMu.Unlock()
 }
 
 // markInput stamps when a person last typed, for the record; throttled to
@@ -3273,6 +3311,10 @@ func (a *Agent) serveConn(conn *websocket.Conn, shellExit <-chan struct{}, local
 	}()
 	defer conn.Close()
 	conn.SetReadLimit(maxRelayMessageBytes) // untrusted peer — bound frame size
+	if local && a.sleeping.Load() {
+		closeRelayConn(conn, "asleep") // going to sleep: it waits for the wake
+		return nil
+	}
 	if local {
 		a.addLocalConn(conn)
 		defer a.removeLocalConn(conn)
@@ -3440,6 +3482,8 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.goGuarded("dir revoke-self", func() { a.handleDirRevokeSelf(conn, msg.Data) })
 		case protocol.TypeDirKill:
 			a.goGuarded("dir kill", func() { a.handleDirKill(conn, msg.Data) })
+		case protocol.TypeDirSleep:
+			a.goGuarded("dir sleep", func() { a.handleDirSleep(conn, msg.Data) })
 		case protocol.TypeDirIntegrate:
 			a.goGuarded("dir integrate", func() { a.handleDirIntegrate(conn, msg.Data) })
 		case protocol.TypeData:

@@ -40,6 +40,13 @@ type mcpSessionRow struct {
 	// finished turn that left a build going reads "done" and is not finished.
 	Shells  int  `json:"shells,omitempty"`
 	Current bool `json:"current,omitempty"`
+	// Asleep: the session sleeps (its processes ended, its record kept).
+	// read_transcript and search_sessions answer from what it saved;
+	// send_keys wakes it first. SleptAt is when (RFC3339); Dropped, what the
+	// person let go of by sleeping it anyway.
+	Asleep  bool     `json:"asleep,omitempty"`
+	SleptAt string   `json:"slept_at,omitempty"`
+	Dropped []string `json:"dropped,omitempty"`
 }
 
 type mcpMachineRow struct {
@@ -207,6 +214,9 @@ func fleetMachineRow(m client.FleetMachine, currentID string) mcpMachineRow {
 			ResetsAt: resetsAtRFC3339(s.ResetsAt),
 			Shells:   s.Shells,
 			Current:  currentID != "" && strings.EqualFold(s.ID, currentID),
+			Asleep:   s.Asleep,
+			SleptAt:  resetsAtRFC3339(s.SleptAt),
+			Dropped:  s.Dropped,
 		})
 	}
 	return row
@@ -265,6 +275,12 @@ func localTranscriptHits(pattern string) map[string][]string {
 			continue
 		}
 		out[a.ID] = hits
+	}
+	// The sessions asleep: what they saved, searched without waking them.
+	for id := range session.AsleepIDs() {
+		if hits := client.SearchSleeperTranscript(id, pattern); len(hits) > 0 {
+			out[id] = hits
+		}
 	}
 	return out
 }
@@ -478,6 +494,11 @@ func mcpSendKeys(sessionSel, machineSel, keys, key, pin string, enter bool) (str
 	}
 
 	if machineSel == "" || machineLooksLocal(machineSel) {
+		// Asleep here: woken first, the keys held until its agent is back at
+		// its prompt (never typed into a shell the agent is still starting in).
+		if err := wakeForKeys(sessionSel); err != nil {
+			return "", err
+		}
 		send := func(b []byte) error { return injectLocalSession(sessionSel, b) }
 		if err := send(deliveries[0]); err == nil {
 			if err := sendRest(send); err != nil {

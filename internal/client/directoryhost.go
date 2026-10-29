@@ -389,6 +389,10 @@ func killLocalSession(id string) error {
 		}(pid)
 		return nil
 	}
+	// Asleep: nothing is running to stop; ending it is forgetting it.
+	if session.IsAsleep(id) {
+		return ForgetSleeper(id)
+	}
 	return fmt.Errorf("session not found")
 }
 
@@ -489,6 +493,9 @@ func localDirSessions() []protocol.DirSession {
 		}
 		out = append(out, ds)
 	}
+	// The sessions asleep, after the running ones: still this machine's, woken
+	// from here (sleep.go).
+	out = append(out, sleeperDirSessions()...)
 	return out
 }
 

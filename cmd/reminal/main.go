@@ -699,6 +699,13 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "sleep", "wake", "keep-awake":
+			run := map[string]func([]string) error{"sleep": runSleep, "wake": runWake, "keep-awake": runKeepAwake}[os.Args[1]]
+			if err := run(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "own":
 			if err := runOwn(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -922,6 +929,9 @@ func printHelp() {
 		{"reminal stop [id|name|port] [-y]", "Stop the reminal layer — your shell/server keeps running"},
 		{"reminal kill [id|name] [--machine <id|name>] [-y]", "Fully terminate a shell session — here or on a machine you own (irreversible)"},
 		{"reminal restore [id|name|--all]", "Bring back sessions a restart ended: same id and PIN, scrollback, agent resumed"},
+		{"reminal sleep <id|name> [--anyway]", "End a session's processes and free their memory; it wakes as itself (same link, PIN, conversation)"},
+		{"reminal wake <id|name>", "Wake a sleeping session (opening, attaching to or typing into it wakes it too)"},
+		{"reminal keep-awake <id|name> [--off]", "Keep a session from being put to sleep"},
 		{"reminal send <file>", "Push a file to every connected viewer (web auto-downloads)"},
 		{"reminal copy [--ttl <dur>] [-f] <file|folder>", "Offer a file or folder for pickup elsewhere; prints a one-time code"},
 		{"reminal paste <code> [dest]", "Fetch a file offered by 'reminal copy' (default dest: .)"},
@@ -1535,6 +1545,10 @@ func runAttach(idArg string) error {
 		_, err := resolveActive("")
 		return err
 	}
+	// Asleep: woken, then attached to (a terminal attaching is a person at it).
+	if err := wakeToUse(idArg); err != nil {
+		return err
+	}
 	a, err := resolveActive(idArg)
 	if err != nil {
 		return err
@@ -2020,6 +2034,9 @@ func runList(args []string) error {
 	}
 
 	if len(rows) == 0 && curRow == nil {
+		if printSleepers(lower) > 0 {
+			return nil // none running; the ones asleep are listed
+		}
 		if len(all) == 0 {
 			fmt.Println("No reminal sessions running. Start one with:")
 			fmt.Println("  reminal                # share this terminal")
@@ -2091,7 +2108,9 @@ func runList(args []string) error {
 
 	switch {
 	case len(rows) == 0:
-		fmt.Println(cDim("  no other sessions."))
+		if printSleepers(lower) == 0 {
+			fmt.Println(cDim("  no other sessions."))
+		}
 		return nil
 	case curRow != nil:
 		fmt.Printf("%d other session(s):\n\n", len(rows))
@@ -2194,6 +2213,7 @@ func runList(args []string) error {
 		}
 	}
 	fmt.Println()
+	printSleepers(lower)
 	if narrow {
 		// Phone width: the wide two-column help wraps into an unreadable mess.
 		// Drop the "reminal " prefix (implied) and shorten the hints so each
@@ -2516,6 +2536,9 @@ func abbrevHome(p string) string {
 func runKill(idArg string, yes bool) error {
 	a, err := resolveActive(idArg)
 	if err != nil {
+		if r := findSleeper(idArg); r != nil {
+			return killSleeper(*r, yes)
+		}
 		return err
 	}
 	fmt.Printf("\n  This will fully terminate session %s on this machine.\n", a.ID)
@@ -2533,23 +2556,52 @@ func runKill(idArg string, yes bool) error {
 	fmt.Println("    · The session ID and PIN stop being valid right away.")
 	fmt.Println("    · This is irreversible.")
 	fmt.Println()
-	if !yes {
-		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return errors.New("refusing to kill without confirmation — re-run with -y to skip the prompt")
-		}
-		fmt.Print("  Proceed? [y/N]: ")
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		resp := strings.ToLower(strings.TrimSpace(line))
-		if resp != "y" && resp != "yes" {
-			fmt.Println("  Aborted.")
-			return nil
-		}
+	if ok, err := proceed(yes, "kill"); !ok {
+		return err
 	}
 	if err := terminateAgent(*a); err != nil {
 		return err
 	}
 	fmt.Printf("  Killed session %s (PID %d).\n", a.ID, a.PID)
 	return nil
+}
+
+// killSleeper ends sleeping session r for good (runKill): nothing runs to
+// stop; its record, scrollback and conversation link are forgotten.
+func killSleeper(r session.Restore, yes bool) error {
+	fmt.Printf("\n  This will end sleeping session %s on this machine for good.\n", r.ID)
+	fmt.Println("    · It is not woken: what it saved (its scrollback, its agent's")
+	fmt.Println("      conversation link) is forgotten.")
+	fmt.Println("    · The session ID and PIN stop being valid right away.")
+	fmt.Println("    · This is irreversible.")
+	fmt.Println()
+	if ok, err := proceed(yes, "kill"); !ok {
+		return err
+	}
+	if err := client.ForgetSleeper(r.ID); err != nil {
+		return err
+	}
+	fmt.Printf("  Ended sleeping session %s.\n", r.ID)
+	return nil
+}
+
+// proceed asks the person to confirm what was just described, unless yes
+// (-y): false when they said no (said so), or when there is no terminal to
+// ask at (an error naming verb and -y).
+func proceed(yes bool, verb string) (bool, error) {
+	if yes {
+		return true, nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false, fmt.Errorf("refusing to %s without confirmation — re-run with -y to skip the prompt", verb)
+	}
+	fmt.Print("  Proceed? [y/N]: ")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	if resp := strings.ToLower(strings.TrimSpace(line)); resp != "y" && resp != "yes" {
+		fmt.Println("  Aborted.")
+		return false, nil
+	}
+	return true, nil
 }
 
 // terminateAgent SIGTERMs the agent, gives it a brief window to run its defers
@@ -2641,17 +2693,8 @@ func runPrune(idle time.Duration, yes bool) error {
 	}
 	fmt.Println("\n    The shell inside each is killed — unsaved work is lost. Irreversible.")
 	fmt.Println()
-	if !yes {
-		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return errors.New("refusing to prune without confirmation — re-run with -y to skip the prompt")
-		}
-		fmt.Print("  Proceed? [y/N]: ")
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		resp := strings.ToLower(strings.TrimSpace(line))
-		if resp != "y" && resp != "yes" {
-			fmt.Println("  Aborted.")
-			return nil
-		}
+	if ok, err := proceed(yes, "prune"); !ok {
+		return err
 	}
 	killed := 0
 	for _, a := range victims {
@@ -2676,6 +2719,10 @@ func runConnect(target, pinArg string, owner bool) error {
 	sessionID, urlPin := parseConnectTarget(target)
 	if sessionID == "" {
 		return errors.New("needs a session ID or a relay URL containing ?s=<ID>")
+	}
+	// A session of this machine's, asleep: woken first, then connected to.
+	if err := wakeToUse(sessionID); err != nil {
+		return err
 	}
 	if os.Getenv("REMINAL_SESSION") == sessionID {
 		return fmt.Errorf("already inside session %s — connecting from this shell would loop viewer output back through the PTY; open a different terminal first", sessionID)

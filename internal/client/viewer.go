@@ -57,6 +57,10 @@ type Viewer struct {
 	// notReadySince is when the relay first answered "session not ready" in
 	// the current run of attempts (see notReadyGrace); zero once connected.
 	notReadySince time.Time
+	// asleepSeen is when this terminal last found its session asleep: its
+	// first handshakes with the session woken from it may go unanswered while
+	// it starts, and are tried again, not taken as the end.
+	asleepSeen time.Time
 
 	// Atomics first for 64-bit alignment on 32-bit architectures.
 	lastSeq       uint64
@@ -188,7 +192,9 @@ func (v *Viewer) Run() error {
 			}
 			v.sayOutage(humanize(err)) // says the wait itself
 		} else {
-			v.sayOutage(humanize(err) + " Retrying until it is back.")
+			var say string
+			say, wait = v.outageSay(err, wait)
+			v.sayOutage(say)
 		}
 		time.Sleep(wait)
 		if backoff *= 2; backoff > maxBackoff {
@@ -305,7 +311,9 @@ func (v *Viewer) Run() error {
 		// "are you offline" when there's no network. Exit cleanly instead. (A
 		// hot-restart keeps the registry entry, so this doesn't fire on restart;
 		// only a real kill/exit clears it.)
-		if v.everLocal {
+		// One asleep is not ended: it comes back on its id when woken, and this
+		// terminal waits for that (asleepError says so meanwhile).
+		if v.everLocal && !session.IsAsleep(v.sessionID) {
 			if _, e := session.ReadActiveByID(v.sessionID); e != nil {
 				v.notify(fmt.Sprintf("Session %s ended.", v.sessionID))
 				return nil
@@ -339,7 +347,8 @@ func (v *Viewer) Run() error {
 			continue
 		}
 
-		v.sayOutage(humanize(err) + " Retrying until it is back.")
+		say, wait := v.outageSay(err, backoff)
+		v.sayOutage(say)
 
 		select {
 		case <-intCh:
@@ -347,7 +356,7 @@ func (v *Viewer) Run() error {
 			return nil
 		case <-escapeCh:
 			return nil
-		case <-time.After(backoff):
+		case <-time.After(wait):
 		}
 		first = false
 		backoff *= 2
@@ -570,6 +579,10 @@ func (v *Viewer) establish() (*established, error) {
 		if resp != nil && resp.StatusCode == 429 {
 			return nil, &rateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 		}
+		if session.IsAsleep(v.sessionID) {
+			v.asleepSeen = time.Now()
+			return nil, asleepError{v.sessionID} // its socket is gone while it sleeps
+		}
 		return nil, fmt.Errorf("dial: %w", err)
 	}
 	if local {
@@ -590,6 +603,10 @@ func (v *Viewer) establish() (*established, error) {
 			// to it (its own backoff runs to maxBackoff): temporary for a while,
 			// then a session that is not there. Anything else is fatal — wrong
 			// PIN, locked out, mismatched session.
+			if session.IsAsleep(v.sessionID) {
+				v.notReadySince, v.asleepSeen = time.Time{}, time.Now()
+				return nil, asleepError{v.sessionID} // not gone: it comes back when woken
+			}
 			if isNotReady(err) {
 				if v.notReadySince.IsZero() {
 					v.notReadySince = time.Now()
@@ -608,6 +625,13 @@ func (v *Viewer) establish() (*established, error) {
 	}
 	if err := negotiate(conn); err != nil {
 		conn.Close()
+		if session.IsAsleep(v.sessionID) {
+			v.asleepSeen = time.Now()
+			return nil, asleepError{v.sessionID} // it went to sleep as this was answered
+		}
+		if !v.asleepSeen.IsZero() && time.Since(v.asleepSeen) < wakingGrace {
+			return nil, wakingError{} // just woken, still starting: tried again
+		}
 		// A wrong PIN fails the unwrap; a refused machine fails the owner
 		// check. Both are fatal: reconnecting would repeat them.
 		return nil, &fatalErr{err: err}
@@ -1250,4 +1274,47 @@ func humanBytes(n uint64) string {
 	default:
 		return fmt.Sprintf("%.2f GB", float64(n)/gb)
 	}
+}
+
+// asleepError is a session of this machine that sleeps (`reminal sleep`): not
+// gone, it comes back on its own id and PIN when it is woken, and a terminal
+// attached to it waits for that rather than giving up.
+type asleepError struct{ id string }
+
+func (e asleepError) Error() string {
+	return "it is asleep · this reconnects when it wakes (reminal wake " + e.id + ")"
+}
+
+// wakingError is a handshake a session just woken did not answer yet: it is
+// still starting.
+type wakingError struct{}
+
+func (wakingError) Error() string { return "it is waking up · reconnecting" }
+
+// wakingGrace is how long after a terminal last saw its session asleep an
+// unanswered handshake is taken as it still waking.
+const wakingGrace = 2 * time.Minute
+
+// asleepWait is how often a terminal waiting on a sleeping session looks
+// again: often enough that a wake is followed at once.
+const asleepWait = 2 * time.Second
+
+// outageSay is what a terminal says while it cannot reach its session, and
+// how long it waits before trying again. The session closing it with
+// "asleep" (it is going to sleep) is said as asleep too.
+func (v *Viewer) outageSay(err error, backoff time.Duration) (string, time.Duration) {
+	var asleep asleepError
+	var waking wakingError
+	var closed *websocket.CloseError
+	if errors.As(err, &waking) {
+		return waking.Error(), min(backoff, asleepWait)
+	}
+	if errors.As(err, &closed) && closed.Text == "asleep" {
+		asleep = asleepError{v.sessionID}
+		err = asleep
+	}
+	if errors.As(err, &asleep) {
+		return asleep.Error(), min(backoff, asleepWait)
+	}
+	return humanize(err) + " Retrying until it is back.", backoff
 }

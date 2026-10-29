@@ -342,6 +342,33 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 		_ = conn.Close()
 		a.requestShutdown()
 		return
+	case line == "sleep" || line == "sleep anyway":
+		// `reminal sleep`: end this session's processes the way a shutdown
+		// does, its record kept, to wake as itself (sleep.go). The same on
+		// every OS: no signal is needed, so Windows sleeps as Unix does.
+		if err := a.sleepNow(line == "sleep anyway"); err != nil {
+			var lose ErrWouldLose
+			if errors.As(err, &lose) {
+				js, _ := json.Marshal(lose.Losses)
+				_, _ = fmt.Fprintln(conn, "lose:", string(js))
+			} else {
+				_, _ = fmt.Fprintln(conn, "error:", err)
+			}
+			return
+		}
+		_, _ = fmt.Fprintln(conn, "ok")
+		_ = conn.Close()
+		a.stopSignal.Store(true) // settleRestore keeps the record, as for a shutdown
+		// Terminals attached here (reminal connect, attach) are told it sleeps,
+		// and wait for it to wake; their sockets are closed now, not left to
+		// hold the way out open.
+		a.currentConnMu.Lock()
+		for c := range a.localConns {
+			closeRelayConn(c, "asleep")
+		}
+		a.currentConnMu.Unlock()
+		a.requestShutdown()
+		return
 	case line == "pause":
 		// `reminal stop` on Windows: no SIGUSR1 there, so the pause-broadcast
 		// request rides the control socket instead. Same effect as the Unix

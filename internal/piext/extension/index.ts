@@ -48,7 +48,24 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 	// Outside a reminal session there is nothing to report to. `reminal hook` is
 	// a silent no-op there anyway; skipping spares us a process per turn.
 	const reporting = (process.env.REMINAL_SESSION ?? "") !== "";
-	let last: { state: Attn; at: number } | undefined;
+	let last: { state: Attn; conv: string; at: number } | undefined;
+
+	// The conversation this pi is in, as pi names it (its session's id), sent
+	// with every report as Claude Code's hooks send theirs: reminal resumes it
+	// by that id after a restart, and a sleeping session wakes on it. "" while
+	// it is not saved (--no-session): nothing to resume.
+	let conv = "";
+	const noteConv = (ctx?: ExtensionContext): void => {
+		try {
+			const sm = ctx?.sessionManager;
+			if (!sm) return;
+			const id = sm.isPersisted() ? sm.getSessionId() : "";
+			conv = typeof id === "string" ? id : "";
+		} catch {
+			// a context from a session already torn down: keep what we had
+		}
+	};
+	const payload = (): string => (conv ? JSON.stringify({ session_id: conv }) : "");
 
 	// One `reminal hook` at a time, and only ever the newest state.
 	//
@@ -76,8 +93,10 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 			if (next) write(next);
 		};
 		try {
-			const p = spawn(bin, ["hook", state], { stdio: "ignore", detached: true });
+			const p = spawn(bin, ["hook", state], { stdio: ["pipe", "ignore", "ignore"], detached: true });
 			child = p;
+			p.stdin?.on("error", () => {}); // a hook that exits without reading
+			p.stdin?.end(payload());
 			// A hook that fails is not worth interrupting anyone over, but it must
 			// still release the queue behind it.
 			p.on("error", done);
@@ -119,12 +138,13 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		pendingDone.unref?.();
 	};
 
-	const report = (state: Attn): void => {
+	const report = (state: Attn, ctx?: ExtensionContext): void => {
 		if (!reporting) return;
+		noteConv(ctx);
 		// Anything reported now is newer than a proposal waiting to be made.
 		dropPendingDone();
-		if (last && last.state === state && Date.now() - last.at < REFRESH_MS) return;
-		last = { state, at: Date.now() };
+		if (last && last.state === state && last.conv === conv && Date.now() - last.at < REFRESH_MS) return;
+		last = { state, conv, at: Date.now() };
 		// Never block a lifecycle handler: the write happens on its own.
 		if (writing !== undefined) {
 			parked = state;
@@ -135,9 +155,9 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 
 	// A run is under way. agent_start covers the whole loop; turn_start and
 	// turn_end keep a long one from aging out mid-work.
-	pi.on("agent_start", () => report("working"));
-	pi.on("turn_start", () => report("working"));
-	pi.on("turn_end", () => report("working"));
+	pi.on("agent_start", (_e, ctx) => report("working", ctx));
+	pi.on("turn_start", (_e, ctx) => report("working", ctx));
+	pi.on("turn_end", (_e, ctx) => report("working", ctx));
 
 	// The run is over: "your turn". Which event says so depends on the pi.
 	//
@@ -159,13 +179,13 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 	// of the version before this one. On 0.74 the report lands a second late,
 	// which nobody can perceive.
 	pi.on("agent_end", () => proposeDone());
-	pi.on("agent_settled", () => report("done"));
+	pi.on("agent_settled", (_e, ctx) => report("done", ctx));
 
 	// pi is about to ask whether you trust this directory, and will sit there
 	// until you answer. That is the one moment pi genuinely needs you. Stay out
 	// of the decision itself: "undecided" lets pi ask, as it would anyway.
-	pi.on("project_trust", () => {
-		report("input");
+	pi.on("project_trust", (_e, ctx) => {
+		report("input", ctx);
 		return { trusted: "undecided" as const };
 	});
 
@@ -353,7 +373,7 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 			last = undefined;
 			parked = undefined;
 			try {
-				spawnSync(bin, ["hook", "done"], { stdio: "ignore" });
+				spawnSync(bin, ["hook", "done"], { input: payload(), stdio: ["pipe", "ignore", "ignore"] });
 			} catch {
 				// nothing left to fall back to; pi is going away regardless
 			}

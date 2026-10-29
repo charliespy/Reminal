@@ -8,6 +8,7 @@
 #   1. each agent alone in its folder — resumed exactly (check.sh)
 #   2-4. several of one agent in one folder (check-multi.sh)
 #   5. each started with its flags and a prompt (check-flags.sh)
+#   6. each put to sleep mid-conversation and woken (check-sleep.sh)
 # RIG_TARGET=docker (default: a fresh container each part, removed at the
 # end) or mac (the macOS VM set up by mac/setup-vm.sh). cursor-agent needs a
 # Cursor login in the box; without one its conversation checks are skipped.
@@ -28,7 +29,7 @@ fresh() {
 }
 fresh
 part "each agent alone in its folder" "$DIR/check.sh"
-for plan in "claude:3 qwen:2|claude" "codex:2 gemini:2|" "opencode:2 pi:2|"; do
+for plan in "claude:3 qwen:2|claude" "codex:2 gemini:2|codex" "opencode:2 pi:2|pi"; do
     p=${plan%%|*}
     for x in ${SKIP_AGENTS:-}; do p=$(echo " $p " | sed "s/ $x:[0-9]* / /" | tr -s ' ' | sed 's/^ //; s/ $//'); done
     fresh
@@ -36,5 +37,7 @@ for plan in "claude:3 qwen:2|claude" "codex:2 gemini:2|" "opencode:2 pi:2|"; do
 done
 fresh
 part "started with flags" "$DIR/check-flags.sh"
+fresh
+part "sleep and wake" "$DIR/check-sleep.sh"
 if [ "$T" = docker ]; then "$DIR/run.sh" down >/dev/null; else killall_sessions; fi
 exit $rc

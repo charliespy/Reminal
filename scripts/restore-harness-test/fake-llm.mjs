@@ -32,7 +32,9 @@ function lastUserText(body) {
     if (!m || (m.role && m.role !== "user")) continue;
     texts.length = 0;
     walk(m.content ?? m.parts);
-    const t = texts.map(s => s.trim()).filter(s => s && !s.startsWith("<")).pop();
+    // Markup an agent adds (a reminder, a context block) is not what was
+    // said, nor is Qwen's memory catalog, sent after a first message.
+    const t = texts.map(s => s.trim()).filter(s => s && !s.startsWith("<") && !s.startsWith("Current memory catalog")).pop();
     if (t) return t;
   }
   if (typeof body.input === "string") return body.input;

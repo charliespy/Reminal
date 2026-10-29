@@ -53,8 +53,15 @@ func processCwd(pid int) string {
 }
 
 // restoreBanner marks, in the scrollback, where the old session ends and
-// the restored one begins.
-const restoreBanner = "\x1b[2m── reminal restored this session after its machine restarted ──\x1b[0m"
+// the restored one begins: why it came back, woken from sleep or after its
+// machine restarted.
+func restoreBanner(woke bool) string {
+	why := "restored this session after its machine restarted"
+	if woke {
+		why = "woke this session from sleep"
+	}
+	return "\x1b[2m── reminal " + why + " ──\x1b[0m"
+}
 
 // saveRestore writes this session's restore record, and its scrollback when
 // there is new output. Called on a timer; a failure costs only freshness.
@@ -353,6 +360,9 @@ type resumer struct {
 	// how says, to a person, how to find a conversation again by hand, for
 	// an agent with no list to open.
 	how string
+	// store is where it keeps its conversations (convstore.go): known for an
+	// agent that sleeps, which wakes on exactly its own.
+	store convStore
 }
 
 func plainFlags(bin string, flags []string, tail ...string) []string {
@@ -369,6 +379,7 @@ var resumers = map[string]resumer{
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
+		store:  convStore{file: claudeConvFile},
 	},
 	"codex": {
 		byID:   func(b string, f []string, c string) []string { return append(append([]string{b, "resume"}, f...), c) },
@@ -388,14 +399,19 @@ var resumers = map[string]resumer{
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
+		store:  convStore{file: qwenConvFile},
 	},
 	"opencode": {
+		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--session", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 		how:    "opencode session list, then opencode --session <id>",
+		store:  convStore{has: opencodeHas},
 	},
 	"pi": {
+		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--session", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
-		how:    "start pi and pick the conversation from its session list",
+		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
+		store:  convStore{file: piConvFile},
 	},
 	"agy": {
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
@@ -794,7 +810,7 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 		return nil, nil, errors.New("restore record has no PIN")
 	}
 	st := &ResumeState{SessionID: r.ID, PIN: r.PIN, PinHash: r.PinHash, Token: r.Token,
-		StartedAt: time.Now(), Name: r.Name, Headless: true}
+		StartedAt: time.Now(), Name: r.Name, Headless: true, Woke: session.IsAsleep(r.ID)}
 	if p, err := session.RestoreScrollbackPath(r.ID); err == nil {
 		id := r.ID
 		st.Dump = readScrollbackDump(p, func(b []byte) ([]byte, error) {
@@ -881,8 +897,14 @@ func (a *Agent) releaseTyped() {
 }
 
 // typeIn is what a person typed, into the shell: held while a restored
-// session's resume waits (holdTyped), never lost.
+// session's resume waits (holdTyped), never lost. Not once the session has
+// gone to sleep (sleepNow): keys stamped before that last look kept it
+// awake; ones after it would start a command its shell is ended in the
+// middle of.
 func (a *Agent) typeIn(data []byte) (int, error) {
+	if a.asleep() {
+		return len(data), nil
+	}
 	a.typedMu.Lock()
 	if a.typedHolding && len(a.typedHeld)+len(data) <= maxTypedHeld {
 		if a.typedTimer == nil {
@@ -919,7 +941,7 @@ func (a *Agent) restoreStart() {
 	// Before the new shell's prompt or after it, as the session's first try
 	// at the relay took: either way the prompt stays the cursor's line
 	// (recordAtShell), never an empty one under the banner.
-	a.recordAtShell(restoreBanner)
+	a.recordAtShell(restoreBanner(a.restoreWoke))
 	if a.restoreNote != "" {
 		a.recordAtShell("\x1b[2m" + a.restoreNote + "\x1b[0m")
 	}
@@ -981,7 +1003,13 @@ func Restorable() ([]session.Restore, error) {
 		return nil, err
 	}
 	var out []session.Restore
+	now := time.Now()
 	for _, r := range all {
+		// A session asleep was not ended by a restart: it stays asleep until it
+		// is woken (a wake cut short just now is tried again).
+		if sleepsOn(r.ID, now) {
+			continue
+		}
 		if runningElsewhere(r.ID) == "" {
 			out = append(out, r)
 		}
@@ -1116,7 +1144,11 @@ func restoreAtStart() {
 				continue
 			}
 			tried[r.ID] = true
-			if _, err := RestoreSession(r); err != nil {
+			restore := RestoreSession
+			if session.IsAsleep(r.ID) {
+				restore = WakeSession // its wake was cut short: finish it
+			}
+			if _, err := restore(r); err != nil {
 				// A handshake that timed out may still have brought it back,
 				// slowly — or something else did: running is not a failure.
 				if runningElsewhere(r.ID) != "" {
@@ -1179,4 +1211,15 @@ func init() {
 	// The sealing package reports a fallback taken or a record set aside —
 	// on stderr, never stdout, which `reminal mcp` speaks its protocol on.
 	atrest.Logf = func(format string, args ...any) { fmt.Fprintf(os.Stderr, "  "+format+"\n", args...) }
+}
+
+// ResumeLatest is the command that starts agent bin again on its latest
+// conversation here, as a restore types it; "" for an agent reminal does
+// not resume.
+func ResumeLatest(bin string) string {
+	rs, ok := resumers[bin]
+	if !ok || rs.latest == nil {
+		return ""
+	}
+	return shellJoin(rs.latest(bin, nil))
 }

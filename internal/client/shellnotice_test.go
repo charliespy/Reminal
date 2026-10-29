@@ -23,11 +23,11 @@ func TestTheRestoreBannerLeavesThePromptTheCursorsLine(t *testing.T) {
 		t.Cleanup(a.stopAttention)
 		a.record([]byte("earlier output\r\n")) // a restored screen, its fresh line taken
 		if first == "banner" {
-			a.recordAtShell(restoreBanner)
+			a.recordAtShell(restoreBanner(false))
 			a.record([]byte(prompt))
 		} else {
 			a.record([]byte(prompt))
-			a.recordAtShell(restoreBanner)
+			a.recordAtShell(restoreBanner(false))
 		}
 		p := a.screen.CursorPosition()
 		rows := strings.Split(stripANSI(a.screen.Render()), "\n")

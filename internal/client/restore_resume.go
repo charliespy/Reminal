@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -37,7 +36,7 @@ func resumeTooBig(r session.Restore) string {
 	if r.Fg != "claude" || !session.ValidConv(r.Conv) {
 		return ""
 	}
-	size := claudeConvSize(r.Conv)
+	size := convSize(r.Fg, r.Conv)
 	mem := memTotal()
 	if size <= 0 || mem <= 0 {
 		return ""
@@ -48,24 +47,6 @@ func resumeTooBig(r session.Restore) string {
 	}
 	return fmt.Sprintf("this conversation's file is %d MB; resuming it takes about %d MB of memory, more than this machine's %d MB can spare, so it was not resumed — to try: claude --resume %s, or start a new conversation",
 		size>>20, need>>20, mem>>20, r.Conv)
-}
-
-// claudeConvSize is the size of claude's file for conversation conv, or 0:
-// ~/.claude/projects/<its folder>/<conv>.jsonl, the largest if two folders
-// have one. conv is a ValidConv id, so nothing in it is read as a pattern.
-func claudeConvSize(conv string) int64 {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return 0
-	}
-	matches, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", conv+".jsonl"))
-	var max int64
-	for _, m := range matches {
-		if fi, err := os.Stat(m); err == nil && fi.Mode().IsRegular() && fi.Size() > max {
-			max = fi.Size()
-		}
-	}
-	return max
 }
 
 // memTotal is the memory this session may use, in bytes: the machine's

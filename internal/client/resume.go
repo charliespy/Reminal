@@ -39,4 +39,7 @@ type ResumeState struct {
 	// re-encrypted here under the new session key. Nil when the predecessor
 	// was an older binary, or when the dump was empty / unreadable.
 	Dump *scrollbackDump
+	// Woke: restored by a wake from sleep (reminal wake), not after its
+	// machine restarted; its restore banner says which.
+	Woke bool
 }

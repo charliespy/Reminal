@@ -175,7 +175,7 @@ var forwardableTypes = map[protocol.MessageType]bool{
 	protocol.TypeSealed:    true,
 	protocol.TypeOwnerInit: true, protocol.TypeOwnerResp: true, protocol.TypeOwnerBusy: true,
 	protocol.TypeDirQuery: true, protocol.TypeDirResp: true, protocol.TypeDirRename: true,
-	protocol.TypeDirRevokeSelf: true, protocol.TypeDirKill: true, protocol.TypeDirIntegrate: true,
+	protocol.TypeDirRevokeSelf: true, protocol.TypeDirKill: true, protocol.TypeDirSleep: true, protocol.TypeDirIntegrate: true,
 	protocol.TypeWindowList: true, protocol.TypeWindowCtl: true,
 	protocol.TypeWindowFrame: true, protocol.TypeWindowInput: true, protocol.TypeWindowAck: true,
 	protocol.TypeWindowClose: true,

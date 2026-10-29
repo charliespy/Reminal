@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"reminal/internal/atomicfile"
+	"reminal/internal/client"
 	"reminal/internal/piext"
 	"reminal/internal/protocol"
 	"reminal/internal/session"
@@ -62,6 +63,10 @@ type agentTarget struct {
 	// support we haven't wired yet — those still get MCP + the screen fallback.
 	hooks *hookSpec
 
+	// plugin, for an agent whose hooks are a plugin file it loads (OpenCode),
+	// rather than entries in its config.
+	plugin *pluginFile
+
 	// Extension route: an agent with its own extension system takes a package
 	// rather than a config entry, and one package does both jobs — it hands the
 	// agent reminal's tools AND reports the session's attention state — so these
@@ -75,9 +80,6 @@ type agentTarget struct {
 	checkFile string
 	checkKey  []string
 	checkTOML string
-	// resume is the command that starts this agent again on its previous
-	// conversation — the restart hint shown after a setup.
-	resume string
 	// aroundAdd, when set, runs the `mcp add` (add) and finishes what it
 	// cannot fully make: a setting it has no flag for, which it also drops
 	// when it writes the entry over. Run on every add, so an entry an older
@@ -415,7 +417,6 @@ func agentTargets() []agentTarget {
 			cliAdd:    []string{"mcp", "add", "--scope", "user", mcpServerName, "--", "%CMD%", "mcp"},
 			cliRemove: []string{"mcp", "remove", "--scope", "user", mcpServerName},
 			checkFile: ".claude.json", checkKey: []string{"mcpServers"},
-			resume: "claude --continue",
 			hooks: &hookSpec{
 				file: ".claude/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
@@ -439,15 +440,16 @@ func agentTargets() []agentTarget {
 			cliAdd:    []string{"mcp", "add", mcpServerName, "--", "%CMD%", "mcp"},
 			cliRemove: []string{"mcp", "remove", mcpServerName},
 			checkTOML: ".codex/config.toml",
-			resume:    "codex resume --last",
 			aroundAdd: codexAddWithToolTimeout,
+			// No hooks: Codex runs them from its app-server, shared by every
+			// Codex on the machine and started inside the first one's
+			// session, so each would report as that session.
 		},
 		{
 			Name: "Antigravity CLI", Bin: "agy",
 			cliAdd:    []string{"mcp", "add", mcpServerName, "--", "%CMD%", "mcp"},
 			cliRemove: []string{"mcp", "remove", mcpServerName},
 			checkFile: ".gemini/config/mcp_config.json", checkKey: []string{"mcpServers"},
-			resume: "agy --continue",
 			// Its hooks (~/.gemini/config/hooks.json): each set under a name of
 			// its own, as flat {command} entries — agy rejects the whole file if
 			// events sit at its top. It has no event for waiting on the person.
@@ -466,17 +468,15 @@ func agentTargets() []agentTarget {
 			entry: func(exe string) map[string]any {
 				return map[string]any{"type": "local", "command": []string{exe, "mcp"}, "enabled": true}
 			},
-			resume: "opencode --continue",
+			plugin: &pluginFile{path: ".config/opencode/plugin/reminal.js", body: opencodePlugin},
 		},
 		{
 			Name: "Cursor CLI", Bin: "cursor-agent",
 			file: ".cursor/mcp.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
-			resume: "cursor-agent --continue",
 		},
 		{
 			Name: "Gemini CLI", Bin: "gemini",
 			file: ".gemini/settings.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
-			resume: "gemini --resume latest",
 			hooks: &hookSpec{
 				file: ".gemini/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
@@ -489,20 +489,19 @@ func agentTargets() []agentTarget {
 		{
 			Name: "Qwen Code", Bin: "qwen",
 			file: ".qwen/settings.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
-			resume: "qwen --continue",
 			hooks: &hookSpec{
 				file: ".qwen/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
 					{Event: "UserPromptSubmit", State: "working"},
 					{Event: "Notification", State: "notify"}, // idle_prompt + permission_prompt — split by payload
 					{Event: "Stop", State: "done"},
+					{Event: "SessionStart", State: "ready"},
 				},
 			},
 		},
 		{
 			Name: "Amp", Bin: "amp",
 			file: ".config/amp/settings.json", keyPath: []string{"amp.mcpServers"}, entry: stdioEntry,
-			resume: "amp threads continue",
 		},
 		{
 			// pi has no MCP client to register with — it takes an extension, which
@@ -516,7 +515,6 @@ func agentTargets() []agentTarget {
 				return piext.Install(home, exe)
 			},
 			installHow: "extension in ~/.pi/agent/extensions + attention",
-			resume:     "pi --continue",
 		},
 	}
 }
@@ -615,6 +613,8 @@ func runIntegrate(args []string) error {
 		}
 		if t.hooks != nil {
 			how += " + attention hooks"
+		} else if t.plugin != nil {
+			how += " + attention plugin"
 		}
 		plan = append(plan, planStep{target: t, binPath: path, how: how})
 	}
@@ -684,6 +684,9 @@ func runIntegrate(args []string) error {
 			}
 			hookErr = applyHooks(&spec, home, exe, remove)
 		}
+		if p.target.plugin != nil {
+			hookErr = applyPlugin(p.target.plugin, home, exe, remove)
+		}
 		if err := errors.Join(mcpErr, hookErr); err != nil {
 			failures++
 			fmt.Printf("  ✗ %-18s %v\n", p.target.Name, err)
@@ -704,8 +707,8 @@ func runIntegrate(args []string) error {
 			"own prompt and start it again with its resume option, so the same\n" +
 			"conversation continues:\n")
 		for _, p := range plan {
-			if p.target.resume != "" {
-				fmt.Printf("  %-18s %s\n", p.target.Name, cDim(p.target.resume))
+			if p.target.resumeHint() != "" {
+				fmt.Printf("  %-18s %s\n", p.target.Name, cDim(p.target.resumeHint()))
 			}
 		}
 	} else {
@@ -873,3 +876,8 @@ func printIntegrationReport(report []protocol.IntegrationStatus, asJSON bool) er
 	}
 	return nil
 }
+
+// resumeHint is the command that starts this agent again on its latest
+// conversation, as a restore would (client.ResumeLatest): the restart hint
+// shown after a setup.
+func (t agentTarget) resumeHint() string { return client.ResumeLatest(t.Bin) }

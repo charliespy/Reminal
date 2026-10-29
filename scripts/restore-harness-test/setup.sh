@@ -31,7 +31,7 @@ node -e '
 const k=process.argv[1]; const fs=require("fs");
 fs.writeFileSync(process.env.HOME+"/.claude.json", JSON.stringify({hasCompletedOnboarding:true, theme:"dark", bypassPermissionsModeAccepted:true,
   customApiKeyResponses:{approved:[k.slice(-20)], rejected:[]},
-  projects:Object.fromEntries(["p-claude","shared-claude","f-claude"].map(d=>process.env.HOME.replace(/\\/g,"/")+"/"+d).map(p=>[p,{hasTrustDialogAccepted:true, hasCompletedProjectOnboarding:true, allowedTools:[]}]))}, null, 2));' "$KEY"
+  projects:Object.fromEntries(["p-claude","shared-claude","f-claude","z-claude"].map(d=>process.env.HOME.replace(/\\/g,"/")+"/"+d).map(p=>[p,{hasTrustDialogAccepted:true, hasCompletedProjectOnboarding:true, allowedTools:[]}]))}, null, 2));' "$KEY"
 
 mkdir -p $HOME/.claude
 echo '{"skipDangerousModePermissionPrompt":true}' > $HOME/.claude/settings.json

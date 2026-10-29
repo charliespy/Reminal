@@ -135,6 +135,13 @@ const (
 	// The host SIGTERMs (then SIGKILLs) the target agent and replies echoing
 	// req_id.
 	TypeDirKill MessageType = "dir_kill"
+	// TypeDirSleep asks the directory host to sleep, wake or keep awake one of
+	// the machine's sessions (sleep.go). Data is {"id","act","req_id"}
+	// encrypted under the channel key, act one of "sleep", "sleep_anyway",
+	// "wake", "keep_awake", "keep_awake_off" — owner-gated like dir_kill. The
+	// reply echoes req_id; a sleep refused for what it would end lists it
+	// ("lose"), and a wake carries the session's last saved screen ("screen").
+	TypeDirSleep MessageType = "dir_sleep"
 	// TypeDirIntegrate asks the directory host about, or to run, `reminal
 	// integrate` for the coding agents on the machine. Data is either
 	// {"check":true} or {"apply":"claude","req_id"} encrypted under the channel
@@ -522,6 +529,13 @@ type DirSession struct {
 	// says whether a running agent predates its reminal setup and so still
 	// lacks the tools until it is restarted. Zero from hosts too old to report.
 	FgSince int64 `json:"fg_since,omitempty"`
+	// Asleep: the session sleeps (`reminal sleep`): its processes ended, its
+	// record kept, and it wakes as itself, on the same id and PIN, when it
+	// is woken. SleptAt is when (unix seconds); Dropped, what the person let
+	// go of by sleeping it anyway (a job that was running in it).
+	Asleep  bool     `json:"asleep,omitempty"`
+	SleptAt int64    `json:"slept_at,omitempty"`
+	Dropped []string `json:"dropped,omitempty"`
 	// SearchHits is filled when the directory query carried a regex: snippets
 	// from this session's live scrollback. Omitted on a plain listing, and by
 	// hosts that do not search yet (they still return the session list).

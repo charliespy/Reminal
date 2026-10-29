@@ -347,10 +347,11 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 				endAt, failure = hs.TS, hs.Failure
 			}
 		}
+		a.noteTurn(turnAt)
 		if a.noteHarnessLimit(harnessTail(stripANSI(render), harnessRowsFor(prog)), prog, atWork, turnAt, endAt, failure) {
 			a.metaDirty.Store(true)
 		}
-		if hs != nil && prog != "" && (fgAt.IsZero() || !hs.TS.Before(fgAt)) {
+		if prog != "" && hookSpokeIn(hs, fgAt) {
 			hookSpoke[prog] = true
 		}
 		state, source := resolveAttn(screenState, hs, last, fgAt, idleMs,
@@ -551,6 +552,12 @@ func processArgs(pid int) []string {
 	return strings.Fields(string(out))
 }
 
+// hookSpokeIn says hook state hs was written in the agent run that began at
+// fgAt (any run, when that is not known): its hook speaks in this run.
+func hookSpokeIn(hs *session.HookState, fgAt time.Time) bool {
+	return hs != nil && (fgAt.IsZero() || !hs.TS.Before(fgAt))
+}
+
 // noteForeground records the foreground command and, when it changes, flushes
 // the session record — `claude` starting or exiting is what turns a terminal
 // into an agent and back, and `reminal list` should see it within a tick.
@@ -643,6 +650,11 @@ func (a *Agent) noteForeground(fg string, pgrp int) {
 // kicks an immediate meta-flush (same pattern as commitOscCwd) so `reminal list`
 // reflects the new state within ~a tick instead of at the next slow flush.
 func (a *Agent) setAttnState(state string) {
+	if state == "done" || state == harnessLimited {
+		// Before the state is written, and so before anything reads it
+		// (a flush, the viewer's held keys): a no-op once taken.
+		a.noteRestBase()
+	}
 	a.metaMu.Lock()
 	changed := state != a.attnState
 	a.attnState = state
@@ -650,6 +662,7 @@ func (a *Agent) setAttnState(state string) {
 		a.attnSince = time.Now()
 		if state == "working" {
 			a.attnTurnAt = a.attnSince
+			a.noteFirstTurnLocked(a.attnSince)
 		}
 	}
 	a.metaMu.Unlock()
@@ -771,8 +784,9 @@ func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt t
 
 // hookTurns are the harnesses whose own hook marks the start of every turn
 // (`reminal integrate`: Claude Code's and Qwen's UserPromptSubmit, Gemini's
-// BeforeAgent, Antigravity's PreInvocation), by the program name in front.
-var hookTurns = map[string]bool{"claude": true, "qwen": true, "gemini": true, "agy": true}
+// BeforeAgent, Antigravity's PreInvocation, OpenCode's plugin), by the
+// program name in front.
+var hookTurns = map[string]bool{"claude": true, "opencode": true, "qwen": true, "gemini": true, "agy": true}
 
 // attnBusyCues are lowercase substrings a harness draws at the bottom of its
 // screen only while a turn is running. Claude Code's footer reads "esc to

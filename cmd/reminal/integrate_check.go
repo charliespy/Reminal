@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -43,7 +42,7 @@ func checkIntegration(t agentTarget, home, exe string) protocol.IntegrationStatu
 		Bin: t.Bin, Name: t.Name,
 		HooksWanted: t.hooks != nil,
 		Restart:     restartHint(t),
-		Resume:      t.resume,
+		Resume:      t.resumeHint(),
 		Since:       setUpAt(home)[t.Bin],
 	}
 	if _, err := exec.LookPath(t.Bin); err == nil {
@@ -281,10 +280,10 @@ func tildePath(home, path string) string {
 // MCP servers when it starts, so a running copy has to be quit and started
 // again — with its resume option, or the conversation is gone.
 func restartHint(t agentTarget) string {
-	if t.resume == "" {
+	if t.resumeHint() == "" {
 		return fmt.Sprintf("Quit %s and start it again so it loads the tools.", t.Name)
 	}
-	return fmt.Sprintf("Quit %s with its exit command, then run `%s` — a plain `%s` starts a new chat.", t.Name, t.resume, t.Bin)
+	return fmt.Sprintf("Quit %s with its exit command, then run `%s` — a plain `%s` starts a new chat.", t.Name, t.resumeHint(), t.Bin)
 }
 
 // ---- When each agent was set up -------------------------------------------
@@ -342,7 +341,7 @@ func widenPATH(home string) {
 	}
 	// The login shell's PATH first: it is the order the user's own shell
 	// resolves `claude` in, and this process is standing in for that shell.
-	for _, p := range strings.Split(loginPATH(), sep) {
+	for _, p := range strings.Split(session.LoginEnv("PATH")["PATH"], sep) {
 		add(p)
 	}
 	for _, p := range strings.Split(os.Getenv("PATH"), sep) {
@@ -358,41 +357,6 @@ func widenPATH(home string) {
 		}
 	}
 	os.Setenv("PATH", strings.Join(parts, sep))
-}
-
-// loginPATH asks the user's login shell for its PATH; "" when that fails or
-// takes too long. The value is read between sentinels: an rc file that
-// prints a banner would otherwise put that banner at the head of PATH. The
-// shell runs as a probe (session.ProbeCommand): in a session of its own with
-// a short wait on its pipes, so an rc that starts something long-lived
-// cannot hold a check open, and apart from any session integrate is run in,
-// so an agent an rc starts writes nothing of that session's.
-func loginPATH() string {
-	if runtime.GOOS == "windows" {
-		return ""
-	}
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	out, err := session.RunProbe(session.ProbeCommand(ctx, shell, "-l", "-c", `printf '\n__REMINAL_PATH__%s__REMINAL_PATH__' "$PATH"`), false)
-	if err != nil {
-		return ""
-	}
-	const mark = "__REMINAL_PATH__"
-	s := string(out)
-	a := strings.Index(s, mark)
-	if a < 0 {
-		return ""
-	}
-	s = s[a+len(mark):]
-	b := strings.Index(s, mark)
-	if b < 0 {
-		return ""
-	}
-	return strings.TrimSpace(s[:b])
 }
 
 // agentVersionIfGated is the agent's version when some hook event of its
