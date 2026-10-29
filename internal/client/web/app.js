@@ -11290,21 +11290,21 @@
       for (const it of winCloseMenu.items) it.el.classList.toggle('active', it === hit);
     }
 
-    // closeOnHost sends the OS-level close and, deliberately, does NOT tear the
-    // pane down: if the app raises a "save changes?" sheet it appears in the
-    // pane so the user can answer it, and the pane closes on its own once the
-    // host reports the window gone (payload.closed → closePane), which it
-    // looks for right away after a close. Meanwhile the pane fades so the
-    // release visibly did something; a window still there after
-    // WIN_CLOSE_FADE_MS is asking something, so it comes back to full view.
-    const WIN_CLOSE_FADE_MS = 1500;
+    // closeOnHost sends the OS-level close and hides the pane at once, so the
+    // window is gone as far as the user can tell while the host closes it in
+    // the background. The pane itself stays until the host reports the window
+    // gone (payload.closed → closePane): an app that raises a "save changes?"
+    // sheet instead of closing is still there after WIN_CLOSE_HIDE_MS (the
+    // host's own watch on an asked close), so its pane comes back to be answered.
+    const WIN_CLOSE_HIDE_MS = 10000;
     function closeOnHost(id) {
       sendWin('window_close', { id });
       const p = panes.get(id);
       if (!p) return;
       p.el.classList.add('closing');
+      if (focusedPaneId === id) { focusedPaneId = null; p.el.classList.remove('focused'); }
       clearTimeout(p.closingTimer);
-      p.closingTimer = setTimeout(() => p.el.classList.remove('closing'), WIN_CLOSE_FADE_MS);
+      p.closingTimer = setTimeout(() => p.el.classList.remove('closing'), WIN_CLOSE_HIDE_MS);
     }
 
     function wireCloseButton(btn, id) {

@@ -1572,9 +1572,12 @@
       min-width: 160px; max-width: 98vw;
     }
     .wpane.focused { border-color: #1f6feb; box-shadow: 0 10px 34px rgba(31, 111, 235, 0.45); }
-    /* Closing on the host (closeOnHost): fades at once, gone when the host says so. */
-    .wpane { transition: opacity 0.15s ease-out, transform 0.15s ease-out; }
-    .wpane.closing { opacity: 0.3; transform: scale(0.97); }
+    /* Closing on the host (closeOnHost): shrinks away at once, removed when the host says so. */
+    .wpane { transition: opacity 0.18s ease-out, transform 0.18s ease-out, visibility 0s; }
+    .wpane.closing {
+      opacity: 0; transform: scale(0.92); pointer-events: none; visibility: hidden;
+      transition: opacity 0.18s ease-in, transform 0.18s ease-in, visibility 0s 0.18s;
+    }
     .wpane-bar {
       display: flex; align-items: center; gap: 8px;
       padding: 6px 8px; background: #161b22; border-bottom: 1px solid #30363d;
