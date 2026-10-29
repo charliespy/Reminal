@@ -17,6 +17,10 @@ import (
 var convStores = map[string]func(conv string) string{
 	// <its folder>/projects/<project>/<conv>.jsonl
 	"claude": func(conv string) string { return underDir(claudeConfigDir(), "projects", "*", conv+".jsonl") },
+	// <CODEX_HOME, else ~/.codex>/sessions/<year>/<month>/<day>/rollout-<when>-<conv>.jsonl
+	"codex": func(conv string) string {
+		return underDir(codexHome(), "sessions", "*", "*", "*", "rollout-*-"+conv+".jsonl")
+	},
 	// ~/.qwen/projects/<project>/chats/<conv>.jsonl
 	"qwen": func(conv string) string { return underHome(".qwen", "projects", "*", "chats", conv+".jsonl") },
 }
@@ -41,6 +45,15 @@ func convSize(agent, conv string) int64 {
 		}
 	}
 	return max
+}
+
+// codexHome is where Codex keeps its files: CODEX_HOME when set, else
+// ~/.codex.
+func codexHome() string {
+	if dir := os.Getenv("CODEX_HOME"); dir != "" {
+		return dir
+	}
+	return underHome(".codex")
 }
 
 // underDir is dir joined with parts, or "" when dir is not known.

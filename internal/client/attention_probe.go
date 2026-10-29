@@ -777,9 +777,10 @@ func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt t
 }
 
 // hookTurns are the harnesses whose own hook marks the start of every turn
-// (`reminal integrate`: Claude Code's and Qwen's UserPromptSubmit, Gemini's
-// BeforeAgent, Antigravity's PreInvocation), by the program name in front.
-var hookTurns = map[string]bool{"claude": true, "qwen": true, "gemini": true, "agy": true}
+// (`reminal integrate`: Claude Code's, Codex's and Qwen's UserPromptSubmit,
+// Gemini's BeforeAgent, Antigravity's PreInvocation), by the program name
+// in front.
+var hookTurns = map[string]bool{"claude": true, "codex": true, "qwen": true, "gemini": true, "agy": true}
 
 // attnBusyCues are lowercase substrings a harness draws at the bottom of its
 // screen only while a turn is running. Claude Code's footer reads "esc to

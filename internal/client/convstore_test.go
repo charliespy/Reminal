@@ -15,10 +15,12 @@ func TestConvStores(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
 	const conv = "51580c55-63f5-43c1-bbea-4d0425f09835"
 	files := map[string]string{
 		"claude": filepath.Join(home, ".claude", "projects", "-work", conv+".jsonl"),
 		"qwen":   filepath.Join(home, ".qwen", "projects", "-work", "chats", conv+".jsonl"),
+		"codex":  filepath.Join(home, ".codex", "sessions", "2026", "10", "29", "rollout-2026-10-29T17-51-38-"+conv+".jsonl"),
 	}
 	for agent, p := range files {
 		if convSize(agent, conv) != 0 {

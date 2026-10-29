@@ -441,6 +441,17 @@ func agentTargets() []agentTarget {
 			checkTOML: ".codex/config.toml",
 			resume:    "codex resume --last",
 			aroundAdd: codexAddWithToolTimeout,
+			// Its hooks (~/.codex/hooks.json) take Claude Code's shape and
+			// payload. Codex asks once, as it starts, to trust hooks new to it.
+			hooks: &hookSpec{
+				file: ".codex/hooks.json", key: []string{"hooks"}, shape: shapeMatcher,
+				events: []hookEvent{
+					{Event: "UserPromptSubmit", State: "working"},
+					{Event: "PermissionRequest", State: "input"},
+					{Event: "Stop", State: "done"},
+					{Event: "SessionStart", State: "ready"},
+				},
+			},
 		},
 		{
 			Name: "Antigravity CLI", Bin: "agy",
