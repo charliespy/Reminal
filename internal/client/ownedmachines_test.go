@@ -6,6 +6,7 @@ package client
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"strings"
 	"testing"
 )
 
@@ -118,9 +119,47 @@ func TestMachineIDRoundTrip(t *testing.T) {
 	if id[:len(MachineIDPrefix)] != MachineIDPrefix {
 		t.Fatalf("id missing prefix: %s", id)
 	}
-	// The short id is a strict prefix of the full id (plus an ellipsis).
+	// The short id is a strict prefix of the full id, with no ellipsis: it is
+	// shown as the id to type, so it must not look truncated.
 	short := ShortMachineID(k)
-	if short[len(short)-len("…"):] != "…" {
-		t.Errorf("short id should end with an ellipsis: %s", short)
+	if !strings.HasPrefix(id, short) || short == id {
+		t.Errorf("short id %q should be a strict prefix of %q", short, id)
+	}
+}
+
+// The short id printed by older versions ended in "…"; a copy-paste of that
+// must keep resolving now that the ellipsis is gone.
+func TestFindOwnedMachineAcceptsOldEllipsisForm(t *testing.T) {
+	isolateHome(t)
+	k := newMachineKey(t)
+	if err := RecordOwnedMachine(k); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RenameOwnedMachine(ShortMachineID(k)+"…", "laptop"); err != nil {
+		t.Fatalf("short id with a trailing ellipsis should resolve: %v", err)
+	}
+}
+
+// A selector that matches nothing names the machines that would have, so the
+// user can retry without going back to `reminal machines`.
+func TestFindOwnedMachineNoMatchListsChoices(t *testing.T) {
+	isolateHome(t)
+	named, unnamed := newMachineKey(t), newMachineKey(t)
+	for _, k := range []ed25519.PublicKey{named, unnamed} {
+		if err := RecordOwnedMachine(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := RenameOwnedMachine(ShortMachineID(named), "home"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := RenameOwnedMachine("nope", "x")
+	if err == nil {
+		t.Fatal("an unknown selector should not resolve")
+	}
+	for _, want := range []string{"home (" + ShortMachineID(named) + ")", ShortMachineID(unnamed)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should list %q", err, want)
+		}
 	}
 }

@@ -130,7 +130,14 @@ func listMachines() error {
 	if len(remote) == 0 {
 		fmt.Println("  " + cDim("Just this machine so far. To reach another here, run ") + cBold("reminal own"))
 		fmt.Println("  " + cDim("on it, then ") + cBold("sudo reminal add owner <id>") + cDim(" — it'll show up once you owner-connect."))
+		return nil
 	}
+	// How to act on what's listed — a dim heading over the commands, the same
+	// shape as the hints under `reminal list`.
+	fmt.Println("  " + cDim("Hints:"))
+	fmt.Println("  reminal machines rename <machine-id> <new-name>   " + cDim("rename a machine"))
+	fmt.Println("  reminal new [name] --machine <machine-id>         " + cDim("start a session on that machine"))
+	fmt.Println("  reminal kill <session-id> --machine <machine-id>  " + cDim("end a session on that machine"))
 	return nil
 }
 
