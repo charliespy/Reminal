@@ -21,6 +21,8 @@ var convStores = map[string]func(conv string) string{
 	"codex": func(conv string) string {
 		return underDir(codexHome(), "sessions", "*", "*", "*", "rollout-*-"+conv+".jsonl")
 	},
+	// <PI_CODING_AGENT_DIR, else ~/.pi/agent>/sessions/<project>/<when>_<conv>.jsonl
+	"pi": func(conv string) string { return underDir(piAgentDir(), "sessions", "*", "*_"+conv+".jsonl") },
 	// ~/.qwen/projects/<project>/chats/<conv>.jsonl
 	"qwen": func(conv string) string { return underHome(".qwen", "projects", "*", "chats", conv+".jsonl") },
 }
@@ -54,6 +56,15 @@ func codexHome() string {
 		return dir
 	}
 	return underHome(".codex")
+}
+
+// piAgentDir is where pi keeps its files: PI_CODING_AGENT_DIR when set,
+// else ~/.pi/agent.
+func piAgentDir() string {
+	if dir := os.Getenv("PI_CODING_AGENT_DIR"); dir != "" {
+		return dir
+	}
+	return underHome(".pi", "agent")
 }
 
 // underDir is dir joined with parts, or "" when dir is not known.
