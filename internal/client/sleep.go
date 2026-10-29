@@ -383,7 +383,7 @@ func WakeSession(r session.Restore) (*SpawnedSession, error) {
 	if err := session.BeginWake(r.ID, time.Now()); errors.Is(err, session.ErrNotAsleep) {
 		return nil, fmt.Errorf("%s was ended while asleep", r.ID)
 	}
-	sp, err := RestoreSessionWith(r, "woke from sleep")
+	sp, err := RestoreSession(r)
 	if err != nil && !SessionRunning(r.ID) {
 		session.ClearWaking(r.ID)
 		return nil, err

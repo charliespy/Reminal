@@ -136,6 +136,8 @@ type Agent struct {
 	// saved for a restore; stopSignal, that a signal (not the shell) ended
 	// the session, so it may come back. See restore.go.
 	restoring bool
+	// restoreWoke: what brought it back was a wake from sleep (restoreBanner).
+	restoreWoke bool
 	// restoreAgentSeen: since this restore, the agent has been seen running
 	// again — so a prompt now means it was quit, not that it is still coming
 	// back. Touched only by saveRestore, under restoreMu.
@@ -747,6 +749,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			startedAt:      r.StartedAt,
 			resumed:        true,
 			restoring:      r.PTY == nil,
+			restoreWoke:    r.Woke,
 			restoreRun:     opts.RestoreRun,
 			restoreNote:    opts.RestoreNote,
 			restorePlan:    opts.RestorePlan,

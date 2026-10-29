@@ -75,6 +75,8 @@ running $ID && ok "running again, same id $ID" || fail "not running after wake"
 box "test -f /root/.reminal/restore/$ID.asleep" && fail "still marked asleep" || ok "no longer marked asleep"
 s=$(screen $ID)
 echo "$s" | grep -q "before-the-sleep-marker" && ok "scrollback from before the sleep is there" || fail "scrollback lost"
+echo "$s" | grep -q "reminal woke this session from sleep" && ok "it says it woke from sleep" || fail "no wake line: $(echo "$s" | grep "reminal .* this session")"
+echo "$s" | grep -q "after its machine restarted" && fail "it says its machine restarted, which it did not" || ok "…not that its machine restarted"
 echo "$s" | grep -q "fake-claude: resumed conversation $CONV" && ok "claude resumed the same conversation" || fail "claude not resumed: $(echo "$s" | tail -4)"
 echo "$s" | grep -q "(earlier) you said: remember the number 4242" && ok "…with what was said in it" || fail "conversation content missing"
 send $ID "what number"; sleep 1
@@ -115,7 +117,7 @@ box "grep -q 'it is asleep' /tmp/conn.log" && ok "…and says it is asleep" || f
 box "grep -q 'older than 3.15.6' /tmp/conn.log" && fail "the misleading old-version error" || ok "…no misleading error"
 box "reminal wake $ID >/dev/null 2>&1"; sleep 15   # past the restore's wait before it types the resume
 send $ID "echo back-after-the-wake-$$"; sleep 3
-box "grep -q 'back-after-the-wake-' /tmp/conn.log" && ok "after the wake it is live in that terminal again" || fail "the attached terminal did not come back: woke=$(box 'grep -c "woke from sleep" /tmp/conn.log') tail=$(box 'tail -c 3500 /tmp/conn.log | cat -v | tr -d '\r'')"
+box "grep -q 'back-after-the-wake-' /tmp/conn.log" && ok "after the wake it is live in that terminal again" || fail "the attached terminal did not come back: woke=$(box 'grep -c "from sleep" /tmp/conn.log') tail=$(box 'tail -c 3500 /tmp/conn.log | cat -v | tr -d '\r'')"
 box "pkill -f 'reminal connect $ID'; true"
 
 # A plain shell: refused unless --anyway (what was typed by hand is lost).

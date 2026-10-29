@@ -53,8 +53,15 @@ func processCwd(pid int) string {
 }
 
 // restoreBanner marks, in the scrollback, where the old session ends and
-// the restored one begins.
-const restoreBanner = "\x1b[2m── reminal restored this session after its machine restarted ──\x1b[0m"
+// the restored one begins: why it came back, woken from sleep or after its
+// machine restarted.
+func restoreBanner(woke bool) string {
+	why := "restored this session after its machine restarted"
+	if woke {
+		why = "woke this session from sleep"
+	}
+	return "\x1b[2m── reminal " + why + " ──\x1b[0m"
+}
 
 // saveRestore writes this session's restore record, and its scrollback when
 // there is new output. Called on a timer; a failure costs only freshness.
@@ -794,7 +801,7 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 		return nil, nil, errors.New("restore record has no PIN")
 	}
 	st := &ResumeState{SessionID: r.ID, PIN: r.PIN, PinHash: r.PinHash, Token: r.Token,
-		StartedAt: time.Now(), Name: r.Name, Headless: true}
+		StartedAt: time.Now(), Name: r.Name, Headless: true, Woke: session.IsAsleep(r.ID)}
 	if p, err := session.RestoreScrollbackPath(r.ID); err == nil {
 		id := r.ID
 		st.Dump = readScrollbackDump(p, func(b []byte) ([]byte, error) {
@@ -925,7 +932,7 @@ func (a *Agent) restoreStart() {
 	// Before the new shell's prompt or after it, as the session's first try
 	// at the relay took: either way the prompt stays the cursor's line
 	// (recordAtShell), never an empty one under the banner.
-	a.recordAtShell(restoreBanner)
+	a.recordAtShell(restoreBanner(a.restoreWoke))
 	if a.restoreNote != "" {
 		a.recordAtShell("\x1b[2m" + a.restoreNote + "\x1b[0m")
 	}
