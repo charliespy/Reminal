@@ -5484,8 +5484,10 @@
     // until its agent is back at its prompt (wakeGate): typed into the shell
     // before the agent is back, it would run there. A wake that takes long
     // keeps them held all the same (WAKE_SLOW_MS only changes what the chip
-    // says, Discard always there): never let go into a shell whose agent is
-    // not back.
+    // says): never let go into a shell whose agent is not back, unless the
+    // person says so. An agent may never be back (its resume refused, it is
+    // gone, it went back to the shell): Send sends what is held to what is
+    // there, and Discard drops it; either stops the wait.
     const WAKE_SLOW_MS = 60000;
     let wakeGate = null; // { id, agent, since }
     function wakeHolding() {
@@ -8494,15 +8496,24 @@
         ? heldChars(k) + ' typed while it was not connected will not be sent: they waited too long'
         : heldChars(k) + (wakeSlow() ? ' typed, held: it is taking long to wake' : wakeGate ? ' typed, waiting for it to wake' : ' typed, waiting for it to connect') + (heldOverflow ? ' (some too many to hold will not be sent)' : '');
       document.getElementById('held-chip-text').textContent = text;
+      // Waiting on a woken agent that may never be back (its resume refused,
+      // it is gone, it went back to the shell): sending what is held into
+      // what is there now is the person's call, never made for them.
+      document.getElementById('held-send').hidden = !(k && wakeGate);
       chip.hidden = !text;
     }
+    // discardHeld drops what is held. Held for a wake, it also stops waiting
+    // for the agent: what is typed next goes to what is there.
     function discardHeld() {
-      const k = heldCount();
-      dropHeldInput();
-      if (k) viewerNote(heldChars(k) + ' you typed while it connected ' + (k === 1 ? 'was' : 'were') + ' not sent.');
+      const k = heldCount(), waking = !!wakeGate;
+      if (waking) endWakeGate(false); else dropHeldInput();
+      if (k) viewerNote(heldChars(k) + ' you typed while it ' + (waking ? 'woke' : 'connected') + ' ' + (k === 1 ? 'was' : 'were') + ' not sent.');
       term.focus();
     }
     document.getElementById('held-discard').addEventListener('click', () => discardHeld());
+    // Send, held for a wake: stop waiting for the agent and send what is held
+    // to what is there now.
+    document.getElementById('held-send').addEventListener('click', () => { endWakeGate(true); term.focus(); });
     function flushHeldInput() {
       if (!inputLive() || (!heldInput.length && !heldOverflow)) return;
       const items = heldInput, late = Date.now() - heldSince > INPUT_HOLD_MS, over = heldOverflow;

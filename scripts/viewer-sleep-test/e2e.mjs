@@ -101,6 +101,45 @@ check(dialogs.some(d => /sleep, running in it/.test(d) && /Sleep anyway/.test(d)
 check(await until(async () => (await row(sid))?.asleep, 20), 'said yes: it sleeps', JSON.stringify(await row(sid)));
 check(((await row(sid))?.dropped || []).some(d => /sleep, running in it/.test(d)), 'the listing says what it let go of', JSON.stringify(await row(sid)));
 
+// A wake whose agent never comes back (here: no claude to start any more):
+// the page keeps taking keys. What was held is sent to the shell on Send, or
+// dropped on Discard; either way what is typed next runs there.
+async function sleepWith(name) {
+  sh(`mkdir -p /root/${name}`);
+  const m = sh(`cd /root/${name} && reminal new ${name}`);
+  const id = m.match(/Session:\s+([A-Z0-9]+)/)[1];
+  await p.evaluate(s => connectOwned(s), id);
+  await until(() => p.evaluate((s) => document.body.classList.contains('connected') && sessionId === s, id), 20);
+  await sleep(800);
+  await p.evaluate(() => term.focus());
+  await p.keyboard.type('claude\n', { delay: 10 }); await sleep(2000);
+  await p.keyboard.type(`about ${name}\n`, { delay: 10 }); await sleep(2000);
+  dialogs = [];
+  await p.evaluate(async ([k, s]) => sleepOnMachine(k, s), [key, await row(id)]);
+  check(await until(async () => (await row(id))?.asleep, 20), `${name} sleeps`, JSON.stringify(await row(id)));
+  return id;
+}
+const lost = await sleepWith('lostsend'), lost2 = await sleepWith('lostdrop');
+sh('mv /usr/local/bin/claude /usr/local/bin/claude.away');
+const stuckWake = async (id, typed) => {
+  await p.evaluate(async ([k, s]) => wakeOwned(k, s), [key, await row(id)]);
+  await sleep(4000);
+  await p.evaluate(() => term.focus());
+  await p.keyboard.type(typed, { delay: 5 });
+  return until(() => p.evaluate(() => !document.getElementById('held-chip').hidden && !document.getElementById('held-send').hidden), 10);
+};
+check(await stuckWake(lost, 'echo sent-from-hold-$((40+2))\n'), 'its agent not back: what is typed is held, and Send is offered', await p.evaluate(() => document.getElementById('held-chip').outerHTML));
+await p.click('#held-send');
+check(await until(async () => (await screenOf(p)).includes('sent-from-hold-42'), 15), 'Send: what was held ran in the shell', (await screenOf(p)).slice(-300));
+await p.keyboard.type('echo then-live-$((50+1))\n', { delay: 5 });
+check(await until(async () => (await screenOf(p)).includes('then-live-51'), 15), '…and what is typed next goes straight there', (await screenOf(p)).slice(-300));
+check(await stuckWake(lost2, 'echo never-sent\n'), 'another such wake holds what is typed', 'no chip');
+await p.click('#held-discard');
+await p.keyboard.type('echo after-discard-$((60+3))\n', { delay: 5 });
+check(await until(async () => (await screenOf(p)).includes('after-discard-63'), 15), 'Discard stops the wait: what is typed next runs in the shell', (await screenOf(p)).slice(-300));
+check(!(await screenOf(p)).includes('never-sent'), '…and what was discarded never ran', (await screenOf(p)).slice(-300));
+sh('mv /usr/local/bin/claude.away /usr/local/bin/claude');
+
 // Kill on a sleeping session forgets it.
 await p.evaluate(async ([k, id]) => queryDirectory(base64ToU8(b64URLToStd(k)), { kill: id }), [key, sid]);
 check(await until(async () => !(await row(sid)), 10), 'kill on a sleeping session forgets it', JSON.stringify(await row(sid)));
