@@ -377,9 +377,10 @@ func (a *Agent) handleWindowClose(encData string) {
 	if err != nil {
 		return
 	}
-	if b.close(w) == nil {
-		a.noteCloseAsked(ev.ID)
-	}
+	// Noted first: the window can be gone before close returns, and the
+	// stream must not start a grab of it in between (winStream.closeLanded).
+	a.noteCloseAsked(ev.ID)
+	_ = b.close(w)
 }
 
 // noteCloseAsked tells the window's stream that a close is under way, so its
@@ -1821,6 +1822,10 @@ func (s *winStream) run() {
 		s.noteKeyRequest()
 		// still: this frame showed no change (the picture-path verdict).
 		still := false
+		if s.closeLanded() {
+			s.a.sendWindowClosed(conn, s.w.ID)
+			return
+		}
 		start := time.Now()
 		f, err := s.capture()
 		switch {
@@ -2407,6 +2412,15 @@ func (s *winStream) closeAsked() bool {
 	return ok && time.Since(at) < winCloseWatch
 }
 
+// closeLanded reports, on the subprocess capture path while a close is under
+// way, that the window is gone. It is asked before each grab rather than after
+// (checkWindow), because grabbing a window that is gone does not fail fast:
+// ImageMagick's import, given an id it cannot find, waits for a click to pick
+// a window, and only the capture ceiling (5s) ends it.
+func (s *winStream) closeLanded() bool {
+	return !s.capNative && s.closeAsked() && !s.b.exists(s.w.ID)
+}
+
 func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 	asked := s.closeAsked()
 	// A frame read from a framebuffer file is read at the window's rect (an
@@ -2497,14 +2511,11 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		}
 		return true
 	}
-	every := winLiveCheck
-	if asked {
-		every = winClosePoll // a closing window animates: changed proves nothing
-	} else if changed {
+	if changed {
 		s.lastGeoCheck = time.Now()
 		return true
 	}
-	if time.Since(s.lastGeoCheck) < every {
+	if time.Since(s.lastGeoCheck) < winLiveCheck {
 		return true
 	}
 	s.lastGeoCheck = time.Now()

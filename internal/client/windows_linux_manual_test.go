@@ -671,19 +671,28 @@ func openOwnXterm(t *testing.T, b linuxWindows, title string) winInfo {
 }
 
 // closeToPaneGone closes w on the host, as handleWindowClose does, and times
-// how long its stream takes to end, polled at a capture loop's pace.
+// how long its stream takes to end, stepping it in the capture loop's order:
+// the pre-grab check, a real grab (whose failure captureFailure judges by
+// exists), then checkWindow. A grab of a window that is gone can hang, so
+// leaving the grab out would hide exactly the delay this measures.
 func closeToPaneGone(t *testing.T, b linuxWindows, w winInfo, asked bool) time.Duration {
 	t.Helper()
 	a := &Agent{}
 	s := &winStream{a: a, b: b, w: w, lastGeoCheck: time.Now()}
-	if err := b.close(w); err != nil {
-		t.Fatalf("close: %v", err)
-	}
 	if asked {
 		a.noteCloseAsked(w.ID)
 	}
+	if err := b.close(w); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 	start := time.Now()
-	for time.Since(start) < 10*time.Second {
+	for time.Since(start) < 15*time.Second {
+		if s.closeLanded() {
+			return time.Since(start)
+		}
+		if _, err := b.capture(s.w); err != nil && !b.exists(s.w.ID) {
+			return time.Since(start)
+		}
 		if !s.checkWindow(nil, false) {
 			return time.Since(start)
 		}
