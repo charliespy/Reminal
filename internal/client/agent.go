@@ -561,6 +561,10 @@ type Agent struct {
 	// of whatever the viewer was already playing out. It also wakes a stream
 	// sitting out its frame floor (winInputSignal). Guarded by winMu.
 	winFlush map[string]*winInputSignal
+	// winCloseAsked records when a viewer last asked the host to close a
+	// window (window_close), so its stream looks for it going at once instead
+	// of on the idle liveness schedule (winStream.closeAsked). Guarded by winMu.
+	winCloseAsked map[string]time.Time
 	// viewerCaps records what each viewer announced it can decode, so a viewer
 	// that never establishes P2P can still be sent video over the relay.
 	// Guarded by rtcMu (it's populated from the same signalling path).

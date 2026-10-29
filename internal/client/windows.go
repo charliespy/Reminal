@@ -179,6 +179,10 @@ func newWindowBackend() windowBackend {
 	}
 }
 
+// errWindowGone is findWindow's answer when the backend listed its windows and
+// this one was not among them, as opposed to the list itself failing.
+var errWindowGone = errors.New("window no longer open")
+
 // findWindow returns the window with the given ID from a fresh enumeration, so
 // callers always act on current bounds (windows move and resize between the
 // list the viewer saw and the moment it clicks).
@@ -192,7 +196,7 @@ func findWindow(b windowBackend, id string) (winInfo, error) {
 			return w, nil
 		}
 	}
-	return winInfo{}, fmt.Errorf("window no longer open")
+	return winInfo{}, errWindowGone
 }
 
 // ---- Agent wiring -----------------------------------------------------------
@@ -373,7 +377,20 @@ func (a *Agent) handleWindowClose(encData string) {
 	if err != nil {
 		return
 	}
-	_ = b.close(w)
+	if b.close(w) == nil {
+		a.noteCloseAsked(ev.ID)
+	}
+}
+
+// noteCloseAsked tells the window's stream that a close is under way, so its
+// pane goes as soon as the window does (winStream.closeAsked).
+func (a *Agent) noteCloseAsked(id string) {
+	a.winMu.Lock()
+	if a.winCloseAsked == nil {
+		a.winCloseAsked = map[string]time.Time{}
+	}
+	a.winCloseAsked[id] = time.Now()
+	a.winMu.Unlock()
 }
 
 // handleWindowCtl starts or stops streaming a window in response to a
@@ -1438,6 +1455,12 @@ const (
 	// window can sit frozen before its pane is dropped, without spending an
 	// existence check on every idle frame.
 	winLiveCheck = 1200 * time.Millisecond
+	// winClosePoll is how often a stream looks for its window while a close a
+	// viewer asked for is under way, for up to winCloseWatch after the ask. A
+	// window that closes then leaves its pane within one poll; one that stays
+	// (an app asking to save first) goes back to the idle schedule after.
+	winClosePoll  = 150 * time.Millisecond
+	winCloseWatch = 10 * time.Second
 	// winMinFrameInterval floors delivery at 1fps on the subprocess capture
 	// path: after a second without a sent frame, the newest frame is re-sent
 	// even though the change detector saw nothing. Both detectors — SCK's
@@ -1748,6 +1771,7 @@ func (s *winStream) cleanup() {
 		delete(a.winFlush, s.w.ID)
 	}
 	delete(a.winMenu, s.w.ID)
+	delete(a.winCloseAsked, s.w.ID)
 	// A stream that exits on its own — window closed, viewer went silent —
 	// bypasses stopWindowStream, so it must release the keep-awake inhibitor
 	// itself when it's the last one; otherwise a window closing under mirror
@@ -2372,7 +2396,19 @@ type geoResult struct {
 	err error
 }
 
+// closeAsked reports whether a viewer asked the host to close this window
+// within winCloseWatch. The window going is expected then, so it is looked for
+// every winClosePoll and believed the first time a listing comes back
+// without it.
+func (s *winStream) closeAsked() bool {
+	s.a.winMu.Lock()
+	at, ok := s.a.winCloseAsked[s.w.ID]
+	s.a.winMu.Unlock()
+	return ok && time.Since(at) < winCloseWatch
+}
+
 func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
+	asked := s.closeAsked()
 	// A frame read from a framebuffer file is read at the window's rect (an
 	// Xvfb's: xvfbfb.go) — not, as an import does, by the window — so its
 	// geometry is kept up to date as the helper path's is, a move included.
@@ -2396,6 +2432,9 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		if exact && !s.capNative {
 			every = winLiveCheck // its frames are read at its rect: a move shows at once
 		}
+		if asked {
+			every = winClosePoll
+		}
 		if !s.geoBusy && time.Since(s.lastGeoCheck) >= every {
 			s.lastGeoCheck = time.Now()
 			s.geoBusy = true
@@ -2403,9 +2442,10 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 			go func() {
 				// One window's geometry where the backend can say it alone
 				// (Linux: a couple of X queries, not one for every window).
+				// Not while closing: only a listing can say the window is gone.
 				if g, ok := b.(interface {
 					windowGeom(winInfo) (winInfo, error)
-				}); ok && exact {
+				}); ok && exact && !asked {
 					w, err := g.windowGeom(w0)
 					ch <- geoResult{w, err}
 					return
@@ -2428,9 +2468,10 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 			// often. Treating one failure as "the window closed" tears down a
 			// perfectly live pane. Require several in a row; the screenshot
 			// path's exists() already takes the same view (it reports true on
-			// error for exactly this reason).
+			// error for exactly this reason). A window missing from a good
+			// listing just after a close was asked for is no transient.
 			s.geoFails++
-			if s.geoFails < 3 {
+			if s.geoFails < 3 && !(asked && errors.Is(err, errWindowGone)) {
 				return true
 			}
 			s.a.sendWindowClosed(conn, s.w.ID)
@@ -2456,11 +2497,14 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		}
 		return true
 	}
-	if changed {
+	every := winLiveCheck
+	if asked {
+		every = winClosePoll // a closing window animates: changed proves nothing
+	} else if changed {
 		s.lastGeoCheck = time.Now()
 		return true
 	}
-	if time.Since(s.lastGeoCheck) < winLiveCheck {
+	if time.Since(s.lastGeoCheck) < every {
 		return true
 	}
 	s.lastGeoCheck = time.Now()

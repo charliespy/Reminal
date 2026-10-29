@@ -23,6 +23,7 @@ import (
 	"image"
 	"image/jpeg"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -645,5 +646,61 @@ func TestX11DamageWakesOnDraw(t *testing.T) {
 	}
 	if !d.ok() || !o.ok() {
 		t.Error("a live watch reports its connection lost")
+	}
+}
+
+// openOwnXterm opens a window of the test's own, titled so it can be found,
+// for a test that closes it.
+func openOwnXterm(t *testing.T, b linuxWindows, title string) winInfo {
+	t.Helper()
+	cmd := exec.Command("xterm", "-T", title, "-e", "sleep", "600")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("xterm: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		wins, _ := b.list()
+		for _, w := range wins {
+			if w.Title == title {
+				return w
+			}
+		}
+	}
+	t.Fatalf("window %q never appeared", title)
+	return winInfo{}
+}
+
+// closeToPaneGone closes w on the host, as handleWindowClose does, and times
+// how long its stream takes to end, polled at a capture loop's pace.
+func closeToPaneGone(t *testing.T, b linuxWindows, w winInfo, asked bool) time.Duration {
+	t.Helper()
+	a := &Agent{}
+	s := &winStream{a: a, b: b, w: w, lastGeoCheck: time.Now()}
+	if err := b.close(w); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if asked {
+		a.noteCloseAsked(w.ID)
+	}
+	start := time.Now()
+	for time.Since(start) < 10*time.Second {
+		if !s.checkWindow(nil, false) {
+			return time.Since(start)
+		}
+		time.Sleep(33 * time.Millisecond)
+	}
+	t.Fatal("the stream never noticed its window closed")
+	return 0
+}
+
+// A window closed from the viewer's menu leaves its pane at once, not on the
+// idle liveness schedule; the unasked close is timed alongside as the control.
+func TestX11AskedCloseDropsThePaneAtOnce(t *testing.T) {
+	b := requireX11(t)
+	idle := closeToPaneGone(t, b, openOwnXterm(t, b, "reminal-close-idle"), false)
+	asked := closeToPaneGone(t, b, openOwnXterm(t, b, "reminal-close-asked"), true)
+	t.Logf("pane gone after close: %v on the idle schedule, %v when asked", idle, asked)
+	if asked > 600*time.Millisecond {
+		t.Fatalf("asked close took %v to drop the pane; want under 600ms", asked)
 	}
 }
