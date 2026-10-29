@@ -11,15 +11,15 @@ import (
 	"time"
 )
 
-func TestParseProcStat(t *testing.T) {
-	r, ok := parseProcStat("4242 (node (MCP) srv) S 100 4242 100 34816 4242 4194560 0 0 0 0 1 2 0 0 20 0 1 0 98765 1000 50")
+func TestParseSleepProcStat(t *testing.T) {
+	r, ok := parseSleepProcStat("4242 (node (MCP) srv) S 100 4242 100 34816 4242 4194560 0 0 0 0 1 2 0 0 20 0 1 0 98765 1000 50")
 	if !ok || r.pid != 4242 || r.ppid != 100 || r.pgid != 4242 || r.comm != "node (MCP) srv" || r.zombie || r.tty != "34816" || r.start != "98765" {
 		t.Fatalf("parsed %+v %v", r, ok)
 	}
-	if r, ok := parseProcStat("7 (sh) Z 1 7 7"); !ok || !r.zombie {
+	if r, ok := parseSleepProcStat("7 (sh) Z 1 7 7"); !ok || !r.zombie {
 		t.Fatalf("zombie: %+v %v", r, ok)
 	}
-	if _, ok := parseProcStat("garbage"); ok {
+	if _, ok := parseSleepProcStat("garbage"); ok {
 		t.Fatal("parsed garbage")
 	}
 }

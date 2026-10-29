@@ -5500,7 +5500,7 @@
     function endWakeGate(send) {
       if (!wakeGate) return;
       wakeGate = null;
-      hideWakeScreen();
+      hideSleepWakeScreen();
       if (!send) { dropHeldInput(); return; }
       if (heldInput.length) heldSince = Date.now(); // held while it woke: not late
       updateHeldChip();
@@ -5534,30 +5534,30 @@
         .trim();
       return s.length > 200 ? s.slice(0, 200) + '…' : s;
     }
-    function showWakeScreen(name, screen) {
+    function showSleepWakeScreen(name, screen) {
       const el = document.getElementById('wake-screen');
       if (!el) return;
       el.querySelector('.wake-title').textContent = 'Waking ' + name + '… (usually a few seconds)';
       el.querySelector('.wake-rows').textContent = screen || '';
       el.hidden = false;
     }
-    function hideWakeScreen() {
+    function hideSleepWakeScreen() {
       const el = document.getElementById('wake-screen');
       if (el) el.hidden = true;
     }
     async function wakeOwned(b64, s) {
       const name = sessionLabelWeb(s);
-      showWakeScreen(name, '');
+      showSleepWakeScreen(name, '');
       setStatus('Waking ' + name + '…', 'info');
       try {
         const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { sleep: { id: s.id, act: 'wake' }, timeout: DIR_SPAWN_TIMEOUT_MS });
-        if (r && r.screen) showWakeScreen(name, r.screen);
+        if (r && r.screen) showSleepWakeScreen(name, r.screen);
         wakeGate = { id: s.id.toUpperCase(), agent: !!s.fg, since: Date.now() };
         setTimeout(updateHeldChip, WAKE_SLOW_MS + 100); // the chip says when it is taking long
         connectOwned(s.id);
         renderMachines();
       } catch (e) {
-        hideWakeScreen();
+        hideSleepWakeScreen();
         setStatus('Could not wake ' + s.id + ' (' + (e.message || 'error') + ')', 'error');
       }
     }
@@ -7687,7 +7687,7 @@
             const fresh = !wasLive || msg.type === 'agent_online';
             if (fresh) winStreamsNeedRestart = true; // fresh agent process = no live streams
             agentLive = true;
-            hideWakeScreen(); // a woken session: the live terminal takes over its saved screen
+            hideSleepWakeScreen(); // a woken session: the live terminal takes over its saved screen
             connectedAt = Date.now();
             backoffMs = 1000;
             redialNow = true; // up: its first close redials at once

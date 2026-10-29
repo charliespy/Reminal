@@ -348,8 +348,20 @@ func wakeCheck(r session.Restore) string {
 			return "can't wake · its folder is gone (" + r.Cwd + ")"
 		}
 	}
-	// Gone only when that can be told: an agent that could not be asked
-	// (not on this PATH) says so itself, never starting afresh.
+	// Never a second process in one conversation: one open in a live session
+	// (continued there while this one slept) is that session's now.
+	if r.Conv != "" {
+		peers, _ := session.ReadRestores()
+		for _, p := range peers {
+			live, _ := session.ReadConvAt(p.ID) // its hook's word, newer than its record
+			if p.ID != r.ID && p.Fg == r.Fg && (p.Conv == r.Conv || live == r.Conv) && SessionRunning(p.ID) {
+				return "can't wake · its conversation is open in session " + p.ID
+			}
+		}
+	}
+	// Gone only when that can be told: an agent whose files are where this
+	// process can't look, or that could not be asked, says so itself as it
+	// starts, never starting afresh.
 	if there, known := convThere(r.Fg, r.Conv, r.Cwd); r.Fg != "" && !r.NoTurn && known && !there {
 		return "can't wake · " + r.Fg + "'s conversation " + r.Conv + " is gone"
 	}

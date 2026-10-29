@@ -35,6 +35,8 @@ func TestMain(m *testing.M) {
 	os.Setenv("HOME", dir)
 	os.Setenv("USERPROFILE", dir)
 	os.Setenv("REMINAL_KEYSTORE", "file")
+	// The person's login shell is never asked: a test says what it holds.
+	loginEnv = func() map[string]string { return nil }
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

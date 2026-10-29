@@ -255,17 +255,17 @@ func procFromProc() []procRow {
 		if err != nil {
 			continue
 		}
-		if r, ok := parseProcStat(string(b)); ok {
+		if r, ok := parseSleepProcStat(string(b)); ok {
 			out = append(out, r)
 		}
 	}
 	return out
 }
 
-// parseProcStat reads /proc/<pid>/stat: "pid (comm) state ppid pgrp session
+// parseSleepProcStat reads /proc/<pid>/stat: "pid (comm) state ppid pgrp session
 // tty_nr … starttime …". comm may hold spaces and parentheses, so it ends at
 // the last ')'.
-func parseProcStat(s string) (procRow, bool) {
+func parseSleepProcStat(s string) (procRow, bool) {
 	open, end := strings.IndexByte(s, '('), strings.LastIndexByte(s, ')')
 	if open < 0 || end < open {
 		return procRow{}, false

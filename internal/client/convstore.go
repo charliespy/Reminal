@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"reminal/internal/session"
@@ -46,7 +47,7 @@ func piConvFile(conv string) string {
 
 // qwenConvFile: ~/.qwen/projects/<project>/chats/<conv>.jsonl
 func qwenConvFile(conv string) string {
-	return underHome(".qwen", "projects", "*", "chats", conv+".jsonl")
+	return homeUnder(".qwen", "projects", "*", "chats", conv+".jsonl")
 }
 
 // convSize is the size of agent's file for conversation conv, the largest
@@ -80,11 +81,26 @@ func convThere(agent, conv, cwd string) (there, known bool) {
 	case !session.ValidConv(conv):
 		return false, s.known()
 	case s.file != nil:
-		return convSize(agent, conv) > 0, true
+		if convSize(agent, conv) > 0 {
+			return true, true
+		}
+		// Not found: gone only when where it keeps them is there to look
+		// in, not when that is somewhere this process can't see.
+		_, err := os.Stat(globRoot(s.file(conv)))
+		return false, err == nil
 	case s.has != nil:
 		return s.has(conv, cwd)
 	}
 	return false, false
+}
+
+// globRoot is the folder a glob pattern looks under: its part before the
+// first wildcard.
+func globRoot(pattern string) string {
+	if i := strings.IndexAny(pattern, "*?["); i >= 0 {
+		pattern = pattern[:i]
+	}
+	return filepath.Dir(pattern)
 }
 
 // convAskWait is how long an agent is given to list its conversations.
@@ -93,7 +109,7 @@ const convAskWait = 15 * time.Second
 // opencodeHas asks opencode, in cwd (it lists a project's sessions), for
 // its sessions, as JSON, and looks for conv among them.
 func opencodeHas(conv, cwd string) (there, known bool) {
-	bin, err := exec.LookPath("opencode")
+	bin, err := agentLookPath("opencode")
 	if err != nil {
 		return false, false
 	}
@@ -119,23 +135,13 @@ func opencodeHas(conv, cwd string) (there, known bool) {
 	return false, true
 }
 
-// codexHome is where Codex keeps its files: CODEX_HOME when set, else
-// ~/.codex.
-func codexHome() string {
-	if dir := os.Getenv("CODEX_HOME"); dir != "" {
-		return dir
-	}
-	return underHome(".codex")
-}
+// codexHome is where Codex keeps its files: CODEX_HOME when set (agentEnv),
+// else ~/.codex.
+func codexHome() string { return dirEnv("CODEX_HOME", ".codex") }
 
-// piAgentDir is where pi keeps its files: PI_CODING_AGENT_DIR when set,
-// else ~/.pi/agent.
-func piAgentDir() string {
-	if dir := os.Getenv("PI_CODING_AGENT_DIR"); dir != "" {
-		return dir
-	}
-	return underHome(".pi", "agent")
-}
+// piAgentDir is where pi keeps its files: PI_CODING_AGENT_DIR when set
+// (agentEnv), else ~/.pi/agent.
+func piAgentDir() string { return dirEnv("PI_CODING_AGENT_DIR", ".pi", "agent") }
 
 // underDir is dir joined with parts, or "" when dir is not known.
 func underDir(dir string, parts ...string) string {
@@ -145,8 +151,8 @@ func underDir(dir string, parts ...string) string {
 	return filepath.Join(append([]string{dir}, parts...)...)
 }
 
-// underHome is underDir of the home folder.
-func underHome(parts ...string) string {
+// homeUnder is underDir of the home folder.
+func homeUnder(parts ...string) string {
 	home, _ := os.UserHomeDir()
 	return underDir(home, parts...)
 }

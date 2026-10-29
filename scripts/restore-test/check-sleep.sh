@@ -186,6 +186,18 @@ o=$(box "reminal sleep $E1 2>&1"); echo "$o" | grep -q "sleep, left running in t
 box "pgrep -f 'slee[p] 633' >/dev/null" && ok "…and it is still running" || fail "the command left going by the first turn was ended"
 box "pkill -f 'slee[p] 633'; true"
 
+# Its conversation continued in another session while it slept (claude
+# --continue there): a wake would open it twice, so it waits, and says where.
+o7=$(newsession contA /root/cont); CA=$(idof "$o7"); sleep 1
+send $CA 'claude'; sleep 2; send $CA "the contested one"; sleep 2
+o=$(box "reminal sleep $CA 2>&1"); echo "$o" | grep -q "asleep" || fail "contA did not sleep: $o"
+o8=$(newsession contB /root/cont); CB=$(idof "$o8"); sleep 1
+send $CB 'claude --continue'; sleep 2; send $CB "continued here"; sleep 3
+o=$(box "reminal wake $CA 2>&1"); echo "$o" | grep -q "open in session $CB" && ok "a wake on a conversation open in another session waits: $(echo "$o" | head -1)" || fail "woke onto a conversation open in $CB: $o"
+box "reminal kill $CB -y >/dev/null 2>&1"; sleep 1
+o=$(box "reminal wake $CA 2>&1"); echo "$o" | grep -q "awake" && ok "…and wakes once that session is gone" || fail "wake after: $o"
+box "reminal kill $CA -y >/dev/null 2>&1; true"
+
 # A claude without reminal's hooks (never installed, or CLAUDE_CONFIG_DIR
 # elsewhere) still sleeps, its conversation read from claude's own record;
 # what a turn of it leaves running is still asked about, its turns unseen.

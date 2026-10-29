@@ -43,17 +43,9 @@ var liveConvs = map[string]func(pid int) (string, time.Time){
 var liveConvRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$`)
 
 // claudeConfigDir is where Claude Code keeps its files: CLAUDE_CONFIG_DIR
-// when set, else ~/.claude ("" when there is no home to find).
-func claudeConfigDir() string {
-	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".claude")
-}
+// when set (here, or in the person's login shell: agentEnv), else ~/.claude
+// ("" when there is no home to find).
+func claudeConfigDir() string { return dirEnv("CLAUDE_CONFIG_DIR", ".claude") }
 
 // claudeLiveConv reads Claude Code's record of a running process,
 // <config>/sessions/<pid>.json, which names the conversation that process is
