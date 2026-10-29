@@ -186,4 +186,17 @@ o=$(box "reminal sleep $E1 2>&1"); echo "$o" | grep -q "sleep, left running in t
 box "pgrep -f 'slee[p] 633' >/dev/null" && ok "…and it is still running" || fail "the command left going by the first turn was ended"
 box "pkill -f 'slee[p] 633'; true"
 
+# claude brings its MCP servers up after it is at its prompt: its own, never
+# work it left, after a turn or, woken, before one.
+box "pkill -f 'slee[p] 655'; echo 3 > /root/.fake-claude/mcp-after"
+o5=$(newsession helpers /root/helpers); M1=$(idof "$o5"); sleep 1
+send $M1 'claude'; sleep 6
+box "pgrep -f 'slee[p] 655' >/dev/null" && ok "control: its MCP server came up after it was at its prompt" || fail "no MCP server came up"
+send $M1 "hi"; sleep 2
+o=$(box "reminal sleep $M1 2>&1"); echo "$o" | grep -q "asleep" && ok "its own MCP server does not keep it awake: $o" || fail "its MCP server kept it awake: $o"
+box "reminal wake $M1 >/dev/null 2>&1"
+for i in $(seq 1 40); do box "pgrep -f 'slee[p] 655' >/dev/null" && break; sleep 1; done; sleep 2
+o=$(box "reminal sleep $M1 2>&1"); echo "$o" | grep -q "asleep" && ok "…nor once woken, before a turn: $o" || fail "woken, its MCP server kept it awake: $o"
+box "rm -f /root/.fake-claude/mcp-after; pkill -f 'slee[p] 655'; true"
+
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

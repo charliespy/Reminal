@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // claudeHelp is the head of Claude Code's own --help: its usage and the
@@ -170,6 +171,17 @@ func main() {
 	// says "at rest" at once (naming no conversation: none ended a turn).
 	if os.Getenv("FAKE_CLAUDE_START_STOP") == "1" {
 		hookAs("done", "Stop", "")
+	}
+	// Like claude, it brings its MCP servers up after it is already at its
+	// prompt: with mcp-after in its folder holding how many seconds after,
+	// one long-lived helper of its own.
+	if b, err := os.ReadFile(filepath.Join(dir, "mcp-after")); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+			go func() {
+				time.Sleep(time.Duration(n) * time.Second)
+				_ = exec.Command("sh", "-c", "sleep 655; true").Start()
+			}()
+		}
 	}
 	turn := func(text string) {
 		hook("working", "UserPromptSubmit")

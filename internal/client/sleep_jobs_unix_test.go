@@ -127,3 +127,49 @@ func TestStartedSince(t *testing.T) {
 		t.Fatal("read a start that is not a number")
 	}
 }
+
+// The agent's own helpers (its MCP servers, and what they start) are its
+// baseline when they come up after it first rests, as claude's do, as long
+// as they started before its first turn: what a turn starts under it is
+// work. A process not under the agent never is a helper.
+func TestOwnHelpers(t *testing.T) {
+	launch := time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)
+	turn := launch.Add(30 * time.Second)
+	agent := procRow{pid: 20, ppid: 10, pgid: 20, comm: "claude", start: "a"}
+	procs := []procRow{
+		{pid: 10, ppid: 1, pgid: 10, comm: "bash", start: "s"},
+		agent,
+		{pid: 21, ppid: 20, pgid: 20, comm: "reminal", start: "b"},         // its MCP server, up after it rested
+		{pid: 22, ppid: 21, pgid: 20, comm: "node", start: "c"},            // …and what that started
+		{pid: 23, ppid: 20, pgid: 20, comm: "sh", start: "d"},              // what a turn started under it
+		{pid: 24, ppid: 1, pgid: 24, comm: "npm", start: "e"},              // reparented away: not under it
+		{pid: 25, ppid: 20, pgid: 20, comm: "x", start: "f", zombie: true}, // ended
+		{pid: 26, ppid: 20, pgid: 20, comm: "y", start: "g"},               // a start not read
+	}
+	starts := map[int]time.Time{10: launch, 20: launch, 21: launch.Add(3 * time.Second), 22: launch.Add(4 * time.Second),
+		23: turn.Add(time.Second), 24: launch.Add(5 * time.Second), 25: launch}
+	startOf := func(p procRow) (time.Time, bool) { s, ok := starts[p.pid]; return s, ok }
+	base := map[procKey]bool{agent.key(): true}
+	got := ownHelpers(base, procs, 20, startOf, turn)
+	want := map[procKey]bool{agent.key(): true, {21, "b"}: true, {22, "c"}: true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("after a turn: %v, want %v", got, want)
+	}
+	if len(base) != 1 {
+		t.Errorf("the baseline it was given changed: %v", base)
+	}
+	// No turn yet: everything under it that started is its own.
+	want[procKey{23, "d"}] = true
+	if got := ownHelpers(base, procs, 20, startOf, time.Time{}); !reflect.DeepEqual(got, want) {
+		t.Errorf("no turn yet: %v, want %v", got, want)
+	}
+	// With the agent in front, its MCP server is no stray; what the turn
+	// started is.
+	tty := "34816"
+	for i := range procs {
+		procs[i].tty = tty
+	}
+	if got := strays(procs, 10, 20, ownHelpers(base, procs, 20, startOf, turn)); !reflect.DeepEqual(got, []string{"sh", "npm", "y"}) {
+		t.Errorf("strays: %q", got)
+	}
+}

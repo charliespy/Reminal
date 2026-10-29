@@ -16,7 +16,7 @@ import (
 // What may sleep, what never may, and what a sleep would end — said, never
 // lost silently.
 func TestSleepVerdict(t *testing.T) {
-	idle := sleepFacts{Headless: true, Saved: true, Fg: "claude", Conv: "conv-0123456789ab", Attn: "done", BgSaid: true, ConvFile: true}
+	idle := sleepFacts{Headless: true, Saved: true, Fg: "claude", Conv: "conv-0123456789ab", Attn: "done", BgSaid: true, ConvFile: true, Turned: true}
 	with := func(f func(*sleepFacts)) sleepFacts { c := idle; f(&c); return c }
 	cases := []struct {
 		name   string
@@ -38,7 +38,8 @@ func TestSleepVerdict(t *testing.T) {
 		{"a terminal attached", with(func(f *sleepFacts) { f.Attached = 1 }), "", []string{"the terminal attached to it"}},
 		{"a plain shell", with(func(f *sleepFacts) { f.Fg, f.Conv = "", "" }), "", []string{"what was typed into its shell by hand (variables, aliases)"}},
 		{"an agent that never said what it left running", with(func(f *sleepFacts) { f.BgSaid = false }), "", []string{"any background work its agent left (it didn't say)"}},
-		{"never said, but never sent a message either", with(func(f *sleepFacts) { f.BgSaid, f.Conv, f.NoTurn = false, "", true }), "", nil},
+		{"never said, but never sent a message either", with(func(f *sleepFacts) { f.BgSaid, f.Conv, f.NoTurn, f.Turned = false, "", true, false }), "", nil},
+		{"never said, with no turn since it woke", with(func(f *sleepFacts) { f.BgSaid, f.Turned = false, false }), "", nil},
 		{"never said, with shells seen", with(func(f *sleepFacts) { f.BgSaid, f.Shells = false, 1 }), "", []string{"its agent's background work"}},
 		{"typed and not sent", with(func(f *sleepFacts) { f.Draft = true }), "", []string{"what was typed and not sent"}},
 	}
@@ -216,17 +217,17 @@ func TestFirstTurnOfTheRun(t *testing.T) {
 	run := time.Now()
 	a := &Agent{attnFGAt: run}
 	a.noteFirstTurnLocked(run.Add(-time.Minute))
-	if !a.firstTurn.IsZero() {
+	if !a.firstTurn.at.IsZero() {
 		t.Fatal("a turn from before the run taken as its first")
 	}
 	a.noteFirstTurnLocked(run.Add(2 * time.Second))
 	a.noteFirstTurnLocked(run.Add(9 * time.Second))
-	if !a.firstTurn.Equal(run.Add(2*time.Second)) || !a.firstTurnFG.Equal(run) {
+	if !a.firstTurn.of(run).Equal(run.Add(2 * time.Second)) {
 		t.Fatalf("first turn %v", a.firstTurn)
 	}
 	a.attnFGAt = run.Add(time.Hour) // another run in front
 	a.noteFirstTurnLocked(run.Add(time.Hour + time.Second))
-	if !a.firstTurn.Equal(run.Add(time.Hour + time.Second)) {
+	if !a.firstTurn.of(a.attnFGAt).Equal(run.Add(time.Hour+time.Second)) || !a.firstTurn.of(run).IsZero() {
 		t.Fatalf("the next run's first turn %v", a.firstTurn)
 	}
 }

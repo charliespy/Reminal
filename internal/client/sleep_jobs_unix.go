@@ -50,13 +50,19 @@ func shellJobs(procs []procRow, shell, fg int, fgIsAgent bool) []string {
 // (turn, else zero) may have started work: what started at or after it is
 // left out. nil when the terminal can't be read.
 func restBase(term *pty.Session, turn time.Time) map[procKey]bool {
+	return baseOf(termMembers(listProcs(), term.Pid()), procStartOf(), turn)
+}
+
+// procStartOf reads when a process started: to the tick from its /proc
+// start where there is one, else as the kernel reports it.
+func procStartOf() func(procRow) (time.Time, bool) {
 	boot, precise := procBoot()
-	return baseOf(termMembers(listProcs(), term.Pid()), func(p procRow) (time.Time, bool) {
+	return func(p procRow) (time.Time, bool) {
 		if precise {
 			return startedSince(boot, p.start)
 		}
 		return session.ProcStartTime(p.pid)
-	}, turn)
+	}
 }
 
 // startTick is how close two start times may be and still be taken as the
@@ -118,14 +124,52 @@ func startedSince(boot time.Time, ticks string) (time.Time, bool) {
 // with & inside a tool call outlives that call's shell and is reparented
 // away, still on this terminal, which a sleep hangs up). With agent in front
 // and base (what was on the terminal when it came to rest: itself, its MCP
-// servers), what it started since counts, base aside; with no agent in
-// front, whatever is left there, as after an agent was quit.
-func leftRunning(term *pty.Session, agent string, base map[procKey]bool) []string {
+// servers), what it started since counts, base aside, and its own helpers
+// started before its first turn (turn, zero when none yet: ownHelpers); with
+// no agent in front, whatever is left there, as after an agent was quit.
+func leftRunning(term *pty.Session, agent string, base map[procKey]bool, turn time.Time) []string {
 	prog, _, fg, _ := restoreForeground(term)
 	if agent == "" || prog != agent || base == nil {
 		fg, base = 0, nil
 	}
-	return strays(listProcs(), term.Pid(), fg, base)
+	procs := listProcs()
+	if fg > 0 {
+		base = ownHelpers(base, procs, fg, procStartOf(), turn)
+	}
+	return strays(procs, term.Pid(), fg, base)
+}
+
+// ownHelpers is base with what agent (its process, and the leader of its
+// group) started for itself before its first turn (turn; zero when it has
+// had none): the MCP servers it brings up, and what they started, which can
+// come up after it first rests. What it is asked to do starts in a turn, at
+// or after turn, and stays out. A start not read stays out too.
+func ownHelpers(base map[procKey]bool, procs []procRow, agent int, startOf func(procRow) (time.Time, bool), turn time.Time) map[procKey]bool {
+	parent := make(map[int]int, len(procs))
+	for _, p := range procs {
+		parent[p.pid] = p.ppid
+	}
+	under := func(pid int) bool {
+		for i := 0; i < len(procs) && pid > 1; i++ { // bounded: a cycle read mid-change ends
+			if pid = parent[pid]; pid == agent {
+				return true
+			}
+		}
+		return false
+	}
+	out := make(map[procKey]bool, len(base))
+	for k := range base {
+		out[k] = true
+	}
+	for _, p := range procs {
+		if p.zombie || !under(p.pid) {
+			continue
+		}
+		if t, ok := startOf(p); ok && (turn.IsZero() || t.Before(turn.Add(-startTick))) {
+			out[p.key()] = true
+		}
+	}
+	return out
 }
 
 // strays names, once each, the processes on shell's terminal that are not

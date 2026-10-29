@@ -42,6 +42,7 @@ type sleepFacts struct {
 	Conv     string   // the agent's conversation, as saved
 	ConvFile bool     // claude's file for Conv is there (claudeConvSize)
 	NoTurn   bool     // the agent was never sent a message (nothing to resume)
+	Turned   bool     // its agent, the one in front, had a turn since it started (by its hook)
 	Saved    bool     // its record was just saved
 }
 
@@ -78,9 +79,10 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 	switch {
 	case f.Shells > 0 || f.Agents > 0:
 		losses = append(losses, "its agent's background work")
-	case f.Fg != "" && !f.NoTurn && !f.BgSaid:
-		// An agent that ran turns and never said what it left running may
-		// have left something.
+	case f.Fg != "" && f.Turned && !f.BgSaid:
+		// An agent that ran a turn and never said what it left running may
+		// have left something. One with no turn since it started (just
+		// woken) has left nothing: what ran before went with its last run.
 		losses = append(losses, "any background work its agent left (it didn't say)")
 	}
 	if f.Draft {
@@ -133,6 +135,8 @@ func (a *Agent) sleepNow(anyway bool) error {
 	if a.restBaseFG.Equal(fgAt) {
 		base = a.restBase
 	}
+	turn := a.hookTurn.of(fgAt) // its first turn, by its hook: zero when none yet
+	f.Turned = !turn.IsZero()
 	a.metaMu.Unlock()
 	a.currentConnMu.Lock()
 	f.Attached = len(a.localConns)
@@ -152,7 +156,7 @@ func (a *Agent) sleepNow(anyway bool) error {
 		// After the save: only the agent it wakes with is not a job (a record
 		// can hold an agent that was quit, with something else now in front).
 		f.Jobs = otherJobs(a.term, f.Fg)
-		f.Strays = leftRunning(a.term, f.Fg, base)
+		f.Strays = leftRunning(a.term, f.Fg, base, turn)
 		if prog, _, _, _ := restoreForeground(a.term); f.Fg != "" && prog == f.Fg {
 			f.BgSaid = attnHookBackground(true, session.ReadHookStateAnyAge(a.sessionID), fgAt) != nil
 		}
@@ -335,10 +339,7 @@ func (a *Agent) noteRestBase() {
 	a.metaMu.Lock()
 	fg := a.attnFGAt
 	taken := a.restBase != nil && a.restBaseFG.Equal(fg)
-	var turn time.Time // a turn begun before it ever rested (`claude "do X"`, keys typed as it started)
-	if a.firstTurnFG.Equal(fg) {
-		turn = a.firstTurn
-	}
+	turn := a.firstTurn.of(fg) // a turn begun before it ever rested (`claude "do X"`, keys typed as it started)
 	a.metaMu.Unlock()
 	if taken || a.term == nil {
 		return
@@ -354,13 +355,29 @@ func (a *Agent) noteRestBase() {
 // noteFirstTurnLocked notes a turn of the agent in front begun at t, keeping
 // the run's first (noteRestBase). A turn from before this run (a hook left
 // by the one before) is not its. Called with metaMu held.
-func (a *Agent) noteFirstTurnLocked(t time.Time) {
-	if t.IsZero() || t.Before(a.attnFGAt) {
+func (a *Agent) noteFirstTurnLocked(t time.Time) { a.firstTurn.note(t, a.attnFGAt) }
+
+// runFirst is the first of something in an agent run: when (at), and the
+// run (its attnFGAt) it was in.
+type runFirst struct{ at, run time.Time }
+
+// note keeps t as the first in run: a later one does not move it, and one
+// from before run (a hook left by the run before) is not its.
+func (f *runFirst) note(t, run time.Time) {
+	if t.IsZero() || t.Before(run) {
 		return
 	}
-	if !a.firstTurnFG.Equal(a.attnFGAt) || t.Before(a.firstTurn) {
-		a.firstTurn, a.firstTurnFG = t, a.attnFGAt
+	if !f.run.Equal(run) || t.Before(f.at) {
+		f.at, f.run = t, run
 	}
+}
+
+// of is the first in run, or zero when there was none.
+func (f runFirst) of(run time.Time) time.Time {
+	if f.run.Equal(run) {
+		return f.at
+	}
+	return time.Time{}
 }
 
 // markAwake is a restored session saying, once it is up and reachable, that

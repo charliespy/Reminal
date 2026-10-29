@@ -38,4 +38,4 @@ type procKey struct{}
 
 func restBase(*pty.Session, time.Time) map[procKey]bool { return nil }
 
-func leftRunning(*pty.Session, string, map[procKey]bool) []string { return nil }
+func leftRunning(*pty.Session, string, map[procKey]bool, time.Time) []string { return nil }
