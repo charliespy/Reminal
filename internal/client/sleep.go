@@ -40,7 +40,7 @@ type sleepFacts struct {
 	Attached int      // `reminal connect` terminals attached to it
 	Fg       string   // its coding agent, as the saved record names it
 	Conv     string   // the agent's conversation, as saved
-	ConvFile bool     // claude's file for Conv is there (claudeConvSize)
+	ConvFile bool     // its agent's file for Conv is there (convSize)
 	NoTurn   bool     // the agent was never sent a message (nothing to resume)
 	Turned   bool     // its agent, the one in front, had a turn since it started (by its hook)
 	Saved    bool     // its record was just saved
@@ -65,10 +65,10 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 		return "kept awake · " + f.Fg + " can't be resumed exactly yet", nil
 	case f.Fg != "" && !f.NoTurn && !session.ValidConv(f.Conv):
 		return "kept awake · can't tell which conversation is its own", nil
-	case f.Fg == "claude" && !f.NoTurn && !f.ConvFile:
+	case f.Fg != "" && !f.NoTurn && !f.ConvFile:
 		// The wake checks for it too (wakeCheck): never asleep on a
 		// conversation it could not be woken on.
-		return "kept awake · can't find claude's file for its conversation", nil
+		return "kept awake · can't find " + f.Fg + "'s file for its conversation", nil
 	}
 	switch f.Attn {
 	case "working":
@@ -106,10 +106,18 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 }
 
 // sleepsExactly says agent fg comes back on exactly its own conversation:
-// resumed by the id its hook reported, the conversation's file checked at
-// wake. Others ("latest in this folder") wait for a check that no other run
-// in the folder changed what "latest" is.
-func sleepsExactly(fg string) bool { return fg == "claude" }
+// resumed by the id it reported (resumers' byID), the conversation's file
+// checked at sleep and at wake (convStores). Others ("latest in this
+// folder") would wake on whatever ran there last.
+func sleepsExactly(fg string) bool {
+	_, stored := convStores[fg]
+	return stored && resumers[fg].byID != nil
+}
+
+// saysBackground are the agents whose hook says, at a turn's end, what it
+// left running in the background (claude's Stop). For the others what is
+// left running is read off the terminal alone (leftRunning).
+var saysBackground = map[string]bool{"claude": true}
 
 // ErrWouldLose is a sleep refused for what it would end (Losses); sleeping
 // anyway lets those go.
@@ -147,7 +155,7 @@ func (a *Agent) sleepNow(anyway bool) error {
 	f.Saved = err == nil && r != nil && !r.SavedAt.Before(before)
 	if f.Saved {
 		f.Fg, f.Conv, f.NoTurn = r.Fg, r.Conv, r.NoTurn
-		f.ConvFile = f.Fg == "claude" && claudeConvSize(f.Conv) > 0
+		f.ConvFile = convSize(f.Fg, f.Conv) > 0
 	}
 	// An agent that is not running (quit, something else in front) has no
 	// background work of its own left to lose.
@@ -157,7 +165,7 @@ func (a *Agent) sleepNow(anyway bool) error {
 		// can hold an agent that was quit, with something else now in front).
 		f.Jobs = otherJobs(a.term, f.Fg)
 		f.Strays = leftRunning(a.term, f.Fg, base, turn)
-		if prog, _, _, _ := restoreForeground(a.term); f.Fg != "" && prog == f.Fg {
+		if prog, _, _, _ := restoreForeground(a.term); saysBackground[f.Fg] && prog == f.Fg {
 			f.BgSaid = attnHookBackground(true, session.ReadHookStateAnyAge(a.sessionID), fgAt) != nil
 		}
 	}
@@ -310,8 +318,8 @@ func wakeCheck(r session.Restore) string {
 			return "can't wake · its folder is gone (" + r.Cwd + ")"
 		}
 	}
-	if r.Fg == "claude" && !r.NoTurn && claudeConvSize(r.Conv) <= 0 {
-		return "can't wake · claude's conversation " + r.Conv + " is gone"
+	if r.Fg != "" && !r.NoTurn && convSize(r.Fg, r.Conv) <= 0 {
+		return "can't wake · " + r.Fg + "'s conversation " + r.Conv + " is gone"
 	}
 	return ""
 }

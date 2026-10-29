@@ -141,7 +141,7 @@ func TestClaudeConversationFileFollowsItsConfigDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	const conv = "conv-0123456789ab"
-	if claudeConvSize(conv) != 0 {
+	if convSize("claude", conv) != 0 {
 		t.Fatal("found before written")
 	}
 	p := dir + "/projects/-work/" + conv + ".jsonl"
@@ -151,10 +151,10 @@ func TestClaudeConversationFileFollowsItsConfigDir(t *testing.T) {
 	if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if claudeConvSize(conv) != 3 {
-		t.Fatalf("size %d, want 3", claudeConvSize(conv))
+	if convSize("claude", conv) != 3 {
+		t.Fatalf("size %d, want 3", convSize("claude", conv))
 	}
-	if claudeConvSize("../x") != 0 {
+	if convSize("claude", "../x") != 0 {
 		t.Fatal("a pattern read as an id")
 	}
 	block, _ := sleepVerdict(sleepFacts{Headless: true, Saved: true, Fg: "claude", Conv: conv, BgSaid: true})
