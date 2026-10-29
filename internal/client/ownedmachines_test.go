@@ -163,3 +163,23 @@ func TestFindOwnedMachineNoMatchListsChoices(t *testing.T) {
 		}
 	}
 }
+
+// `reminal machines` lists this machine with its id, so that id must resolve
+// and be renameable even though nothing recorded this machine as owned.
+func TestFindOwnedMachineResolvesThisMachine(t *testing.T) {
+	isolateHome(t)
+	local, err := MachinePub()
+	if err != nil {
+		t.Fatal(err)
+	}
+	om, err := ResolveOwnedMachine(ShortMachineID(local))
+	if err != nil || !om.Key.Equal(local) {
+		t.Fatalf("this machine's short id should resolve to it: %v", err)
+	}
+	if _, err := RenameOwnedMachine(ShortMachineID(local), "desk"); err != nil {
+		t.Fatalf("renaming this machine: %v", err)
+	}
+	if om, err := ResolveOwnedMachine("desk"); err != nil || !om.Key.Equal(local) {
+		t.Fatalf("this machine's new name should resolve to it: %v", err)
+	}
+}
