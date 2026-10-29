@@ -11293,9 +11293,18 @@
     // closeOnHost sends the OS-level close and, deliberately, does NOT tear the
     // pane down: if the app raises a "save changes?" sheet it appears in the
     // pane so the user can answer it, and the pane closes on its own once the
-    // host reports the window gone (payload.closed → closePane).
+    // host reports the window gone (payload.closed → closePane), which it
+    // looks for right away after a close. Meanwhile the pane fades so the
+    // release visibly did something; a window still there after
+    // WIN_CLOSE_FADE_MS is asking something, so it comes back to full view.
+    const WIN_CLOSE_FADE_MS = 1500;
     function closeOnHost(id) {
       sendWin('window_close', { id });
+      const p = panes.get(id);
+      if (!p) return;
+      p.el.classList.add('closing');
+      clearTimeout(p.closingTimer);
+      p.closingTimer = setTimeout(() => p.el.classList.remove('closing'), WIN_CLOSE_FADE_MS);
     }
 
     function wireCloseButton(btn, id) {
@@ -11538,6 +11547,7 @@
     function closePane(id, handOff) {
       const p = panes.get(id);
       if (!p) return;
+      clearTimeout(p.closingTimer);
       if (!handOff) sendWin('window_ctl', { action: 'stop', id, viewer: viewerId });
       if (p.lastUrl) URL.revokeObjectURL(p.lastUrl);
       try { if (p.vdec && p.vdec.state !== 'closed') p.vdec.close(); } catch (_) {}
