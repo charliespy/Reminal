@@ -35,11 +35,6 @@ func claudeConvFile(conv string) string {
 	return underDir(claudeConfigDir(), "projects", "*", conv+".jsonl")
 }
 
-// codexConvFile: <CODEX_HOME, else ~/.codex>/sessions/<year>/<month>/<day>/rollout-<when>-<conv>.jsonl
-func codexConvFile(conv string) string {
-	return underDir(codexHome(), "sessions", "*", "*", "*", "rollout-*-"+conv+".jsonl")
-}
-
 // piConvFile: <PI_CODING_AGENT_DIR, else ~/.pi/agent>/sessions/<project>/<when>_<conv>.jsonl
 func piConvFile(conv string) string {
 	return underDir(piAgentDir(), "sessions", "*", "*_"+conv+".jsonl")
@@ -134,10 +129,6 @@ func opencodeHas(conv, cwd string) (there, known bool) {
 	}
 	return false, true
 }
-
-// codexHome is where Codex keeps its files: CODEX_HOME when set (agentEnv),
-// else ~/.codex.
-func codexHome() string { return dirEnv("CODEX_HOME", ".codex") }
 
 // piAgentDir is where pi keeps its files: PI_CODING_AGENT_DIR when set
 // (agentEnv), else ~/.pi/agent.

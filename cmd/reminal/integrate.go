@@ -441,17 +441,9 @@ func agentTargets() []agentTarget {
 			cliRemove: []string{"mcp", "remove", mcpServerName},
 			checkTOML: ".codex/config.toml",
 			aroundAdd: codexAddWithToolTimeout,
-			// Its hooks (~/.codex/hooks.json) take Claude Code's shape and
-			// payload. Codex asks once, as it starts, to trust hooks new to it.
-			hooks: &hookSpec{
-				file: ".codex/hooks.json", key: []string{"hooks"}, shape: shapeMatcher,
-				events: []hookEvent{
-					{Event: "UserPromptSubmit", State: "working"},
-					{Event: "PermissionRequest", State: "input"},
-					{Event: "Stop", State: "done"},
-					{Event: "SessionStart", State: "ready"},
-				},
-			},
+			// No hooks: Codex runs them from its app-server, shared by every
+			// Codex on the machine and started inside the first one's
+			// session, so each would report as that session.
 		},
 		{
 			Name: "Antigravity CLI", Bin: "agy",

@@ -15,7 +15,7 @@ import (
 
 // agentEnvNames are the variables that say where a coding agent keeps its
 // files, and where it is found.
-var agentEnvNames = []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR", "PATH"}
+var agentEnvNames = []string{"CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "PATH"}
 
 // loginEnv is the person's login shell's values of agentEnvNames, asked
 // once per process (session.LoginEnv); a test stands in for it.

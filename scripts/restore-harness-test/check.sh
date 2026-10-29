@@ -48,7 +48,7 @@ for h in $HARNESSES; do
     n=${h%%:*}; want=${h#*:}
     eventually 40 saved $(id $n) $want && ok "$n: saved as running $want" || fail "$n: saved as running '$(record $(id $n) fg)'"
 done
-for n in claude qwen gemini codex opencode pi; do
+for n in claude qwen gemini opencode pi; do
     echo " $HARNESSES " | grep -q " $n:" || continue
     eventually 40 has_conv $(id $n); c=$(record $(id $n) conv); eval "CONV_$n=$c"; [ -n "$c" ] && ok "$n: its hook reported conversation $c" || fail "$n: no conversation id"
 done
@@ -70,7 +70,7 @@ resume_of() {
         claude) echo "claude --resume $CONV_claude" ;;
         qwen) echo "qwen --resume $CONV_qwen" ;;
         gemini) echo "gemini --resume latest" ;;
-        codex) echo "codex resume ${CODEX_EXTRA:+$CODEX_EXTRA }$CONV_codex" ;;
+        codex) echo "codex resume ${CODEX_EXTRA:+$CODEX_EXTRA }--last" ;;
         opencode) echo "opencode --session $CONV_opencode" ;;
         pi) echo "pi --session $CONV_pi" ;;
         cursor) echo "cursor-agent --continue" ;;

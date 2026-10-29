@@ -7,7 +7,9 @@
 # a plain `reminal sleep` — its own MCP servers and what launched them are
 # not work it left — its processes end, and woken it is back on exactly its
 # conversation, answers in it, and sleeps again. One that would wake on
-# "the latest" only (gemini) is kept awake and says why.
+# "the latest" only (gemini), or whose conversation can't be told by
+# session (codex: its hooks run in an app-server every Codex shares), is
+# kept awake and says why.
 . "$(dirname "$0")/lib.sh"
 fails=0
 ok()   { echo "ok   $*"; }
@@ -18,9 +20,9 @@ id()    { eval "echo \$ID_$1"; }
 cmd_of() { case $1 in codex) echo "codex ${CODEX_EXTRA:-}" ;; *) echo $1 ;; esac; }
 asleep() { bx "reminal list 2>/dev/null" | grep "$1" | grep -q asleep; }
 
-SLEEPERS=${SLEEPERS:-"claude qwen codex opencode pi"}
+SLEEPERS=${SLEEPERS:-"claude qwen opencode pi"}
 for s in ${SKIP_AGENTS:-}; do skip "$s: cannot run on this box"; SLEEPERS=$(echo " $SLEEPERS " | sed "s/ $s / /" | tr -s ' '); done
-ALL="$SLEEPERS gemini"
+ALL="$SLEEPERS gemini codex"
 for a in $ALL; do setid $a "$(newsess z$a $H/z-$a)"; send $(id $a) "$(cmd_of $a)"; done
 for a in $ALL; do ready $(id $a) $a; done
 for a in $ALL; do send $(id $a) "remember the number 4242"; done
@@ -32,6 +34,8 @@ sleep 5   # its MCP servers come up behind its prompt
 
 o=$(bx "reminal sleep $(id gemini) 2>&1")
 printf '%s\n' "$o" | grep -q "gemini can't be resumed exactly yet" && ok "gemini is kept awake: $o" || fail "gemini: $o"
+o=$(bx "reminal sleep $(id codex) 2>&1")
+printf '%s\n' "$o" | grep -q "codex can't be resumed exactly yet" && ok "codex is kept awake: $o" || fail "codex: $o"
 for a in $SLEEPERS; do
     sid=$(id $a) conv=$(restore_field $sid conv)
     o=$(bx "reminal sleep $sid 2>&1")

@@ -385,7 +385,6 @@ var resumers = map[string]resumer{
 		byID:   func(b string, f []string, c string) []string { return append(append([]string{b, "resume"}, f...), c) },
 		latest: func(b string, f []string) []string { return append(append([]string{b, "resume"}, f...), "--last") },
 		pick:   func(b string, f []string) []string { return append([]string{b, "resume"}, f...) },
-		store:  convStore{file: codexConvFile},
 	},
 	"cursor-agent": {
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },

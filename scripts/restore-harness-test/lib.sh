@@ -126,11 +126,8 @@ restore_field() { bx "reminal restore --records | node -e \"let s='';process.std
 # (updated the moment it starts), or the restore record where the OS gives the
 # active record no foreground (Windows).
 running() { [ "$(record_field "$1" "active-$1.json" fg)" = "$2" ] || [ "$(restore_field "$1" fg)" = "$2" ]; }
-# ready ID PROG — PROG has started in ID and had a moment to draw; asked
-# once to trust what `reminal integrate` set up for it (codex: its hooks),
-# it is told yes, as its person would.
-ready() { eventually 60 running "$1" "$2" && sleep 3 && answer_trust "$1"; }
-answer_trust() { if shows "$1" "Hooks need review"; then send "$1" "2"; sleep 3; fi; return 0; }
+# ready ID PROG — PROG has started in ID and had a moment to draw.
+ready() { eventually 60 running "$1" "$2" && sleep 3; }
 # enough_sessions N — at least N sessions are up (after a reboot).
 enough_sessions() { [ "$(nsessions)" -ge "$1" ]; }
 # saved ID PROG — ID's restore record says PROG is running.
