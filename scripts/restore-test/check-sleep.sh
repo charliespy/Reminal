@@ -186,6 +186,17 @@ o=$(box "reminal sleep $E1 2>&1"); echo "$o" | grep -q "sleep, left running in t
 box "pgrep -f 'slee[p] 633' >/dev/null" && ok "…and it is still running" || fail "the command left going by the first turn was ended"
 box "pkill -f 'slee[p] 633'; true"
 
+# A claude without reminal's hooks (never installed, or CLAUDE_CONFIG_DIR
+# elsewhere) still sleeps, its conversation read from claude's own record;
+# what a turn of it leaves running is still asked about, its turns unseen.
+box "pkill -f 'slee[p] 633'; true"
+o6=$(newsession nohooks /root/nohooks); N1=$(idof "$o6"); sleep 1
+send $N1 'FAKE_CLAUDE_HOOKS=0 claude'; sleep 3; send $N1 "bg"
+for i in $(seq 1 20); do box "pgrep -f 'slee[p] 633' >/dev/null" && break; sleep 1; done; sleep 3
+o=$(box "reminal sleep $N1 2>&1"); echo "$o" | grep -qE "left running in the background|didn't say" && ok "without its hooks, what a turn left going refuses the sleep: $(echo "$o" | head -1)" || fail "without hooks: $o"
+box "pgrep -f 'slee[p] 633' >/dev/null" && ok "…and it is still running" || fail "the command left going without hooks was ended"
+box "pkill -f 'slee[p] 633'; reminal kill $N1 -y >/dev/null 2>&1; true"
+
 # claude brings its MCP servers up after it is at its prompt: its own, never
 # work it left, after a turn or, woken, before one.
 box "pkill -f 'slee[p] 655'; echo 3 > /root/.fake-claude/mcp-after"

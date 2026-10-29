@@ -33,7 +33,7 @@ type sleepFacts struct {
 	Attn      string   // its agent's attention state
 	Shells    int      // background shells its agent said it left running
 	Agents    int      // background subagents
-	BgSaid    bool     // its agent's hook said what it left running (none, too)
+	BgSaid    bool     // what its agent left running is known (none, too): said by its hook, or seen on its terminal
 	Draft     bool     // something typed on its input line, not sent
 	Jobs      []string // other programs running in its shell
 	Strays    []string // programs left running in the background on its terminal (leftRunning)
@@ -42,7 +42,7 @@ type sleepFacts struct {
 	Conv      string   // the agent's conversation, as saved
 	ConvThere bool     // its agent has Conv (convThere)
 	NoTurn    bool     // the agent was never sent a message (nothing to resume)
-	Turned    bool     // its agent, the one in front, had a turn since it started (by its hook)
+	Turned    bool     // its agent, the one in front, had a turn since it started, or can't say (no hook in this run)
 	Saved     bool     // its record was just saved
 }
 
@@ -79,7 +79,7 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 	switch {
 	case f.Shells > 0 || f.Agents > 0:
 		losses = append(losses, "its agent's background work")
-	case f.Fg != "" && f.Turned && !f.BgSaid:
+	case f.Fg != "" && !f.NoTurn && f.Turned && !f.BgSaid:
 		// An agent that ran a turn and never said what it left running may
 		// have left something. One with no turn since it started (just
 		// woken) has left nothing: what ran before went with its last run.
@@ -114,6 +114,26 @@ func sleepsExactly(fg string) bool {
 	return rs.byID != nil && rs.store.known()
 }
 
+// ownTurn says which of the processes an agent started are its own helpers
+// (its MCP servers), not work: those started before its first turn (turn;
+// zero when it has had none), when that is known — its hook speaks in this
+// run. Not known: none are.
+type ownTurn struct {
+	known bool
+	turn  time.Time
+}
+
+// hookSpeaks says the agent run in front (begun at fgAt) has heard from its
+// hook: a turn's state (hs), or that it is up and reading its input
+// (SessionStart, kept apart from a turn's state).
+func (a *Agent) hookSpeaks(hs *session.HookState, fgAt time.Time) bool {
+	if hookSpokeIn(hs, fgAt) {
+		return true
+	}
+	ready := session.HookReadyAt(a.sessionID)
+	return !ready.IsZero() && !ready.Before(fgAt)
+}
+
 // saysBackground are the agents whose hook says, at a turn's end, what it
 // left running in the background (claude's Stop). For the others what is
 // left running is read off the terminal alone (leftRunning).
@@ -132,6 +152,7 @@ func (e ErrWouldLose) Error() string {
 // is what it wakes from.
 func (a *Agent) sleepNow(anyway bool) error {
 	asked := time.Now()
+	hs := session.ReadHookStateAnyAge(a.sessionID)
 	a.metaMu.Lock()
 	f := sleepFacts{
 		Pinned: session.AwakePinned(a.sessionID), Headless: a.headless,
@@ -143,8 +164,11 @@ func (a *Agent) sleepNow(anyway bool) error {
 	if a.restBaseFG.Equal(fgAt) {
 		base = a.restBase
 	}
-	turn := a.hookTurn.of(fgAt) // its first turn, by its hook: zero when none yet
-	f.Turned = !turn.IsZero()
+	// Its first turn, as its hook says, when its hook speaks in this run (the
+	// screen takes an agent starting up for a turn, and misses some): then
+	// it has had none when that is zero. Without its hook that can't be told.
+	own := ownTurn{known: a.hookSpeaks(hs, fgAt), turn: a.hookTurn.of(fgAt)}
+	f.Turned = !own.known || !own.turn.IsZero()
 	a.metaMu.Unlock()
 	a.currentConnMu.Lock()
 	f.Attached = len(a.localConns)
@@ -164,9 +188,15 @@ func (a *Agent) sleepNow(anyway bool) error {
 		// After the save: only the agent it wakes with is not a job (a record
 		// can hold an agent that was quit, with something else now in front).
 		f.Jobs = otherJobs(a.term, f.Fg)
-		f.Strays = leftRunning(a.term, f.Fg, base, turn)
-		if prog, _, _, _ := restoreForeground(a.term); saysBackground[f.Fg] && prog == f.Fg {
-			f.BgSaid = attnHookBackground(true, session.ReadHookStateAnyAge(a.sessionID), fgAt) != nil
+		var seen bool
+		f.Strays, seen = leftRunning(a.term, f.Fg, base, own)
+		if prog, _, _, _ := restoreForeground(a.term); f.Fg != "" && prog == f.Fg {
+			// Said by its hook where it says (claude's), else read off its
+			// terminal, which some machines cannot read.
+			f.BgSaid = seen
+			if saysBackground[f.Fg] {
+				f.BgSaid = attnHookBackground(true, hs, fgAt) != nil
+			}
 		}
 	}
 	block, losses := sleepVerdict(f)

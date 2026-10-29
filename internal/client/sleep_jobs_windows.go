@@ -33,9 +33,10 @@ func exited(pid int) bool { return !proc.Alive(pid) }
 
 // A console's processes are not read by their terminal here yet (its process
 // list or job object would be the way), so what an agent left running is
-// what its hook says (or that it said nothing): no baseline is kept.
+// what its hook says (or that it said nothing; for an agent whose hook does
+// not say, that it could not be seen): no baseline is kept.
 type procKey struct{}
 
 func restBase(*pty.Session, time.Time) map[procKey]bool { return nil }
 
-func leftRunning(*pty.Session, string, map[procKey]bool, time.Time) []string { return nil }
+func leftRunning(*pty.Session, string, map[procKey]bool, ownTurn) ([]string, bool) { return nil, false }

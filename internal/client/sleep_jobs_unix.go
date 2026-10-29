@@ -125,18 +125,20 @@ func startedSince(boot time.Time, ticks string) (time.Time, bool) {
 // away, still on this terminal, which a sleep hangs up). With agent in front
 // and base (what was on the terminal when it came to rest: itself, its MCP
 // servers), what it started since counts, base aside, and its own helpers
-// started before its first turn (turn, zero when none yet: ownHelpers); with
+// started before its first turn, when that is known (own: ownHelpers); with
 // no agent in front, whatever is left there, as after an agent was quit.
-func leftRunning(term *pty.Session, agent string, base map[procKey]bool, turn time.Time) []string {
+// seen is false when the terminal's processes could not be read: then
+// nothing is named, and nothing can be said to be left.
+func leftRunning(term *pty.Session, agent string, base map[procKey]bool, own ownTurn) (names []string, seen bool) {
 	prog, _, fg, _ := restoreForeground(term)
 	if agent == "" || prog != agent || base == nil {
 		fg, base = 0, nil
 	}
 	procs := listProcs()
-	if fg > 0 {
-		base = ownHelpers(base, procs, fg, procStartOf(), turn)
+	if fg > 0 && own.known {
+		base = ownHelpers(base, procs, fg, procStartOf(), own.turn)
 	}
-	return strays(procs, term.Pid(), fg, base)
+	return strays(procs, term.Pid(), fg, base), termMembers(procs, term.Pid()) != nil
 }
 
 // ownHelpers is base with what agent (its process, and the leader of its

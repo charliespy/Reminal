@@ -503,6 +503,7 @@ func agentTargets() []agentTarget {
 					{Event: "UserPromptSubmit", State: "working"},
 					{Event: "Notification", State: "notify"}, // idle_prompt + permission_prompt — split by payload
 					{Event: "Stop", State: "done"},
+					{Event: "SessionStart", State: "ready"},
 				},
 			},
 		},

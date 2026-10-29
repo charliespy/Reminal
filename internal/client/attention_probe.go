@@ -351,7 +351,7 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		if a.noteHarnessLimit(harnessTail(stripANSI(render), harnessRowsFor(prog)), prog, atWork, turnAt, endAt, failure) {
 			a.metaDirty.Store(true)
 		}
-		if hs != nil && prog != "" && (fgAt.IsZero() || !hs.TS.Before(fgAt)) {
+		if prog != "" && hookSpokeIn(hs, fgAt) {
 			hookSpoke[prog] = true
 		}
 		state, source := resolveAttn(screenState, hs, last, fgAt, idleMs,
@@ -560,6 +560,12 @@ func processArgs(pid int) []string {
 // says nothing of it, and a new one takes its place), by the harness in the
 // foreground now and not one that has since exited. nil otherwise, or when
 // the hook said nothing about it.
+// hookSpokeIn says hook state hs was written in the agent run that began at
+// fgAt (any run, when that is not known): its hook speaks in this run.
+func hookSpokeIn(hs *session.HookState, fgAt time.Time) bool {
+	return hs != nil && (fgAt.IsZero() || !hs.TS.Before(fgAt))
+}
+
 func attnHookBackground(agentActive bool, hs *session.HookState, fgAt time.Time) *session.Background {
 	if !agentActive || hs == nil || hs.Background == nil || hs.State == "working" {
 		return nil

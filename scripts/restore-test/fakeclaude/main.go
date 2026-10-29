@@ -169,6 +169,9 @@ func main() {
 	// Like claude, it fires no Stop as it starts: its first rest is read off
 	// its screen, or comes with its first turn's end. FAKE_CLAUDE_START_STOP=1
 	// says "at rest" at once (naming no conversation: none ended a turn).
+	// Up and reading its input, as claude's SessionStart says with reminal's
+	// hooks installed: no turn, its conversation named.
+	hookAs("ready", "SessionStart", conv)
 	if os.Getenv("FAKE_CLAUDE_START_STOP") == "1" {
 		hookAs("done", "Stop", "")
 	}
