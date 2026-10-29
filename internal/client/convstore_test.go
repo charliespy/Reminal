@@ -44,8 +44,13 @@ func TestConvStores(t *testing.T) {
 			t.Errorf("%s does not sleep", agent)
 		}
 	}
-	if len(files) != len(convStores) {
-		t.Errorf("convStores has %d agents, this test %d", len(convStores), len(files))
+	for agent, s := range convStores {
+		if _, tested := files[agent]; s.file != nil && !tested {
+			t.Errorf("%s keeps files this test does not look for", agent)
+		}
+	}
+	if !sleepsExactly("opencode") {
+		t.Error("opencode, asked for its conversations, does not sleep")
 	}
 	if sleepsExactly("gemini") || convSize("gemini", conv) != 0 {
 		t.Error("gemini, which resumes only the latest, sleeps")

@@ -397,6 +397,7 @@ var resumers = map[string]resumer{
 		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
 	},
 	"opencode": {
+		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--session", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 		how:    "opencode session list, then opencode --session <id>",
 	},

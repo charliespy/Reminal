@@ -16,7 +16,7 @@ import (
 // What may sleep, what never may, and what a sleep would end — said, never
 // lost silently.
 func TestSleepVerdict(t *testing.T) {
-	idle := sleepFacts{Headless: true, Saved: true, Fg: "claude", Conv: "conv-0123456789ab", Attn: "done", BgSaid: true, ConvFile: true, Turned: true}
+	idle := sleepFacts{Headless: true, Saved: true, Fg: "claude", Conv: "conv-0123456789ab", Attn: "done", BgSaid: true, ConvThere: true, Turned: true}
 	with := func(f func(*sleepFacts)) sleepFacts { c := idle; f(&c); return c }
 	cases := []struct {
 		name   string

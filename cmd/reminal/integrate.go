@@ -62,6 +62,10 @@ type agentTarget struct {
 	// support we haven't wired yet — those still get MCP + the screen fallback.
 	hooks *hookSpec
 
+	// plugin, for an agent whose hooks are a plugin file it loads (OpenCode),
+	// rather than entries in its config.
+	plugin *pluginFile
+
 	// Extension route: an agent with its own extension system takes a package
 	// rather than a config entry, and one package does both jobs — it hands the
 	// agent reminal's tools AND reports the session's attention state — so these
@@ -478,6 +482,7 @@ func agentTargets() []agentTarget {
 				return map[string]any{"type": "local", "command": []string{exe, "mcp"}, "enabled": true}
 			},
 			resume: "opencode --continue",
+			plugin: &pluginFile{path: ".config/opencode/plugin/reminal.js", body: opencodePlugin},
 		},
 		{
 			Name: "Cursor CLI", Bin: "cursor-agent",
@@ -626,6 +631,8 @@ func runIntegrate(args []string) error {
 		}
 		if t.hooks != nil {
 			how += " + attention hooks"
+		} else if t.plugin != nil {
+			how += " + attention plugin"
 		}
 		plan = append(plan, planStep{target: t, binPath: path, how: how})
 	}
@@ -694,6 +701,9 @@ func runIntegrate(args []string) error {
 				spec.version = agentVersion(p.target.Bin)
 			}
 			hookErr = applyHooks(&spec, home, exe, remove)
+		}
+		if p.target.plugin != nil {
+			hookErr = applyPlugin(p.target.plugin, home, exe, remove)
 		}
 		if err := errors.Join(mcpErr, hookErr); err != nil {
 			failures++

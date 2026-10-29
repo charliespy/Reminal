@@ -28,22 +28,22 @@ import (
 
 // sleepFacts is what decides whether a session may sleep now.
 type sleepFacts struct {
-	Pinned   bool     // the person asked it to stay awake
-	Headless bool     // started by reminal (not a terminal tab, which is the session)
-	Attn     string   // its agent's attention state
-	Shells   int      // background shells its agent said it left running
-	Agents   int      // background subagents
-	BgSaid   bool     // its agent's hook said what it left running (none, too)
-	Draft    bool     // something typed on its input line, not sent
-	Jobs     []string // other programs running in its shell
-	Strays   []string // programs left running in the background on its terminal (leftRunning)
-	Attached int      // `reminal connect` terminals attached to it
-	Fg       string   // its coding agent, as the saved record names it
-	Conv     string   // the agent's conversation, as saved
-	ConvFile bool     // its agent's file for Conv is there (convSize)
-	NoTurn   bool     // the agent was never sent a message (nothing to resume)
-	Turned   bool     // its agent, the one in front, had a turn since it started (by its hook)
-	Saved    bool     // its record was just saved
+	Pinned    bool     // the person asked it to stay awake
+	Headless  bool     // started by reminal (not a terminal tab, which is the session)
+	Attn      string   // its agent's attention state
+	Shells    int      // background shells its agent said it left running
+	Agents    int      // background subagents
+	BgSaid    bool     // its agent's hook said what it left running (none, too)
+	Draft     bool     // something typed on its input line, not sent
+	Jobs      []string // other programs running in its shell
+	Strays    []string // programs left running in the background on its terminal (leftRunning)
+	Attached  int      // `reminal connect` terminals attached to it
+	Fg        string   // its coding agent, as the saved record names it
+	Conv      string   // the agent's conversation, as saved
+	ConvThere bool     // its agent has Conv (convThere)
+	NoTurn    bool     // the agent was never sent a message (nothing to resume)
+	Turned    bool     // its agent, the one in front, had a turn since it started (by its hook)
+	Saved     bool     // its record was just saved
 }
 
 // sleepVerdict says whether a session may sleep now, in the words its card
@@ -65,10 +65,10 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 		return "kept awake · " + f.Fg + " can't be resumed exactly yet", nil
 	case f.Fg != "" && !f.NoTurn && !session.ValidConv(f.Conv):
 		return "kept awake · can't tell which conversation is its own", nil
-	case f.Fg != "" && !f.NoTurn && !f.ConvFile:
+	case f.Fg != "" && !f.NoTurn && !f.ConvThere:
 		// The wake checks for it too (wakeCheck): never asleep on a
 		// conversation it could not be woken on.
-		return "kept awake · can't find " + f.Fg + "'s file for its conversation", nil
+		return "kept awake · can't find " + f.Fg + "'s conversation " + f.Conv, nil
 	}
 	switch f.Attn {
 	case "working":
@@ -155,7 +155,7 @@ func (a *Agent) sleepNow(anyway bool) error {
 	f.Saved = err == nil && r != nil && !r.SavedAt.Before(before)
 	if f.Saved {
 		f.Fg, f.Conv, f.NoTurn = r.Fg, r.Conv, r.NoTurn
-		f.ConvFile = convSize(f.Fg, f.Conv) > 0
+		f.ConvThere, _ = convThere(f.Fg, f.Conv, r.Cwd)
 	}
 	// An agent that is not running (quit, something else in front) has no
 	// background work of its own left to lose.
@@ -318,7 +318,9 @@ func wakeCheck(r session.Restore) string {
 			return "can't wake · its folder is gone (" + r.Cwd + ")"
 		}
 	}
-	if r.Fg != "" && !r.NoTurn && convSize(r.Fg, r.Conv) <= 0 {
+	// Gone only when that can be told: an agent that could not be asked
+	// (not on this PATH) says so itself, never starting afresh.
+	if there, known := convThere(r.Fg, r.Conv, r.Cwd); r.Fg != "" && !r.NoTurn && known && !there {
 		return "can't wake · " + r.Fg + "'s conversation " + r.Conv + " is gone"
 	}
 	return ""
