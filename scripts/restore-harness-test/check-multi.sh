@@ -5,12 +5,12 @@
 # Several conversations with the same agent in the same folder, all ended by
 # one reboot — where "the latest conversation here" would be the same one for
 # all of them. Each session is told its own number. After the restore:
-#   by id   (claude, qwen — their hooks report it): each is back on ITS
-#           conversation, showing its number and no other session's;
-#   picker  (codex; a claude that never got to report an id): the agent's own
+#   by id   (claude, qwen, codex, pi, opencode — they report it): each is
+#           back on ITS conversation, showing its number and no other session's;
+#   picker  (cursor; one that never got to report an id): the agent's own
 #           list is open to choose from, nothing resumed by guess;
-#   neither (gemini, opencode, pi): the agent is not started, and a line
-#           says how to find the conversation.
+#   neither (gemini; opencode with no id): the agent is not started, and a
+#           line says how to find the conversation.
 # Run in small batches — every session is a real agent: PLAN="claude:3 qwen:2".
 . "$(dirname "$0")/lib.sh"
 fails=0
@@ -65,22 +65,30 @@ agent_running() {
     else printf '%s\n' "$procs" | grep -qE "(^| |/)$1( |\$)"; fi
 }
 
+# picker_of AGENT — what opens AGENT's own list of conversations.
+picker_of() { case $1 in codex) echo "codex resume" ;; *) echo "$1 --resume" ;; esac; }
+
 check_session() { # name agent id number
     # Joined into one line: the terminal wraps a note where it likes.
     s=$1 a=$2 id=$3 n=$4 out=$(since_restore $3) flat=$(since_restore $3 | tr '\n' ' ' | tr -s ' ')
     case $a in
-    claude|qwen)
+    claude|qwen|codex|pi|opencode)
+        if [ -z "$n" ] && [ $a = opencode ]; then    # never spoke, and no list to open
+            printf '%s\n' "$flat" | grep -q "to find this one's conversation" && ok "$s: never reported an id — not started; the note says how to find it" || fail "$s: no note"
+            return
+        fi
         if [ -z "$n" ]; then    # never spoke: nothing to resume by id
+            pick=$(picker_of $a)
             printf '%s\n' "$flat" | grep -q "pick this session's" && ok "$s: never reported an id — told to pick" || fail "$s: no pick note"
-            picker_open $id "(^|/)$a --resume\$" "$a --resume" && ok "$s: $a's own list opened ($a --resume)" || fail "$s: picker not opened"
+            picker_open $id "(^|/)$pick\$" "$pick" && ok "$s: $a's own list opened ($pick)" || fail "$s: picker not opened"
             printf '%s\n' "$out" | grep -q "noted: my number" && fail "$s: resumed someone's conversation" || ok "$s: no one's conversation resumed by guess"
             return
         fi
         got=$(printf '%s\n' "$out" | grep -o "my number is [0-9]*" | sort -u | tr '\n' ' ')
         [ "$got" = "my number is $n " ] && ok "$s: back on its own conversation (#$n) — none of the others" || fail "$s: expected #$n, shows: '$got'" ;;
-    codex|cursor)
+    cursor)
         printf '%s\n' "$flat" | grep -q "pick this session's" && ok "$s: told to pick" || fail "$s: no pick note"
-        picker_open $id "codex resume\$" "codex resume" && ok "$s: codex's own list opened (codex resume)" || fail "$s: picker not opened"
+        picker_open $id "cursor-agent --resume\$" "cursor-agent --resume" && ok "$s: cursor's own list opened (cursor-agent --resume)" || fail "$s: picker not opened"
         printf '%s\n' "$out" | grep -q "noted: my number" && fail "$s: resumed a conversation by guess" || ok "$s: nothing resumed by guess" ;;
     *)
         printf '%s\n' "$flat" | grep -q "to find this one's conversation" && ok "$s: not started; the note says how to find it" || fail "$s: no note"
@@ -90,8 +98,8 @@ check_session() { # name agent id number
 for s in $ALL ${NOID:+${NOID}silent}; do
     check_session $s $(eval echo \$A_$s) $(eval echo \$S_$s) "$(eval echo \${N_$s:-})"
 done
-case "$PLAN" in *gemini*|*opencode*|*pi:*)
-    for a in gemini opencode pi; do
+case "$PLAN" in *gemini*)
+    for a in gemini; do
         case "$PLAN" in *$a:*) agent_running $a && fail "$a: started although it could not know whose conversation" || ok "$a: not started in any of its sessions" ;; esac
     done ;;
 esac

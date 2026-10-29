@@ -48,7 +48,7 @@ for h in $HARNESSES; do
     n=${h%%:*}; want=${h#*:}
     eventually 40 saved $(id $n) $want && ok "$n: saved as running $want" || fail "$n: saved as running '$(record $(id $n) fg)'"
 done
-for n in claude qwen gemini; do
+for n in claude qwen gemini codex opencode pi; do
     echo " $HARNESSES " | grep -q " $n:" || continue
     eventually 40 has_conv $(id $n); c=$(record $(id $n) conv); eval "CONV_$n=$c"; [ -n "$c" ] && ok "$n: its hook reported conversation $c" || fail "$n: no conversation id"
 done
@@ -70,8 +70,9 @@ resume_of() {
         claude) echo "claude --resume $CONV_claude" ;;
         qwen) echo "qwen --resume $CONV_qwen" ;;
         gemini) echo "gemini --resume latest" ;;
-        codex) echo "codex resume ${CODEX_EXTRA:+$CODEX_EXTRA }--last" ;;
-        opencode) echo "opencode --continue" ;;
+        codex) echo "codex resume ${CODEX_EXTRA:+$CODEX_EXTRA }$CONV_codex" ;;
+        opencode) echo "opencode --session $CONV_opencode" ;;
+        pi) echo "pi --session $CONV_pi" ;;
         cursor) echo "cursor-agent --continue" ;;
     esac
 }
@@ -98,7 +99,8 @@ for h in $HARNESSES; do
         continue
     fi
     if [ -n "$want" ]; then
-        came_back_as $sid "$want" && ok "$n: started again as: $want" || fail "$n: not started as '$want'"
+        # pi rewrites its process title: what reminal typed says it.
+        if [ $n = pi ]; then typed $sid "$want"; else came_back_as $sid "$want"; fi && ok "$n: started again as: $want" || fail "$n: not started as '$want'"
     fi
     printf '%s\n' "$s" | grep -q "remember the number 4242" && ok "$n: shows the conversation from before the reboot" || fail "$n: earlier conversation not shown"
     printf '%s\n' "$s" | grep -q "noted: what number" && ok "$n: answers in it" || fail "$n: does not answer after restore"

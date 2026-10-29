@@ -45,9 +45,9 @@ done
 [ $CURSOR = 1 ] && { eventually 90 shows $ID_cursor "1111" && ok "cursor ($ID_cursor) started with -f, answered 1111" || fail "cursor: did not answer"; } || skip "cursor: no Cursor login in the box"
 for n in $AGENTS; do eventually 40 saved $(eval echo \$ID_$n) $n; done
 [ $CURSOR = 1 ] && eventually 40 saved $ID_cursor cursor-agent
-for n in claude qwen; do has $n && eventually 40 has_conv $(eval echo \$ID_$n); done
+for n in claude qwen codex opencode pi; do has $n && eventually 40 has_conv $(eval echo \$ID_$n); done
 before=$(prompts)
-has claude && C_claude=$(conv $ID_claude); has qwen && C_qwen=$(conv $ID_qwen)
+for n in claude qwen codex opencode pi; do has $n && eval "C_$n=\$(conv \$ID_$n)"; done
 
 reboot_box || exit 1
 ok "rebooted"
@@ -60,10 +60,10 @@ expect() { # name expected-command-line
     came_back_as "$(eval echo \$ID_$1)" "$2" && ok "$1 came back as: $2" || fail "$1: expected '$2'"
 }
 has claude && expect claude   "claude --dangerously-skip-permissions --model claude-opus-4-1 --resume $C_claude"
-has codex && expect codex    "codex resume --dangerously-bypass-approvals-and-sandbox -m fake-model -c model_reasoning_effort=high ${CODEX_EXTRA:+$CODEX_EXTRA }--last"
+has codex && expect codex    "codex resume --dangerously-bypass-approvals-and-sandbox -m fake-model -c model_reasoning_effort=high ${CODEX_EXTRA:+$CODEX_EXTRA }$C_codex"
 has gemini && expect gemini   "gemini --yolo -m fake-model --resume latest"
 has qwen && expect qwen     "qwen --approval-mode yolo -m fake-model --resume $C_qwen"
-has opencode && expect opencode "opencode -m fake/fake-model --agent build --continue"
+has opencode && expect opencode "opencode -m fake/fake-model --agent build --session $C_opencode"
 if [ $CURSOR = 1 ]; then
     if [ "$T" = win ]; then expect cursor "cursor-agent -f --continue"; else expect cursor "index.js -f --continue"; fi
 fi
@@ -71,9 +71,9 @@ fi
 # there, so none come back. On Windows its command line is readable.
 if ! has pi; then :
 elif [ "$T" = win ]; then
-    expect pi "pi --provider fake --model fake-1 --continue"
+    expect pi "pi --provider fake --model fake-1 --session $C_pi"
 else
-    since_restore $ID_pi | tr '\n' ' ' | grep -q "pi --continue" && ok "pi came back as: pi --continue (its flags are not visible to carry)" || fail "pi: not resumed"
+    since_restore $ID_pi | tr '\n' ' ' | grep -q "pi --session $C_pi" && ok "pi came back as: pi --session $C_pi (its flags are not visible to carry)" || fail "pi: not resumed"
 fi
 after=$(prompts)
 [ "$after" = "$before" ] && ok "no first prompt was sent again ($before before, $after after)" || fail "a first prompt was sent again ($before → $after)"
