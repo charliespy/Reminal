@@ -50,6 +50,10 @@ running $ID && fail "$ID still running" || ok "its processes are gone"
 [ -n "$SHPID" ] && ended $SHPID && ok "its shell ended (pid $SHPID: the terminal was hung up)" || fail "its shell $SHPID still running: $(box "grep State /proc/$SHPID/status")"
 box "test -f /root/.reminal/restore/$ID.sealed && test -f /root/.reminal/restore/$ID.asleep" && ok "record kept, marked asleep" || fail "no record or no asleep mark"
 box "reminal list" | grep -q "$ID.*asleep" && ok "reminal list shows it asleep" || fail "list: $(box 'reminal list')"
+# ...and run inside the only other session, the one you are in: listed there too.
+out=$(newsession here /root/here); HERE=$(idof "$out")
+box "REMINAL_SESSION=$HERE reminal list" | grep -q "$ID.*asleep" && ok "reminal list inside the only session running shows it asleep" || fail "list inside $HERE: $(box "REMINAL_SESSION=$HERE reminal list")"
+box "reminal kill $HERE -y >/dev/null 2>&1"
 # The agent tools on a session asleep: listed, read and searched from what it
 # saved, never an error.
 box "mcp.sh list" | grep -q "$ID" && box "mcp.sh list" | grep -q 'asleep' && ok "list_sessions shows it, asleep" || fail "list_sessions: $(box 'mcp.sh list' | cut -c1-300)"

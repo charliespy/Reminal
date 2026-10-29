@@ -2108,7 +2108,9 @@ func runList(args []string) error {
 
 	switch {
 	case len(rows) == 0:
-		fmt.Println(cDim("  no other sessions."))
+		if printSleepers(lower) == 0 {
+			fmt.Println(cDim("  no other sessions."))
+		}
 		return nil
 	case curRow != nil:
 		fmt.Printf("%d other session(s):\n\n", len(rows))
