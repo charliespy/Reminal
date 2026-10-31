@@ -157,9 +157,16 @@ func TestFindOwnedMachineNoMatchListsChoices(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown selector should not resolve")
 	}
+	// One choice per line: a phone-width terminal breaks a single long line
+	// in the middle of an id.
+	lines := strings.Split(err.Error(), "\n")
 	for _, want := range []string{"home (" + ShortMachineID(named) + ")", ShortMachineID(unnamed)} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q should list %q", err, want)
+		found := false
+		for _, l := range lines {
+			found = found || l == "  "+want
+		}
+		if !found {
+			t.Errorf("error %q should list %q on its own line", err, want)
 		}
 	}
 }

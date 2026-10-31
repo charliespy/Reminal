@@ -140,17 +140,17 @@ func listMachines() error {
 	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 20 && w < 76 {
 		// Phone width: drop the "reminal " prefix (implied) and put the gloss on
 		// its own line so no command wraps mid-word.
-		fmt.Println("  machines rename <machine-id> <new-name>")
+		fmt.Println("  machines rename <id|name> <new-name>")
 		fmt.Println("    " + cDim("rename a machine"))
-		fmt.Println("  new [name] --machine <machine-id>")
+		fmt.Println("  new [name] --machine <id|name>")
 		fmt.Println("    " + cDim("start a session on that machine"))
-		fmt.Println("  kill <session-id> --machine <machine-id>")
+		fmt.Println("  kill <session-id> --machine <id|name>")
 		fmt.Println("    " + cDim("end a session on that machine"))
 		return nil
 	}
-	fmt.Println("  reminal machines rename <machine-id> <new-name>   " + cDim("rename a machine"))
-	fmt.Println("  reminal new [name] --machine <machine-id>         " + cDim("start a session on that machine"))
-	fmt.Println("  reminal kill <session-id> --machine <machine-id>  " + cDim("end a session on that machine"))
+	fmt.Println("  reminal machines rename <id|name> <new-name>   " + cDim("rename a machine"))
+	fmt.Println("  reminal new [name] --machine <id|name>         " + cDim("start a session on that machine"))
+	fmt.Println("  reminal kill <session-id> --machine <id|name>  " + cDim("end a session on that machine"))
 	return nil
 }
 

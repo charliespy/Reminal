@@ -233,7 +233,7 @@ func findOwnedMachineKey(selector string) (ed25519.PublicKey, error) {
 		for _, om := range byID {
 			full = append(full, MachineID(om.Key))
 		}
-		return nil, fmt.Errorf("%q matches more than one machine — use more of its id: %s", selector, strings.Join(full, ", "))
+		return nil, fmt.Errorf("%q matches more than one machine\nUse more of its id:%s", selector, choiceLines(full))
 	}
 }
 
@@ -242,7 +242,7 @@ func findOwnedMachineKey(selector string) (ed25519.PublicKey, error) {
 // try doesn't need a trip back to `reminal machines`.
 func noMachineMatch(selector string, list []OwnedMachine) error {
 	if len(list) == 0 {
-		return fmt.Errorf("no owned machine matches %q — this device doesn't own any other machines yet (see `reminal own`)", selector)
+		return fmt.Errorf("no owned machine matches %q\nNo other machines owned yet (see `reminal own`)", selector)
 	}
 	local, _ := MachinePub()
 	choices := make([]string, 0, len(list))
@@ -258,7 +258,18 @@ func noMachineMatch(selector string, list []OwnedMachine) error {
 			choices = append(choices, ShortMachineID(om.Key))
 		}
 	}
-	return fmt.Errorf("no owned machine matches %q — use a name or id from this list: %s", selector, strings.Join(choices, ", "))
+	return fmt.Errorf("no owned machine matches %q\nUse a name or id from this list:%s", selector, choiceLines(choices))
+}
+
+// choiceLines puts each choice on its own indented line. A phone-width
+// terminal would otherwise break one long line in the middle of an id.
+func choiceLines(choices []string) string {
+	var b strings.Builder
+	for _, c := range choices {
+		b.WriteString("\n  ")
+		b.WriteString(c)
+	}
+	return b.String()
 }
 
 // ResolveOwnedMachine resolves a selector — a machine name or a mach_ id (or id
